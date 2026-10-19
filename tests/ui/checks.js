@@ -155,6 +155,31 @@
     ok(d.height>120,`${label}: Meetings transcript is squashed (${Math.round(d.height)}px)`);
     ok(det.querySelectorAll('.pair2').length===3,`${label}: Meetings transcript did not render`);
     noOverflow(q('#v-meetings'),`${label} meetings`);
+    /* APP-9: titles, search, date filter, rename */
+    ok(qa('#mRows .row b').map(b=>b.textContent).join('|')==='Release planning for the next sprint|Weekly sync|Kick-off',`${label}: meeting titles not shown: ${qa('#mRows .row b').map(b=>b.textContent).join('|')}`);
+    let m=mark(); const s=q('#mSearch'); s.value='Sprint'; s.dispatchEvent(new Event('input')); await tick(450);
+    const sc=since(m,'search_meetings');
+    ok(sc.length===1&&sc[0].args[0]==='Sprint',`${label}: search does not call search_meetings('Sprint'): ${JSON.stringify(sc)}`);
+    ok(qa('#mRows .row').length===1&&q('#mRows .mhit mark')&&/sprint/i.test(q('#mRows .mhit mark').textContent),`${label}: a search hit is not shown with the matching line`);
+    noOverflow(q('#v-meetings'),`${label} meetings search`);
+    s.value='zzz-nothing'; s.dispatchEvent(new Event('input')); await tick(450);
+    ok(/No meeting matches/.test(q('#mRows').textContent),`${label}: an empty search result says nothing`);
+    s.value=''; s.dispatchEvent(new Event('input')); await tick(450);
+    m=mark(); const w=q('#mWhen'); w.value='7'; w.dispatchEvent(new Event('change')); await tick(200);
+    const dc=since(m,'search_meetings');
+    ok(dc.length===1&&/^\d{4}-\d\d-\d\d$/.test(dc[0].args[2])&&dc[0].args[3]>=dc[0].args[2],`${label}: the date filter does not ask for dates: ${JSON.stringify(dc)}`);
+    w.value='day'; w.dispatchEvent(new Event('change')); await tick();
+    ok(visible(q('#mDay')),`${label}: 'On a day' does not show a date field`);
+    m=mark(); q('#mDay').value='2026-10-12'; q('#mDay').dispatchEvent(new Event('change')); await tick(200);
+    ok(since(m,'search_meetings').some(c=>c.args[2]==='2026-10-12'&&c.args[3]==='2026-10-12'),`${label}: a day does not filter to that day`);
+    w.value=''; w.dispatchEvent(new Event('change')); await tick(200);
+    ok(!visible(q('#mDay'))&&since(m,'list_meetings').length>0,`${label}: 'Any time' does not list every meeting again`);
+    m=mark(); q('#mRows [data-ren]').click(); await tick();
+    const inp=q('#mTitleEdit'); ok(inp&&visible(inp),`${label}: rename does not open a title field`);
+    if(inp){ inp.value='Budget review'; inp.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); await tick(100);
+      ok(since(m,'rename_meeting').some(c=>c.args[1]==='Budget review'),`${label}: rename does not call rename_meeting`);
+      ok(q('#mRows .row.a b').textContent==='Budget review',`${label}: the new title is not shown`); }
+    noOverflow(q('#v-meetings'),`${label} meetings after filters`);
   }
 
   async function viewChecks(label){
@@ -198,7 +223,13 @@
 
   window.__uiExtra=window.__uiExtra||[];   // async (label, h) => {} checks for newer features
   /* APP-7/8: a global shortcut does what the button on screen does; the lock switch follows Python */
-  window.__uiExtra.push(async(label,{ok,tick,q,mark,since})=>{
+  window.__uiExtra.push(async(label,{ok,tick,q,mark,since,visible})=>{
+    openSettings('about'); await tick();
+    ok(!visible(q('#setDownloadUpdate'))&&/Not checked/.test(q('#updStatus').textContent),`${label}: 'Download' shows before any newer version is known`);
+    window.dolmi.onUpdate({available:true,version:'2.4.0',url:'https://github.com/Zehnix/dolmi/releases/tag/v2.4.0',current:'2.2.0'}); await tick();
+    ok(visible(q('#setDownloadUpdate'))&&q('#setDownloadUpdate').textContent==='Download 2.4.0',`${label}: a newer version found at start is not offered`);
+    window.dolmi.onUpdate({available:false,version:'2.2.0',url:'',current:'2.2.0'}); await tick();
+    nav('live'); await tick();
     let m=mark(); window.dolmi.onShortcut('toggle_live'); await tick(80);
     ok(since(m,'start_listening').length===1,`${label}: the start/stop shortcut does not start captions`);
     window.dolmi.onListening(false,''); await tick();
@@ -209,6 +240,7 @@
     window.dolmi.onBarLock(true); await tick();
     ok(q('#swBarLock').classList.contains('on'),`${label}: the lock switch does not follow a lock by shortcut`);
     window.dolmi.onBarLock(false); await tick();
+    ok(/Ctrl\+Alt\+Shift\+L/.test(q('#barLockHint').textContent),`${label}: the lock hint does not name the unlock shortcut`);
     ok(/Ctrl\+Alt\+Shift\+S/.test(q('#sc-toggle_live').textContent),`${label}: shortcut keys are not shown (${q('#sc-toggle_live').textContent})`);
     ok(/another app/i.test(q('#scs-toggle_lock').textContent),`${label}: a shortcut another app owns is not flagged`);
   });

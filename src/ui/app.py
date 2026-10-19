@@ -17,6 +17,7 @@ import queue
 import re
 import threading
 import time
+import unicodedata
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -35,6 +36,16 @@ ICON = dolmi_platform.app_icon(config.ROOT)
 # a saved line: "**HH:MM:SS–HH:MM:SS** {en}  \n<sub>{de}</sub>" (older files: "**HH:MM:SS** ...")
 _MEETING_RE = re.compile(r"\*\*(.+?)\*\*\s+(.*?)\s*\n<sub>(.*?)</sub>", re.S)
 _STARTED_RE = re.compile(r"<!-- started (\d\d:\d\d:\d\d) -->")
+# APP-9 meeting titles and search
+TITLE_MAX = 70                    # characters of an automatic title
+TITLE_EDIT_MAX = 120              # characters of a title the user types
+SEARCH_HITS = 3                   # matching lines shown per meeting
+_DATE_RE = re.compile(r"\d{4}-\d\d-\d\d")
+_FILLER = {"ok", "okay", "yes", "no", "yeah", "thanks", "thank you", "hello", "hi", "hello everyone", "good morning",
+           "hallo", "ja", "nein", "danke", "genau", "gut", "hallo zusammen", "guten morgen", "can you hear me",
+           "können sie mich hören", "kannst du mich hören", "one moment", "einen moment"}
+_SUMMARY_HEADINGS = {"summary", "meeting summary", "meeting notes", "notes", "zusammenfassung", "decisions",
+                     "action items", "open questions", "overview", "tl;dr", "tldr"}
 LAG_WINDOW = 5                                     # the Lag figure is the median of this many finals
 # settings the page may change through set_setting (provider, keys and invisible have their own calls)
 SPEECH_SOURCES = ("local", *cloud_speech.PROVIDERS)   # Settings → Captions by
@@ -171,6 +182,45 @@ def _plain(meta):
             v = float(v)
         out[str(k)] = v
     return out
+
+
+def _fold(text):
+    """Case- and accent-insensitive form for search: 'Größe' and 'GROSSE' both -> 'grosse', 'é' -> 'e'."""
+    s = unicodedata.normalize("NFKD", str(text or ""))
+    return "".join(c for c in s if not unicodedata.combining(c)).casefold()
+
+
+def _shorten(text, limit=TITLE_MAX):
+    text = " ".join(str(text or "").split())
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0].rstrip(",.;:-–")
+    return (cut or text[:limit]) + "…"
+
+
+def _title_from_lines(texts):
+    """The first meaningful line (four words or more, not a greeting or 'okay'), shortened."""
+    first = ""
+    for text in texts:
+        text = " ".join(str(text or "").split())
+        if not text:
+            continue
+        first = first or text
+        bare = _fold(text).strip(" .!?,…")
+        if len(text.split()) >= 4 and bare not in _FILLER:
+            return _shorten(text)
+    return _shorten(first)
+
+
+def _title_from_summary(text):
+    """A summary's title: its first line that is not a generic heading, without markdown, first sentence."""
+    for line in str(text or "").splitlines():
+        s = re.sub(r"^[#>*\-\s]+|[*_`]+", "", line).strip()
+        s = re.sub(r"^(title|titel|topic|thema)\s*:\s*", "", s, flags=re.I).strip()
+        if not s or _fold(s).rstrip(":") in _SUMMARY_HEADINGS:
+            continue
+        return _shorten(re.split(r"(?<=[.!?])\s", s, 1)[0])
+    return ""
 
 
 def _spoken_language_ok(code):
@@ -1036,22 +1086,103 @@ class Api:
             return None
         return p
 
-    def list_meetings(self, archived=False):
-        out, arch = [], self._archived()["meetings"]
+    def _meeting_files(self, archived, date_from="", date_to=""):
+        """(path, ISO date) of the saved meetings, newest first, in the archived or main list and between
+        the two dates (YYYY-MM-DD, both included; '' = no limit)."""
+        arch = self._archived()["meetings"]
+        lo = date_from if isinstance(date_from, str) and _DATE_RE.fullmatch(date_from) else ""
+        hi = date_to if isinstance(date_to, str) and _DATE_RE.fullmatch(date_to) else ""
         for p in sorted(self._data.glob("meeting_*.md"), reverse=True):
             if (p.name in arch) != bool(archived):
                 continue
-            try:
-                dt = datetime.strptime(p.stem.removeprefix("meeting_"), "%Y-%m-%d_%H-%M")
-                day, tm = f"{dt:%a %d %b %Y}", f"{dt:%H:%M}"
-            except ValueError:
-                day, tm = p.stem, ""
-            try:
-                lines = p.read_text(encoding="utf-8").count("<sub>")
-            except OSError:
-                lines = 0
-            out.append({"name": p.name, "day": day, "time": tm, "lines": lines})
+            date = p.stem.removeprefix("meeting_")[:10]
+            date = date if _DATE_RE.fullmatch(date) else ""
+            if (lo or hi) and (not date or (lo and date < lo) or (hi and date > hi)):
+                continue
+            yield p, date
+
+    def _meeting_item(self, p, date, rows=None):
+        try:
+            dt = datetime.strptime(p.stem.removeprefix("meeting_"), "%Y-%m-%d_%H-%M")
+            day, tm = f"{dt:%a %d %b %Y}", f"{dt:%H:%M}"
+        except ValueError:
+            day, tm = p.stem, ""
+        rows = self.read_meeting(p.name) if rows is None else rows
+        title, source = self._meeting_title(p, rows)
+        return {"name": p.name, "day": day, "time": tm, "date": date, "lines": len(rows),
+                "title": title, "titleSource": source}
+
+    def _meeting_meta(self, p):
+        """The meeting's sidecar (meeting_<stamp>.json next to its .md): {"title": ...}; {} when none."""
+        try:
+            meta = json.loads(p.with_suffix(".json").read_text(encoding="utf-8"))
+            return meta if isinstance(meta, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _meeting_title(self, p, rows):
+        """(title, source): the user's title ("custom"), else the summary's ("summary"), else the first
+        meaningful line ("lines"); ("", "") for an empty meeting."""
+        custom = self._meeting_meta(p).get("title")
+        if isinstance(custom, str) and custom.strip():
+            return custom.strip()[:TITLE_EDIT_MAX], "custom"
+        summary = self._data / f"summary_{p.stem.removeprefix('meeting_')}.md"
+        try:
+            title = _title_from_summary(summary.read_text(encoding="utf-8")) if summary.is_file() else ""
+        except OSError:
+            title = ""
+        if title:
+            return title, "summary"
+        title = _title_from_lines(self._english(r["de"], r["en"]) for r in rows)
+        return (title, "lines") if title else ("", "")
+
+    def list_meetings(self, archived=False, date_from="", date_to=""):
+        """The saved meetings, newest first: {name, day, time, date (YYYY-MM-DD), lines, title, titleSource}."""
+        return [self._meeting_item(p, date) for p, date in self._meeting_files(archived, date_from, date_to)]
+
+    def search_meetings(self, query="", archived=False, date_from="", date_to=""):
+        """Meetings whose lines (either language) or title contain every word of the query, ignoring case
+        and accents, each with its first matching lines ("hits") and how many lines match ("matches")."""
+        words = _fold(str(query or "")[:200]).split()
+        out = []
+        for p, date in self._meeting_files(archived, date_from, date_to):
+            rows = self.read_meeting(p.name)
+            item = self._meeting_item(p, date, rows)
+            if not words:
+                out.append(item)
+                continue
+            hits = [r for r in rows if all(w in _fold(r["de"] + " \n " + r["en"]) for w in words)]
+            if not hits and not all(w in _fold(item["title"]) for w in words):
+                continue
+            item["matches"] = len(hits)
+            item["hits"] = [{k: r.get(k, "") for k in ("ts", "offset", "de", "en")} for r in hits[:SEARCH_HITS]]
+            out.append(item)
         return out
+
+    def rename_meeting(self, name, title):
+        """Give a meeting its own title (kept in meeting_<stamp>.json next to it); '' = automatic again."""
+        p = self._meeting_path(name)
+        if not p or not p.exists() or not isinstance(title, str):
+            return {"ok": False, "message": "That meeting is not there any more."}
+        title = " ".join("".join(c for c in title if c.isprintable()).split())[:TITLE_EDIT_MAX]
+        side = p.with_suffix(".json")
+        meta = self._meeting_meta(p)
+        if title:
+            meta["title"] = title
+        else:
+            meta.pop("title", None)
+        try:
+            if meta:
+                tmp = side.with_suffix(".json.tmp")
+                tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+                os.replace(tmp, side)
+            elif side.exists():
+                side.unlink()
+        except OSError as e:
+            print(f"rename meeting {p.name} failed: {e}")
+            return {"ok": False, "message": f"Could not save the title: {e}"}
+        new, source = self._meeting_title(p, self.read_meeting(p.name))
+        return {"ok": True, "title": new, "titleSource": source}
 
     def read_meeting(self, name):
         """A saved meeting's lines: {ts (speech start), end ('' in old files), offset ('+mm:ss'), de, en}."""
@@ -1122,7 +1253,7 @@ class Api:
     def delete_meeting(self, name):
         p = self._meeting_path(name)
         if p:
-            for f in (p, p.with_suffix(".srt")):
+            for f in (p, p.with_suffix(".srt"), p.with_suffix(".json")):
                 try:
                     f.unlink()
                 except OSError:

@@ -17,31 +17,78 @@ async function runSummary(meeting){
 }
 
 /* ---- meetings ---- */
+/* APP-9: the list pane has a search over every transcript (case and accents ignored) and a date filter;
+   rows show each meeting's title (typed by the user, from its summary, or its first meaningful line). */
+const M_WHEN=[['','Any time'],['0','Today'],['7','Last 7 days'],['30','Last 30 days'],['365','Last 12 months'],['day','On a day…']];
+function mListShell(){ const list=$('#mList'); if($('#mRows')) return;
+  list.innerHTML=`<div class="selbar mhead" style="flex-direction:column;align-items:stretch;gap:8px">
+    <label class="search" style="margin:0"><i data-lucide="search" style="width:15px;height:15px"></i><input id="mSearch" type="search" placeholder="Search all meetings" autocomplete="off" spellcheck="false" aria-label="Search all meetings"></label>
+    <div style="display:flex;gap:8px;min-width:0"><select class="field" id="mWhen" aria-label="Date" style="flex:1;min-width:0;width:auto">${M_WHEN.map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select><input class="field" id="mDay" type="date" aria-label="Day" hidden style="flex:1;min-width:0;width:auto"></div>
+    <div id="mSelInfo" style="display:flex;align-items:center;gap:10px"></div></div>
+    <div id="mRows" style="display:flex;flex-direction:column;gap:5px"></div>`;
+  icons();
+  let tm; $('#mSearch').addEventListener('input',()=>{ clearTimeout(tm); tm=setTimeout(loadMeetings,250); });
+  $('#mSearch').addEventListener('keydown',e=>{ if(e.key==='Escape'&&$('#mSearch').value){ e.stopPropagation(); $('#mSearch').value=''; loadMeetings(); } });
+  $('#mWhen').onchange=()=>{ $('#mDay').hidden=$('#mWhen').value!=='day'; if($('#mWhen').value!=='day') loadMeetings(); else $('#mDay').focus(); };
+  $('#mDay').onchange=loadMeetings; }
+const isoDay=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+function mDates(){ const w=$('#mWhen')?$('#mWhen').value:''; if(!w) return ['',''];
+  if(w==='day'){ const d=$('#mDay').value; return d?[d,d]:['','']; }
+  const from=new Date(); from.setDate(from.getDate()-(+w)); return [isoDay(from),isoDay(new Date())]; }
+let mQuery='';
 async function loadMeetings(){
   const b=bridge(), list=$('#mList');
   if(!b){ list.innerHTML='<div style="padding:16px;color:var(--faint)">Meetings appear here when running in the app.</div>'; return; }
-  const items=await b.list_meetings(mArch);
-  if(!items.length){ list.innerHTML='<div style="padding:16px;color:var(--faint)">'+(mArch?'No archived meetings.':'No meetings yet.')+'</div>'; currentPairs=[]; $('#mDetail').innerHTML='<div style="margin:auto;color:var(--faint)">Nothing saved yet.</div>'; currentMeeting=null; return; }
-  const keep=items.some(m=>m.name===currentMeeting)?currentMeeting:items[0].name;
+  mListShell();
+  const q=$('#mSearch').value.trim(), [from,to]=mDates(), filtered=!!(q||from);
+  mQuery=q;
+  const items=filtered?await b.search_meetings(q,mArch,from,to):await b.list_meetings(mArch);
+  if(q!==$('#mSearch').value.trim()) return;                /* a newer search is on its way */
   mItems=items; mSel=new Set([...mSel].filter(n=>items.some(m=>m.name===n)));
+  if(!items.length){ renderMeetingList(null); $('#mRows').innerHTML='<div style="padding:16px;color:var(--faint)">'+(filtered?'No meeting matches.':mArch?'No archived meetings.':'No meetings yet.')+'</div>';
+    currentPairs=[]; $('#mDetail').innerHTML=`<div style="margin:auto;color:var(--faint)">${filtered?'Nothing found. Try other words or dates.':'Nothing saved yet.'}</div>`; currentMeeting=null; return; }
+  const keep=items.some(m=>m.name===currentMeeting)?currentMeeting:items[0].name;
   renderMeetingList(keep);
-  openMeeting(keep);
+  await openMeeting(keep);
+  showHit(keep);
 }
 /* meeting list with checkboxes: tick several, then Archive/Delete act on all of them */
 let mItems=[],mSel=new Set();
+const mTitle=m=>m.title||`${m.day} ${m.time}`;
+function markHit(text){ const words=mQuery.split(/\s+/).filter(Boolean); let h=esc(text);
+  words.forEach(w=>{ const fold=s=>s.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase(), plain=String(text), f=fold(plain), i=f.indexOf(fold(w));
+    if(i>=0&&f.length===plain.length) h=h.replace(esc(plain.slice(i,i+w.length)),s=>`<mark>${s}</mark>`); });
+  return h; }
 function renderMeetingList(active){
-  const list=$('#mList'), n=mSel.size;
-  const bar=`<div class="selbar">${n?`<b>${n} selected</b>`:'Tick to select several'}<span class="sp"></span>${n<mItems.length?'<button id="mSelAll">Select all</button>':''}${n?'<button id="mSelNone">Clear</button>':''}</div>`;
-  list.innerHTML=bar+mItems.map(m=>{ const on=mSel.has(m.name); return `<div class="rowc${on?' sel':''}"><span class="ck${on?' on':''}" role="checkbox" aria-checked="${on}" tabindex="0" data-n="${esc(m.name)}" title="Select"><i data-lucide="check"></i></span><button class="row${m.name===active?' a':''}" data-n="${esc(m.name)}"><span class="t">${esc(m.day)} · ${esc(m.time)} · ${m.lines} lines</span><b>${esc(m.day)} ${esc(m.time)}</b><span>${esc(m.name)}</span></button></div>`; }).join('');
+  const n=mSel.size, info=$('#mSelInfo');
+  if(info) info.innerHTML=`${n?`<b>${n} selected</b>`:(mQuery?`${mItems.length} found`:'Tick to select several')}<span class="sp" style="flex:1"></span>${n<mItems.length?'<button id="mSelAll">Select all</button>':''}${n?'<button id="mSelNone">Clear</button>':''}`;
+  const rows=$('#mRows'); if(!rows) return;
+  rows.innerHTML=mItems.map(m=>{ const on=mSel.has(m.name), hit=m.hits&&m.hits[0];
+    const sub=hit?`<span class="mhit">${markHit(hit.de)}${m.matches>1?` <i style="font-style:normal;color:var(--faint)">+${m.matches-1}</i>`:''}</span>`:`<span>${esc(m.name)}</span>`;
+    return `<div class="rowc${on?' sel':''}"><span class="ck${on?' on':''}" role="checkbox" aria-checked="${on}" tabindex="0" data-n="${esc(m.name)}" title="Select"><i data-lucide="check"></i></span><button class="row${m.name===active?' a':''}" data-n="${esc(m.name)}" data-title-source="${esc(m.titleSource||'')}"><span class="t">${esc(m.day)} · ${esc(m.time)} · ${m.lines} lines</span><b>${esc(mTitle(m))}</b>${sub}</button>${m.name===active?`<button class="mren" data-ren="${esc(m.name)}" title="Rename" aria-label="Rename" style="padding:12px 2px;color:var(--faint)"><i data-lucide="pencil" style="width:14px;height:14px"></i></button>`:''}</div>`; }).join('');
   icons();
-  list.querySelectorAll('.row').forEach(r=>r.onclick=()=>{ list.querySelectorAll('.row').forEach(x=>x.classList.remove('a')); r.classList.add('a'); openMeeting(r.dataset.n); });
+  rows.querySelectorAll('.row').forEach(r=>r.onclick=async()=>{ renderMeetingList(r.dataset.n); await openMeeting(r.dataset.n); showHit(r.dataset.n); });
   const tick=c=>{ const k=c.dataset.n; mSel.has(k)?mSel.delete(k):mSel.add(k); renderMeetingList(currentMeeting); };
-  list.querySelectorAll('.ck').forEach(c=>{ c.onclick=()=>tick(c); c.onkeydown=e=>{ if(e.key===' '||e.key==='Enter'){ e.preventDefault(); tick(c); } }; });
+  rows.querySelectorAll('.ck').forEach(c=>{ c.onclick=()=>tick(c); c.onkeydown=e=>{ if(e.key===' '||e.key==='Enter'){ e.preventDefault(); tick(c); } }; });
+  rows.querySelectorAll('[data-ren]').forEach(btn=>btn.onclick=()=>renameMeeting(btn.dataset.ren));
   const all=$('#mSelAll'), none=$('#mSelNone');
   if(all) all.onclick=()=>{ mItems.forEach(m=>mSel.add(m.name)); renderMeetingList(currentMeeting); };
   if(none) none.onclick=()=>{ mSel.clear(); renderMeetingList(currentMeeting); };
   $('#mDelete').lastChild.textContent=n>1?`Delete ${n}`:'Delete';
 }
+/* rename in place: Enter saves, Esc cancels, an empty title goes back to the automatic one */
+function renameMeeting(name){ const row=[...$$('#mRows .row')].find(r=>r.dataset.n===name), m=mItems.find(x=>x.name===name); if(!row||!m) return;
+  const b=row.querySelector('b'), inp=document.createElement('input');
+  inp.className='field'; inp.id='mTitleEdit'; inp.value=m.titleSource==='custom'?m.title:''; inp.placeholder=mTitle(m); inp.maxLength=120; inp.style.cssText='width:100%;margin:2px 0;font-size:14px';
+  b.replaceWith(inp); inp.focus(); row.onclick=null;
+  let done=false; const finish=async save=>{ if(done) return; done=true; const br=bridge();
+    if(save&&br){ const r=await br.rename_meeting(name,inp.value); if(r.ok){ m.title=r.title; m.titleSource=r.titleSource; toast(r.titleSource==='custom'?'Meeting renamed':'Title is automatic again'); } else toast(r.message); }
+    renderMeetingList(currentMeeting); };
+  inp.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); finish(true); } else if(e.key==='Escape'){ e.preventDefault(); e.stopPropagation(); finish(false); } });
+  inp.addEventListener('blur',()=>finish(true)); }
+/* a search opened this meeting: scroll its transcript to the first matching line */
+function showHit(name){ const m=mItems.find(x=>x.name===name), hit=m&&m.hits&&m.hits[0]; if(!hit) return;
+  const line=[...$$('#mDetail .pair2')].find(e=>e.textContent.includes(hit.de)); if(line) line.scrollIntoView({block:'center'}); }
 /* the ticked meetings, or else the open one */
 const mTargets=()=>mSel.size?[...mSel]:(currentMeeting?[currentMeeting]:[]);
 
