@@ -40,8 +40,8 @@ window.dolmi={
     if(info) toast('Transcript saved: '+info);
     if(mLoaded) loadMeetings();
   },
-  onLine:(ts,de,en)=>addFinal(ts,de,en),
-  onDraft:(de,en)=>showDraft(de,en),
+  onLine:(ts,de,en,meta)=>addFinal(ts,de,en,meta),
+  onDraft:(de,en,meta)=>showDraft(de,en,meta),
   onLevel:(rms)=>{ speaking = rms>0.01?1:0; },
   onError:(msg)=>toast(msg),
   onStopped:()=>{ setLive(false,engineLabel); if(!lines) showIdle(); },

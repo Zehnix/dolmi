@@ -99,6 +99,15 @@ input,textarea,select{font:inherit;color:inherit}
 /* the scroll area; a 1px center line via background keeps the bridge continuous */
 .brows{flex:1;min-height:0;overflow:auto;scrollbar-width:thin;
   background:linear-gradient(var(--line),var(--line)) 50% 0/1px 100% no-repeat}
+/* holds the scroll area and the "Jump to latest" pill floating over its bottom edge */
+.live-feed{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}
+.live-pill{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:4;display:inline-flex;align-items:center;gap:4px;
+  font-family:var(--mono);font-size:12px;font-weight:600;color:var(--on-ac);background:var(--ac);padding:8px 15px;border-radius:999px;
+  box-shadow:0 10px 22px -12px var(--ac),var(--sh-sm);white-space:nowrap;transition:.2s}
+.live-pill:hover{transform:translateX(-50%) translateY(-1px)}
+.live-pill[hidden]{display:none}
+/* the time on the translation side of a saved meeting (the caption side uses .pair2 .de .t) */
+.feed-t{font-family:var(--mono);font-size:11px;font-weight:500;color:var(--ac-ink);margin-right:8px;vertical-align:1px}
 .pair{display:grid;grid-template-columns:1fr 1fr}
 .pair .c{padding:15px 26px;border-bottom:1px dashed var(--line-dash)}
 .pair .de{color:var(--mute);font-size:15px;line-height:1.5}

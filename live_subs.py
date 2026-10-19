@@ -416,33 +416,77 @@ def dedupe_overlap(previous: str, text: str, max_words=8) -> str:
 
 # ------------------------------------------------------------ transcript
 class Transcript:
+    """One meeting's lines. Each final is appended to the .md and .srt the moment it arrives (nothing is
+    lost on a crash) and also kept in `lines`, keyed by its id, so a later pass can change a line
+    (update_line) and finish() rewrites both files from `lines`. Times are the speech's own start/end
+    (epoch seconds), not the time the line was written."""
+
     def __init__(self, folder="transcripts", save=True):
         self.save = save
+        self.t0 = time.time()      # meeting start: SRT times and the "+mm:ss" offsets count from here
+        self.n = 0
+        self.lines = {}            # id -> {"id", "start", "end", "de", "en", **meta}
+        self._next_id = 0          # lines without a producer id get ("auto", n): never equal to a producer id
+        self._lock = threading.Lock()
+        self.md = self.srt = None
         if not save:   # privacy setting: live subtitles only, nothing written to disk
-            self.md = self.srt = None
             return
         Path(folder).mkdir(exist_ok=True)
         stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
         self.md = Path(folder) / f"meeting_{stamp}.md"
         self.srt = Path(folder) / f"meeting_{stamp}.srt"
-        self.t0 = time.time()
-        self.n = 0
-        self.md.write_text(f"# Meeting {stamp}\n\n", encoding="utf-8")
+        self._header = f"# Meeting {stamp}\n\n<!-- started {datetime.fromtimestamp(self.t0):%H:%M:%S} -->\n\n"
+        self.md.write_text(self._header, encoding="utf-8")
 
     @staticmethod
     def _ts(s):
         h, r = divmod(s, 3600); m, s = divmod(r, 60)
         return f"{int(h):02}:{int(m):02}:{int(s):02},{int((s % 1) * 1000):03}"
 
-    def add(self, start, end, de, en, meta=None):   # appended live -> nothing lost on crash
-        if not self.save:
-            return
-        self.n += 1
-        with self.md.open("a", encoding="utf-8") as f:
-            f.write(f"**{datetime.now():%H:%M:%S}** {en}  \n<sub>{de}</sub>\n\n")
-        with self.srt.open("a", encoding="utf-8") as f:
-            f.write(f"{self.n}\n{self._ts(start - self.t0)} --> "
-                    f"{self._ts(end - self.t0)}\n{en}\n\n")
+    @staticmethod
+    def _md_line(x):
+        span = f"{datetime.fromtimestamp(x['start']):%H:%M:%S}–{datetime.fromtimestamp(x['end']):%H:%M:%S}"
+        return f"**{span}** {x['en']}  \n<sub>{x['de']}</sub>\n\n"
+
+    def _srt_block(self, n, x):
+        return f"{n}\n{self._ts(max(0.0, x['start'] - self.t0))} --> {self._ts(max(0.0, x['end'] - self.t0))}\n{x['en']}\n\n"
+
+    def add(self, start, end, de, en, meta=None):
+        """Record one final line; returns its id (meta['id'] when given, else ("auto", n))."""
+        meta = dict(meta or {})
+        with self._lock:
+            key = meta.get("id")
+            if key is None:
+                key = ("auto", self._next_id)
+                self._next_id += 1
+            self.lines[key] = x = {**meta, "id": key, "start": start, "end": end, "de": de, "en": en}
+            self.n += 1
+            if not self.save:
+                return key
+            with self.md.open("a", encoding="utf-8") as f:
+                f.write(self._md_line(x))
+            with self.srt.open("a", encoding="utf-8") as f:
+                f.write(self._srt_block(self.n, x))
+        return key
+
+    def update_line(self, line_id, **fields):
+        """Change a kept line (e.g. a better translation or a speaker name); the files follow on finish().
+        Returns False when there is no such line."""
+        with self._lock:
+            x = self.lines.get(line_id)
+            if x is None:
+                return False
+            x.update({k: v for k, v in fields.items() if k != "id"})
+            return True
+
+    def finish(self):
+        """Rewrite the .md and .srt from `lines` (call once the meeting has stopped)."""
+        with self._lock:
+            if not self.save:
+                return
+            rows = sorted(self.lines.values(), key=lambda x: x["start"])
+            self.md.write_text(self._header + "".join(self._md_line(x) for x in rows), encoding="utf-8")
+            self.srt.write_text("".join(self._srt_block(i, x) for i, x in enumerate(rows, 1)), encoding="utf-8")
 
 # --------------------------------------------------------------- worker
 UI_Q_CONTRACT = """What worker() puts on ui_q (producer: this module; consumer: src/ui/app.py _pump).

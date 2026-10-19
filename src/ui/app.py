@@ -10,11 +10,13 @@ Whisper model, the settings with the encrypted keys, and the database handle.
 """
 import itertools
 import json
+import numbers
 import os
 import queue
 import re
 import threading
 import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -28,7 +30,10 @@ import dolmi_platform
 VERSION = config.version()
 DEFAULT_SPEAKER = dolmi_platform.DEFAULT_SPEAKER   # what "Speaker" listens to when no device is picked
 ICON = dolmi_platform.app_icon(config.ROOT)
+# a saved line: "**HH:MM:SS–HH:MM:SS** {en}  \n<sub>{de}</sub>" (older files: "**HH:MM:SS** ...")
 _MEETING_RE = re.compile(r"\*\*(.+?)\*\*\s+(.*?)\s*\n<sub>(.*?)</sub>", re.S)
+_STARTED_RE = re.compile(r"<!-- started (\d\d:\d\d:\d\d) -->")
+LAG_WINDOW = 5                                     # the Lag figure is the median of this many finals
 # settings the page may change through set_setting (provider, keys and invisible have their own calls)
 SPEECH_SOURCES = ("local", *cloud_speech.PROVIDERS)   # Settings → Captions by
 SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_transcripts", "keep_days", "audio_device", "model",
@@ -37,6 +42,37 @@ SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_tran
 
 def _js(v):
     return json.dumps(v)
+
+
+def _clock(epoch):
+    return datetime.fromtimestamp(epoch).strftime("%H:%M:%S")
+
+
+def _offset(seconds):
+    """Seconds into the meeting as '+mm:ss' (or '+h:mm:ss' after an hour)."""
+    s = max(0, int(seconds))
+    h, r = divmod(s, 3600)
+    return f"+{h}:{r // 60:02}:{r % 60:02}" if h else f"+{r // 60:02}:{r % 60:02}"
+
+
+def _seconds(hhmmss):
+    try:
+        h, m, s = (int(x) for x in hhmmss.split(":"))
+    except ValueError:
+        return None
+    return h * 3600 + m * 60 + s
+
+
+def _plain(meta):
+    """A JSON-safe copy of a caption's meta (producers may hand over numpy numbers)."""
+    out = {}
+    for k, v in meta.items():
+        if isinstance(v, numbers.Integral) and not isinstance(v, bool):
+            v = int(v)
+        elif isinstance(v, numbers.Real) and not isinstance(v, bool):
+            v = float(v)
+        out[str(k)] = v
+    return out
 
 
 def _spoken_language_ok(code):
@@ -83,7 +119,9 @@ class Api:
         self._engine_lock = threading.Lock() # one engine load at a time
         self._session = None                 # {"token", "stop", "transcript"} while starting/listening
         self._lock = threading.Lock()        # guards session transitions
-        self._history = []                   # [(hh:mm:ss, de, en)] this session
+        self._history = []                   # [(hh:mm:ss speech start, de, en, meta)] this session
+        self._lags = deque(maxlen=LAG_WINDOW)  # end of speech -> line shown, last few finals (seconds)
+        self._lag_session = None             # the session self._lags belongs to
         self._hist_lock = threading.Lock()
         self._last_transcript = None
         self._ai_history = []
@@ -124,22 +162,36 @@ class Api:
             if ov and self._overlay_visible:
                 ov.emit(fn, *args)
 
+    def _mark_caption(self):
+        """Note when a caption last arrived; the 'nothing heard' watcher (APP-3) reads _last_caption.
+        Uses the watcher's monotonic clock (self._clock, which tests can fake) when it exists."""
+        self._last_caption = getattr(self, "_clock", time.monotonic)()
+
     def _pump(self):
-        """Drain ui_q (fed by the worker and answer threads) and push to the page."""
+        """Drain ui_q (fed by the worker and answer threads) and push to the page.
+        Items are (kind, a, b) or (kind, a, b, meta); captions get their timing meta completed here."""
         while True:
             kind, a, b, *rest = self._ui_q.get()
+            meta = rest[0] if rest and isinstance(rest[0], dict) else {}
             try:
                 if kind in ("final", "draft") and not self._session:
                     continue                          # late result after Stop
                 if kind == "error":
                     self._emit("onError", a)
                 elif kind == "final":
+                    meta = self._caption_meta(meta, final=True)
+                    ts = _clock(meta["start"])
                     with self._hist_lock:
-                        self._history.append((datetime.now().strftime("%H:%M:%S"), a, b))
-                    self._emit("onLine", datetime.now().strftime("%H:%M"), a, b)
+                        self._history.append((ts, a, b, meta))
+                    if a or b:
+                        self._mark_caption()
+                    self._emit("onLine", ts[:5], a, b, meta)
                     self._ov("line", a, b)
                 elif kind == "draft":
-                    self._emit("onDraft", a, b)
+                    meta = self._caption_meta(meta, final=False)
+                    if a or b:
+                        self._mark_caption()
+                    self._emit("onDraft", a, b, meta)
                     self._ov("draft", a, b)
                 elif kind == "ask_start":
                     self._emit("onAsk", a)
@@ -153,6 +205,40 @@ class Api:
                     self._emit("onSummaryDone", a)
             except Exception as e:
                 print(f"pump {kind} failed: {e}")
+
+    def _caption_meta(self, meta, final):
+        """Complete a caption's timing meta: 'shown' (now), 'lag' (shown - end of speech, only when the
+        producer measured the end), 'offset' (seconds into the meeting) and, for finals, 'lag_median'
+        over the last LAG_WINDOW finals of this session (None until one was measured). A final
+        without timing (old producers) is placed at now."""
+        meta = _plain(meta)
+        session = self._session
+        if session is not self._lag_session:          # new meeting: forget the old lags
+            self._lag_session, self._lags = session, deque(maxlen=LAG_WINDOW)
+        now = time.time()
+        measured = isinstance(meta.get("end"), (int, float))
+        if final:
+            meta.setdefault("end", now)
+            meta.setdefault("start", meta["end"])
+        meta["shown"] = now
+        meta["lag"] = max(0.0, now - meta["end"]) if measured else None
+        tr = session.get("transcript") if session else None
+        t0 = getattr(tr, "t0", None)
+        if t0 and isinstance(meta.get("start"), (int, float)):
+            meta["offset"] = max(0.0, meta["start"] - t0)
+        if final:
+            if meta["lag"] is not None:
+                self._lags.append(meta["lag"])
+            meta["lag_median"] = self._lag_median()
+        return meta
+
+    def _lag_median(self):
+        """Median lag of the last few finals in seconds, or None before one was measured."""
+        lags = sorted(self._lags)
+        if not lags:
+            return None
+        mid = len(lags) // 2
+        return lags[mid] if len(lags) % 2 else (lags[mid - 1] + lags[mid]) / 2
 
     def _level_loop(self):
         while True:
@@ -674,12 +760,27 @@ class Api:
         return out
 
     def read_meeting(self, name):
+        """A saved meeting's lines: {ts (speech start), end ('' in old files), offset ('+mm:ss'), de, en}."""
         p = self._meeting_path(name)
         if not p or not p.exists():
             return []
-        # Transcript.add writes "**HH:MM:SS** {en}  \n<sub>{de}</sub>" -> groups are (ts, en, de)
-        return [{"ts": ts.strip(), "de": de.strip(), "en": en.strip()}
-                for ts, en, de in _MEETING_RE.findall(p.read_text(encoding="utf-8"))]
+        text = p.read_text(encoding="utf-8")
+        rows = []
+        for span, en, de in _MEETING_RE.findall(text):   # groups are (time span, en, de)
+            start, _, end = span.strip().replace("-", "–").partition("–")
+            rows.append({"ts": start.strip(), "end": end.strip(), "de": de.strip(), "en": en.strip()})
+        # offsets count from the meeting's start: the "started" note, else the file name's minute
+        m = _STARTED_RE.search(text)
+        t0 = _seconds(m.group(1)) if m else None
+        if t0 is None:
+            try:
+                t0 = _seconds(f"{datetime.strptime(p.stem.removeprefix('meeting_'), '%Y-%m-%d_%H-%M'):%H:%M:%S}")
+            except ValueError:
+                t0 = _seconds(rows[0]["ts"]) if rows else None
+        for r in rows:
+            s = _seconds(r["ts"])
+            r["offset"] = _offset((s - t0) % 86400) if s is not None and t0 is not None else ""
+        return rows
 
     def meeting_txt(self, name):
         """A saved meeting as plain text: each line's time, the caption (what was said) and its translation."""
@@ -693,7 +794,9 @@ class Api:
             when = p.stem
         out = [f"Dolmi meeting — {when}", f"{len(pairs)} lines · caption (what was said) and translation", ""]
         for x in pairs:
-            out += [f"[{x['ts']}]", f"Caption:     {x['de']}", f"Translation: {x['en']}", ""]
+            span = x["ts"] + (f"–{x['end']}" if x.get("end") else "")
+            out += [f"[{span}]" + (f" {x['offset']}" if x.get("offset") else ""),
+                    f"Caption:     {x['de']}", f"Translation: {x['en']}", ""]
         return "\n".join(out)
 
     def export_meeting(self, name):
@@ -808,7 +911,7 @@ class Api:
             return -1
         qid = next(self._ids)
         with self._hist_lock:
-            lines = [self._english(heard, sub) for _, heard, sub in self._history[-9:]]
+            lines = [self._english(heard, sub) for _, heard, sub, *_ in self._history[-9:]]
             meeting = [line for line in lines if line != question][-8:]
         self._asks[qid] = {"q": question, "meeting": meeting}
         self._ask_q.put(qid)
@@ -925,7 +1028,7 @@ class Api:
                 history = list(self._history)
             if not history:
                 return {"ok": False, "message": "Nothing to summarize yet — run a live session first."}
-            lines = [f"[{t}] {self._english(heard, sub)}" for t, heard, sub in history]
+            lines = [f"[{t}] {self._english(heard, sub)}" for t, heard, sub, *_ in history]
             tr = self._last_transcript
             stamp = tr.md.stem.removeprefix("meeting_") if tr and tr.md else f"{datetime.now():%Y-%m-%d_%H-%M}"
         if not self._ai_key():

@@ -1,0 +1,70 @@
+<!-- Headless check of the Live and Meetings views (tests/test_live.py appends this to src/ui/web/index.html
+     and loads the page in Edge/Chrome headless with --dump-dom). It drives the page through the same
+     window.dolmi hooks Python uses, with a stub bridge, then writes what it saw as ASCII-only JSON into a pre element with id "result". -->
+<script>
+window.pywebview={api:new Proxy({
+  state:async()=>({theme:'paper',showGerman:true,language:'de',engine:'not loaded'}),
+  read_meeting:async()=>[
+    {ts:'10:00:05',end:'10:00:08',offset:'+00:05',de:'Hallo zusammen.',en:'Hello everyone.'},
+    {ts:'10:01:10',end:'',offset:'+01:10',de:'Alte Zeile.',en:'Old line.'}],
+},{get:(t,k)=>k in t?t[k]:(async()=>({}))})};
+
+(async()=>{
+  const out={}, tick=(ms=60)=>new Promise(r=>setTimeout(r,ms));
+  const gap=()=>brows.scrollHeight-brows.scrollTop-brows.clientHeight;
+  const pillEl=document.getElementById('livePill'), lag=()=>document.getElementById('sLag').textContent;
+  try{
+    await tick(200);                                   // let boot() settle
+    out.lagBefore=lag();
+    resetFeed();
+    const t0=Date.now()/1000-600;
+    const line=(i,extra)=>window.dolmi.onLine('10:00','Satz '+i,'Line '+i,
+      {id:i,start:t0+i*4,end:t0+i*4+3,offset:i*4,shown:t0+i*4+4,lag:1,lag_median:1.2,...extra});
+    for(let i=0;i<30;i++) line(i);
+    await tick();
+    out.scrollable=brows.scrollHeight>brows.clientHeight+200;
+    out.followsAtBottom=gap()<=48;
+    out.pillHiddenWhileLive=pillEl.hidden;
+    out.lag=lag();
+    const last=[...brows.querySelectorAll('.pair')].pop();
+    out.tsDe=last.querySelector('.de .ts').textContent;
+    out.tsEn=last.querySelector('.en .ts').textContent;
+
+    brows.scrollTop=0; await tick();                   // the reader scrolls up
+    const top=brows.scrollTop;
+    window.dolmi.onDraft('Wir brauchen','We need',{start:t0+200,end:t0+201,lag:0.8});
+    for(let i=30;i<35;i++) line(i,{lag_median:2.5});
+    window.dolmi.onDraft('Und dann','And then',{start:t0+220,end:t0+221,lag:0.9});
+    await tick();
+    out.scrollTopUnchanged=brows.scrollTop===top;
+    out.pill=pillEl.hidden?'':pillEl.textContent;
+    out.lagAfter=lag();
+    out.lagTitle=document.getElementById('sLag').parentElement.title;
+
+    pillEl.click(); await tick();
+    out.backAtBottom=gap()<=48;
+    out.pillHiddenAfterJump=pillEl.hidden;
+
+    // another tab open mid-meeting: the hidden feed cannot scroll, but coming back must still be live
+    const nav=v=>document.querySelector(`.nav button[data-v="${v}"]`).click();
+    nav('meetings'); await tick();
+    for(let i=35;i<45;i++) line(i);
+    await tick();
+    nav('live'); await tick();
+    out.backFromTabAtBottom=gap()<=48;
+    line(45); await tick();
+    out.tabStillFollowing=gap()<=48;
+    out.tabPillHidden=pillEl.hidden;
+
+    resetFeed();
+    out.lagAfterReset=lag();
+
+    await openMeeting('meeting_2026-10-19_10-00.md');
+    const p2=document.querySelector('#mDetail .pair2');
+    out.meetDe=p2.querySelector('.de .t').textContent;
+    out.meetEn=p2.querySelector('.en .feed-t').textContent;
+    out.copy=meetingText();
+  }catch(e){ out.error=String(e&&e.stack||e); }
+  const pre=document.createElement('pre'); pre.id='result'; pre.textContent=JSON.stringify(out).replace(/[\u007f-\uffff]/g,c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0')); document.body.append(pre);
+})();
+</script>

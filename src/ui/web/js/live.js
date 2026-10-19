@@ -1,4 +1,4 @@
-/* Dolmi web UI — Live view: waveform, caption feed (appendPair, showDraft, addFinal, resetFeed), stats, start/stop.
+/* Dolmi web UI — Live view: waveform, caption feed (appendPair, showDraft, addFinal, resetFeed; stick-to-bottom, lag, times), stats, start/stop.
    Classic script (not a module): top-level names are shared with the other js/*.js files.
    Load order (index.html): core, live, meetings, assistant, vocab, settings, onboarding. */
 /* waveform */
@@ -11,17 +11,57 @@ let lines=0,words=0,draftEl=null,engineLabel='models load on Start'; const brows
 const idleHTML=$('#idle')?$('#idle').outerHTML:'';
 function showIdle(){ if(!document.getElementById('idle')&&idleHTML){ brows.insertAdjacentHTML('beforeend',idleHTML); icons(); } }
 function clearIdle(){ const i=document.getElementById('idle'); if(i) i.remove(); }
-function resetFeed(){ brows.innerHTML=''; lines=0;words=0; draftEl=null; $('#sLines').textContent=0; $('#sWords').textContent=0; }
-function appendPair(ts,de,en){ clearIdle(); $$('.pair.cur').forEach(p=>p.classList.remove('cur'));
-  const p=document.createElement('div'); p.className='pair cur pop';
-  p.innerHTML=`<div class="c de"><span class="ts">${esc(ts)}</span>${esc(de)}</div><div class="c en"><span class="ts">&nbsp;</span>${esc(en)}</div>`;
-  brows.append(p); brows.scrollTop=brows.scrollHeight; }
-function addFinal(ts,de,en){ if(draftEl){draftEl.remove();draftEl=null;} appendPair(ts,de,en);
-  lines++; words+=en.split(/\s+/).filter(Boolean).length; $('#sLines').textContent=lines; $('#sWords').textContent=words; }
-function showDraft(de,en){ if(!de&&!en){ if(draftEl){draftEl.remove();draftEl=null;} return; } clearIdle();
+
+/* follow the newest line only while the reader is at the bottom: scrolling up un-sticks the feed and
+   the "Jump to latest" pill counts the finals that arrived since, until it (or scrolling down) returns to live.
+   Only the reader un-sticks it: autoTop is where follow() last put the feed, so a feed that fell behind
+   while hidden (another tab open: display:none, follow() cannot scroll) or after a window resize stays live. */
+const STICK_PX=48, pill=$('#livePill'); let stuck=true,unseen=0,autoTop=0;
+const shown=()=>brows.clientHeight>0;
+const nearBottom=()=>brows.scrollHeight-brows.scrollTop-brows.clientHeight<=STICK_PX;
+const scrolledUp=()=>shown()&&brows.scrollTop<autoTop-1&&!nearBottom();
+/* checked before each change too: a scroll-up and a new line can land in the same frame, before the scroll event */
+function unstickIfScrolled(){ if(stuck&&scrolledUp()){ stuck=false; setPill(); } }
+function follow(){ if(!stuck||!shown()) return; brows.scrollTop=brows.scrollHeight; autoTop=brows.scrollTop; }
+function setPill(){ if(!pill) return; pill.hidden=stuck; $('#livePillN').textContent=unseen?` (${unseen} new)`:''; }
+brows.addEventListener('scroll',()=>{ if(!shown()) return;
+  if(stuck){ if(scrolledUp()){ stuck=false; setPill(); } else autoTop=Math.max(autoTop,brows.scrollTop); return; }
+  if(nearBottom()){ stuck=true; unseen=0; autoTop=brows.scrollTop; setPill(); } });
+if(pill) pill.onclick=()=>{ stuck=true; unseen=0; follow(); setPill(); };
+/* catch up when the Live view is shown again (core.js's nav handler has already shown it) or the window changes size */
+$$('.nav button[data-v="live"]').forEach(b=>b.addEventListener('click',follow));
+if(window.ResizeObserver) new ResizeObserver(()=>follow()).observe(brows);
+
+/* times: speech start as HH:MM:SS plus "+mm:ss" into the meeting, from the line's meta (epoch seconds) */
+const two=n=>String(n).padStart(2,'0');
+function clock(epoch){ const d=new Date(epoch*1000); return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`; }
+function offsetText(sec){ const s=Math.max(0,Math.floor(sec)),h=Math.floor(s/3600),m=Math.floor(s%3600/60); return '+'+(h?h+':'+two(m):two(m))+':'+two(s%60); }
+function stamp(ts,meta){ const m=meta||{}; const t=typeof m.start==='number'?clock(m.start):(ts||'');
+  return t+(typeof m.offset==='number'?' · '+offsetText(m.offset):''); }
+
+/* lag: end of speech -> line on screen, measured in Python (meta.lag); the figure is the median of the
+   last 5 finals (meta.lag_median), '–' until one was measured; the latest draft's lag is in the tooltip */
+let lagLine=null,lagDraft=null;
+const secs=s=>(s<10?s.toFixed(1):String(Math.round(s)))+'s';
+function showLag(){ const el=$('#sLag'); if(!el) return; el.textContent=lagLine==null?'–':secs(lagLine);
+  el.parentElement.title='Lag: from the end of speech to the line on screen (median of the last 5 lines)'+(lagDraft==null?'':` · live draft ${secs(lagDraft)}`); }
+
+function resetFeed(){ brows.innerHTML=''; lines=0;words=0; draftEl=null; $('#sLines').textContent=0; $('#sWords').textContent=0;
+  stuck=true; unseen=0; autoTop=0; setPill(); lagLine=lagDraft=null; showLag(); }
+function appendPair(ts,de,en,meta){ unstickIfScrolled(); clearIdle(); $$('.pair.cur').forEach(p=>p.classList.remove('cur'));
+  const p=document.createElement('div'), t=esc(stamp(ts,meta)); p.className='pair cur pop';
+  p.innerHTML=`<div class="c de"><span class="ts">${t}</span>${esc(de)}</div><div class="c en"><span class="ts">${t}</span>${esc(en)}</div>`;
+  brows.append(p); follow(); }
+function addFinal(ts,de,en,meta){ if(draftEl){draftEl.remove();draftEl=null;} appendPair(ts,de,en,meta);
+  lines++; words+=en.split(/\s+/).filter(Boolean).length; $('#sLines').textContent=lines; $('#sWords').textContent=words;
+  if(!stuck){ unseen++; setPill(); }
+  if(meta&&meta.lag_median!=null){ lagLine=meta.lag_median; showLag(); } }
+function showDraft(de,en,meta){ if(meta&&meta.lag!=null){ lagDraft=meta.lag; showLag(); }
+  if(!de&&!en){ if(draftEl){draftEl.remove();draftEl=null;} return; } unstickIfScrolled(); clearIdle();
   if(!draftEl){ draftEl=document.createElement('div'); draftEl.className='pair cur'; draftEl.style.opacity='.7'; brows.append(draftEl); }
-  draftEl.innerHTML=`<div class="c de"><span class="ts">…</span>${esc(de)}</div><div class="c en"><span class="ts">&nbsp;</span>${esc(en)}<span class="caret"></span></div>`;
-  brows.scrollTop=brows.scrollHeight; }
+  const t=esc(meta&&typeof meta.start==='number'?stamp('',meta)+' …':'…');
+  draftEl.innerHTML=`<div class="c de"><span class="ts">${t}</span>${esc(de)}</div><div class="c en"><span class="ts">${t}</span>${esc(en)}<span class="caret"></span></div>`;
+  follow(); }
 
 function setLive(on,label){
   listening=on; $('#bhead').classList.toggle('on',on);
