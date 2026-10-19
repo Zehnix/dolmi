@@ -298,3 +298,29 @@ def test_page_times_match_on_both_columns(live_page):
     assert r["meetDe"] == "DE · 10:00:05 · +00:05" and r["meetEn"] == "EN · 10:00:05 · +00:05"
     assert "[10:00:05 · +00:05] EN  Hello everyone.\n[10:00:05 · +00:05] DE  Hallo zusammen." in r["copy"]
     assert "[10:01:10 · +01:10] EN  Old line." in r["copy"]
+
+
+def _bar_lines(api, monkeypatch):
+    sent = []
+    monkeypatch.setattr(api, "_ov", lambda fn, *args: sent.append((fn, args)))
+    return sent
+
+
+def test_bar_line_has_no_time_by_default(api, monkeypatch):                  # LIVE-5
+    sent = _bar_lines(api, monkeypatch)
+    _session(api)
+    api._ui_q.put(("final", "Hallo", "Hello", {"start": time.time() - 2, "end": time.time() - 1}))
+    _calls(api, "onLine", 1)
+    assert ("line", ("Hallo", "Hello", "")) in sent
+    assert api.state()["barTime"] is False
+
+
+def test_bar_line_carries_speech_start_time_when_on(api, monkeypatch):       # LIVE-5
+    sent = _bar_lines(api, monkeypatch)
+    assert api.set_setting("bar_time", True) is True
+    assert api.set_setting("bar_time", "yes") is False                        # only true/false
+    _session(api)
+    start = time.time() - 3
+    api._ui_q.put(("final", "Hallo", "Hello", {"start": start, "end": start + 1}))
+    _calls(api, "onLine", 1)
+    assert ("line", ("Hallo", "Hello", datetime.fromtimestamp(start).strftime("%H:%M"))) in sent

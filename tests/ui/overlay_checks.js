@@ -13,6 +13,9 @@
       await tick(100);
       window.ov.style(.7,24); window.ov.line('Hallo zusammen.','Hello everyone.'); await tick();
       ok(q('#body .en')&&q('#body .en').textContent==='Hello everyone.','bar: a line does not show');
+      window.ov.line('Gut.','Good.','10:42'); await tick();
+      ok(q('#body .tm')&&q('#body .tm').textContent==='10:42','bar: a line with a time does not show it');
+      ok(document.querySelectorAll('#body .tm').length===1,'bar: a line without a time shows one');
       q('#srcb').click(); await tick();
       ok(n('toggle_source')===1,'bar: the source button does not call toggle_source');
       q('#close').click(); await tick();

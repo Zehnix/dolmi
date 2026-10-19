@@ -85,6 +85,7 @@
     ['appearance','#theme [data-t="paper"]','click','set_setting','theme'],
     ['bar','#swBarLock','click','set_bar_locked',true],                                       // APP-8
     ['bar','#swBarLock','click','set_bar_locked',false],
+    ['bar','#swBarTime','click','set_setting','bar_time'],                                     // LIVE-5
     ['about','#swUpdates','click','set_setting','check_updates'],                          // APP-6
     ['about','#setCheckUpdate','click','check_update',true],
     ['about','#swShortcuts','click','set_setting','shortcuts_on'],                          // APP-7
@@ -250,6 +251,23 @@
     ok(/Ctrl\+Alt\+Shift\+L/.test(q('#barLockHint').textContent),`${label}: the lock hint does not name the unlock shortcut`);
     ok(/Ctrl\+Alt\+Shift\+S/.test(q('#sc-toggle_live').textContent),`${label}: shortcut keys are not shown (${q('#sc-toggle_live').textContent})`);
     ok(/another app/i.test(q('#scs-toggle_lock').textContent),`${label}: a shortcut another app owns is not flagged`);
+  });
+
+  /* LIVE-4: a dropped draft stays as a dim 'not understood' row with the reason; it is not a line */
+  window.__uiExtra.push(async(label,{ok,tick,q,qa,nav})=>{
+    nav('live'); await tick(); resetFeed(); await tick();
+    const n0=+q('#sLines').textContent;
+    window.dolmi.onDraft('Ähm also','Um so',{start:Date.now()/1000-1,end:Date.now()/1000}); await tick();
+    window.dolmi.onDraft('','',{dropped:'junk',start:Date.now()/1000-1,end:Date.now()/1000}); await tick();
+    const d=q('#brows .pair.dropped');
+    ok(d&&/junk/.test(d.title)&&/not understood/.test(d.textContent),`${label}: a dropped draft does not stay as 'not understood'`);
+    ok(+q('#sLines').textContent===n0,`${label}: a dropped draft counts as a line`);
+    window.dolmi.onLine('10:01','Gut.','Good.',{start:Date.now()/1000,end:Date.now()/1000}); await tick();
+    ok(qa('#brows .pair.dropped').length===1&&qa('#brows .pair').length===2,`${label}: a final removed the not-understood row`);
+    window.dolmi.onDraft('','',{dropped:'stale'}); await tick();
+    ok(qa('#brows .pair.dropped').length===1,`${label}: a dropped draft with no draft on screen added a row`);
+    resetFeed(); await tick();
+    ok(!qa('#brows .pair').length,`${label}: resetFeed leaves the not-understood row`);
   });
 
   async function run(){

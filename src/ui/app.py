@@ -56,9 +56,10 @@ SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_tran
             "preload_models",                                  # APP-4
             "check_updates",                                   # APP-6
             "shortcuts_on",                                    # APP-7
-            "speaker_labels"}                                  # SPK-4
+            "speaker_labels",                                  # SPK-4
+            "bar_time"}                                        # LIVE-5
 BOOL_SETTINGS = {"warn_silence", "preload_models", "check_updates", "shortcuts_on",
-                 "speaker_labels"}                       # on/off switches that must be true or false
+                 "speaker_labels", "bar_time"}           # on/off switches that must be true or false
 SPEAKER_NAME_MAX = 40                                    # SPK-4: longest speaker name
 # APP-3 'nothing heard' warning: how quiet counts as silence, and how long before Dolmi says so
 HEARD_SILENCE_RMS = live_subs.SILENCE_RMS
@@ -376,7 +377,7 @@ class Api:
                     if a or b:
                         self._mark_caption()
                     self._emit("onLine", ts[:5], a, b, meta)
-                    self._ov("line", a, b)
+                    self._ov("line", a, b, ts[:5] if self._settings.get("bar_time") else "")
                     self._cloud_submit(a, b, meta)
                 elif kind == "final_update":
                     self._apply_line_update(a, b, meta)
@@ -503,6 +504,7 @@ class Api:
             "warnSilence": bool(s.get("warn_silence", True)),
             "speakerLabels": bool(s.get("speaker_labels", False)),
             "barVisible": bool(self._overlay_visible), "barLocked": bool(s.get("bar_locked")),
+            "barTime": bool(s.get("bar_time", False)),
             "shortcutsOn": bool(s.get("shortcuts_on", True)), "shortcuts": self._shortcut_map(),
             "shortcutStatus": dict(self._shortcut_status),
             "engine": self._engine_label(), "engineState": self._engine_state,
