@@ -1,25 +1,32 @@
 """Where Dolmi keeps things, and its settings.
 
 Nothing the app writes lives next to the program, so it also works from Program Files (an all-users
-install) and survives upgrades, which replace the program folder:
+install) or a read-only Dolmi.app in /Applications, and survives upgrades, which replace the program.
+The folders come from dolmi_platform:
 
-    settings.json, .env, vocabulary.txt, glossary.txt   %APPDATA%\\Dolmi           (CONFIG)
-    transcripts, summaries, inbox (dolmi.db)            Documents\\Dolmi           (data_folder)
-    dolmi.log                                           %LOCALAPPDATA%\\Dolmi      (LOGS)
-    speech/translation models                           %USERPROFILE%\\.cache\\huggingface
+    Windows                                             macOS
+    settings.json, .env, vocabulary.txt, glossary.txt   (CONFIG)
+      %APPDATA%\\Dolmi                                   ~/Library/Application Support/Dolmi
+    transcripts, summaries, inbox (dolmi.db)            (data_folder)
+      Documents\\Dolmi                                   ~/Documents/Dolmi
+    dolmi.log                                           (LOGS)
+      %LOCALAPPDATA%\\Dolmi                              ~/Library/Logs/Dolmi
+    speech/translation models
+      %USERPROFILE%\\.cache\\huggingface                  ~/.cache/huggingface
 
 On first run, files from the old location (the repo/program folder) are copied over, so nothing is lost.
 """
 import copy
-import ctypes
 import json
 import os
 import shutil
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent      # program folder: repo root, or {app}\app when installed
-CONFIG = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming") / "Dolmi"
-LOGS = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "Dolmi"
+import dolmi_platform
+
+ROOT = Path(__file__).resolve().parent.parent      # program folder: repo root, {app}\app when installed, or the app folder in Dolmi.app
+CONFIG = dolmi_platform.config_dir()
+LOGS = dolmi_platform.log_dir()
 SETTINGS = CONFIG / "settings.json"
 USER_FILES = ("settings.json", ".env", "vocabulary.txt", "glossary.txt")
 
@@ -82,10 +89,7 @@ def save_settings(s):
 
 
 def documents_folder() -> Path:
-    buf = ctypes.create_unicode_buffer(260)
-    if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf) == 0:  # 5 = CSIDL_PERSONAL
-        return Path(buf.value)
-    return Path.home() / "Documents"
+    return dolmi_platform.documents_folder()
 
 
 def data_folder(settings) -> Path:

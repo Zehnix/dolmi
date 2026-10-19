@@ -1,15 +1,17 @@
 """
-Dolmi engine: live German -> English subtitles for any meeting app on Windows, 100% free & local.
+Dolmi engine: live German -> English subtitles for any meeting app on Windows and macOS, 100% free & local.
 
 v2 improvements over v1:
-  * WASAPI loopback capture  -> no virtual cable, you still HEAR the meeting
+  * System audio capture     -> no virtual cable, you still HEAR the meeting
+                                (WASAPI loopback / Core Audio process tap: dolmi_platform)
   * Pause-based segmentation -> no more sentences cut in half every 2 s
   * Live "draft" line        -> text appears ~1 s after speech, finalized on pause
   * faster-whisper (int8)    -> ~4x faster than openai-whisper on CPU
   * Hallucination filter     -> drops Whisper's classic German silence ghosts
   * Real timestamps          -> correct SRT + readable Markdown transcript
 
-The window and subtitle bar live in src/ (webview UI). Run: start.bat or the Dolmi shortcut.
+The window and subtitle bar live in src/ (webview UI). Run: start.bat (Windows), Mac/start.command (macOS)
+or the installed app.
 """
 import os, queue, re, threading, time
 from datetime import datetime
@@ -17,6 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
+import dolmi_platform
 import models
 
 # ---------------------------------------------------------------- settings
@@ -36,83 +39,8 @@ HALLUCINATIONS = [         # typical Whisper output on silence / noise
 ]
 
 # --------------------------------------------------------------- capture
-def output_devices():
-    """Names of speakers/headphones Dolmi can listen to (any meeting app playing there works)."""
-    import pyaudiowpatch as pyaudio
-    pa = pyaudio.PyAudio()
-    try:
-        return [d["name"].removesuffix(" [Loopback]") for d in pa.get_loopback_device_info_generator()]
-    finally:
-        pa.terminate()
-
-def input_devices():
-    """Names of microphones Dolmi can listen to (for in-person meetings)."""
-    import pyaudiowpatch as pyaudio
-    pa = pyaudio.PyAudio()
-    try:
-        wasapi = pa.get_host_api_info_by_type(pyaudio.paWASAPI)["index"]
-        return [d["name"] for d in map(pa.get_device_info_by_index, range(pa.get_device_count()))
-                if d["hostApi"] == wasapi and d["maxInputChannels"] > 0 and not d.get("isLoopbackDevice")]
-    finally:
-        pa.terminate()
-
-def _capture(pa, dev, out_q, stop, on_level):
-    """Stream one PyAudio input device as 16 kHz mono into out_q until stop is set."""
-    import pyaudiowpatch as pyaudio
-    rate, ch = int(dev["defaultSampleRate"]), max(1, min(int(dev["maxInputChannels"]), 2))
-    print(f"🎧 Capturing: {dev['name']}  ({rate} Hz, {ch} ch)")
-
-    def cb(data, frames, t, status):
-        a = np.frombuffer(data, dtype=np.float32).reshape(-1, ch).mean(axis=1)
-        # cheap resample to 16 kHz (fine for speech)
-        idx = np.linspace(0, len(a) - 1, int(len(a) * SR / rate)).astype(np.int64)
-        out_q.put(a[idx])
-        if on_level:
-            on_level(float(np.sqrt(np.mean(a * a))) if len(a) else 0.0)
-        return (None, pyaudio.paContinue)
-
-    s = pa.open(format=pyaudio.paFloat32, channels=ch, rate=rate, input=True,
-                input_device_index=dev["index"], frames_per_buffer=int(rate * 0.1),
-                stream_callback=cb)
-    s.start_stream()
-    stop.wait()
-    s.stop_stream(); s.close()
-
-def loopback_stream(out_q: queue.Queue, stop: threading.Event, device=None, on_level=None):
-    """Capture whatever Windows plays on a speaker (WASAPI loopback); default speaker if device is None.
-    on_level(rms) is called about 10x a second so the UI can show that audio is arriving."""
-    import pyaudiowpatch as pyaudio
-    pa = pyaudio.PyAudio()
-    try:
-        wasapi = pa.get_host_api_info_by_type(pyaudio.paWASAPI)
-        spk = pa.get_device_info_by_index(wasapi["defaultOutputDevice"])
-        if device:
-            spk = next((lb for lb in pa.get_loopback_device_info_generator() if device in lb["name"]), spk)
-        if not spk["isLoopbackDevice"]:
-            for lb in pa.get_loopback_device_info_generator():
-                if spk["name"] in lb["name"]:
-                    spk = lb
-                    break
-        _capture(pa, spk, out_q, stop, on_level)
-    finally:
-        pa.terminate()
-
-def mic_stream(out_q: queue.Queue, stop: threading.Event, device=None, on_level=None):
-    """Capture a microphone (people in the room); the Windows default microphone if device is None."""
-    import pyaudiowpatch as pyaudio
-    pa = pyaudio.PyAudio()
-    try:
-        wasapi = pa.get_host_api_info_by_type(pyaudio.paWASAPI)
-        mics = [d for d in map(pa.get_device_info_by_index, range(pa.get_device_count()))
-                if d["hostApi"] == wasapi["index"] and d["maxInputChannels"] > 0 and not d.get("isLoopbackDevice")]
-        mic = next((d for d in mics if device and device in d["name"]), None)
-        if mic is None and wasapi["defaultInputDevice"] >= 0:
-            mic = pa.get_device_info_by_index(wasapi["defaultInputDevice"])
-        if mic is None:
-            raise RuntimeError("no microphone found - plug one in, or check Windows Settings > Privacy > Microphone")
-        _capture(pa, mic, out_q, stop, on_level)
-    finally:
-        pa.terminate()
+# Capture is platform code; re-exported here so callers keep using live_subs.loopback_stream etc.
+from dolmi_platform import output_devices, input_devices, loopback_stream, mic_stream  # noqa: E402,F401
 
 # ---------------------------------------------------------------- engines
 class Vocabulary:
@@ -152,35 +80,13 @@ class Vocabulary:
             en = pat.sub(lambda _: good, en)
         return en
 
-def _enable_cuda_dlls():
-    """Make pip-installed CUDA libs (nvidia-cublas-cu12 / nvidia-cudnn-cu12) discoverable, so the GPU
-    path works without a full CUDA toolkit. On PATH so find_library() sees them, and on the DLL
-    search path so CTranslate2 can load them. A no-op when the wheels aren't installed (stays CPU)."""
-    import sys
-    roots = [Path(sys.prefix) / "Lib" / "site-packages", *map(Path, sys.path)]   # venv, or {app}\gpu
-    seen = set()
-    for d in (r / "nvidia" / pkg / "bin" for r in roots for pkg in ("cublas", "cudnn")):
-        if d.is_dir() and d not in seen:
-            seen.add(d)
-            os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
-            try:
-                os.add_dll_directory(str(d))
-            except OSError:
-                pass
-
-
 class Engine:
     def __init__(self, model, device, language="de"):
-        _enable_cuda_dlls()   # wire up pip-installed CUDA libs before we probe for the GPU
-        import ctranslate2
+        dolmi_platform.prepare_gpu()   # Windows: wire up pip-installed CUDA libs before probing the GPU
+        device, ctype = dolmi_platform.compute_device(device)   # "auto": GPU if usable, else CPU
         from faster_whisper import WhisperModel
-        if device == "auto":   # no torch: ask CTranslate2 directly
-            import ctypes.util   # GPU alone isn't enough: CUDA 12 libs must be installed too
-            libs_ok = all(ctypes.util.find_library(l) for l in ("cublas64_12", "cudnn64_9"))
-            device = "cuda" if ctranslate2.get_cuda_device_count() > 0 and libs_ok else "cpu"
-        ctype = "float16" if device == "cuda" else "int8"
         if model == "auto":
-            model = "large-v3-turbo" if device == "cuda" else "small"
+            model = dolmi_platform.auto_speech(device == "cuda")
         print(f"📥 Whisper '{model}' on {device} ({ctype})")
         self.model_name, self.device = model, device
         self.asr = WhisperModel(model, device=device, compute_type=ctype)

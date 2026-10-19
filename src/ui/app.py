@@ -8,13 +8,11 @@ All state is held in underscore attributes on purpose: pywebview exposes every *
 the js_api object to page JavaScript (recursively), which would hand the page the window object, the
 Whisper model, the settings with the encrypted keys, and the database handle.
 """
-import ctypes
 import itertools
 import json
 import os
 import queue
 import re
-import subprocess
 import threading
 import time
 from datetime import datetime
@@ -25,18 +23,11 @@ import assistant
 import inbox
 import live_subs
 import cloud_speech
-
-# Win32 bits for invisible mode (stealth.py's helpers are tkinter-only; these act on a raw HWND)
-WDA_NONE = 0x00
-WDA_EXCLUDEFROMCAPTURE = 0x11
-GWL_EXSTYLE = -20
-WS_EX_TOOLWINDOW = 0x00000080
-WS_EX_APPWINDOW = 0x00040000
-_SWP = 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020  # NOSIZE|NOMOVE|NOZORDER|NOACTIVATE|FRAMECHANGED
-_u = ctypes.windll.user32
+import dolmi_platform
 
 VERSION = config.version()
-DEFAULT_SPEAKER = "Default speaker"   # what "Speaker" listens to when no device is picked
+DEFAULT_SPEAKER = dolmi_platform.DEFAULT_SPEAKER   # what "Speaker" listens to when no device is picked
+ICON = dolmi_platform.app_icon(config.ROOT)
 _MEETING_RE = re.compile(r"\*\*(.+?)\*\*\s+(.*?)\s*\n<sub>(.*?)</sub>", re.S)
 # settings the page may change through set_setting (provider, keys and invisible have their own calls)
 SPEECH_SOURCES = ("local", *cloud_speech.PROVIDERS)   # Settings → Captions by
@@ -46,61 +37,6 @@ SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_tran
 
 def _js(v):
     return json.dumps(v)
-
-
-def _native_hwnd(win, title):
-    """Top-level HWND for a pywebview window: .native first, window title as the fallback."""
-    try:
-        native = getattr(win, "native", None)
-        if native is not None:
-            return int(native.Handle.ToInt32())
-    except Exception:
-        pass
-    try:
-        return _u.FindWindowW(None, title) if win else 0
-    except Exception:
-        return 0
-
-
-def _set_toolwindow(hwnd, on):
-    """Off the taskbar and Alt+Tab (on) or back on them (off)."""
-    if not hwnd:
-        return
-    try:
-        ex = _u.GetWindowLongW(hwnd, GWL_EXSTYLE)
-        want = (ex | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW if on else (ex | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW
-        if want != ex:
-            _u.SetWindowLongW(hwnd, GWL_EXSTYLE, want)
-            _u.SetWindowPos(hwnd, 0, 0, 0, 0, 0, _SWP)
-    except Exception as e:
-        print(f"invisible: taskbar style failed ({e})")
-
-
-def _gpu_name():
-    """The graphics card's marketing name (NVIDIA first), for display only."""
-    flags = 0x08000000  # CREATE_NO_WINDOW
-    for cmd in (["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-                ["powershell", "-NoProfile", "-Command",
-                 "(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name) -join '|'"]):
-        try:
-            out = subprocess.run(cmd, capture_output=True, text=True, timeout=8, creationflags=flags).stdout
-        except (OSError, subprocess.SubprocessError):
-            continue
-        names = [n.strip() for n in out.replace("|", "\n").splitlines() if n.strip()]
-        if names:
-            return next((n for n in names if "NVIDIA" in n.upper()), names[0])
-    return ""
-
-
-def _set_capture(hwnd, hidden):
-    """Leave the window out of screen shares/recordings (hidden) or include it again."""
-    if not hwnd:
-        return False
-    try:
-        return bool(_u.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE if hidden else WDA_NONE))
-    except Exception as e:
-        print(f"invisible: capture affinity failed ({e})")
-        return False
 
 
 def _spoken_language_ok(code):
@@ -122,6 +58,7 @@ class Api:
         self._purge_old()
 
         self._window = None                  # set by main
+        self._make_window = None             # set by main: builds a fresh main window (Mac invisible-off)
         self._overlay = None
         self._overlay_ready = False          # page loaded -> safe to evaluate_js without blocking
         self._overlay_visible = False
@@ -265,6 +202,7 @@ class Api:
             "opacity": s.get("opacity", 0.88), "font": s.get("font", 22),
             "barVisible": bool(self._overlay_visible),
             "engine": self._engine_label(), "dataFolder": str(self._data), "version": VERSION,
+            "platform": {"os": dolmi_platform.OS, "words": dolmi_platform.WORDS},
         }
 
     def set_setting(self, key, value):
@@ -288,18 +226,18 @@ class Api:
         return True
 
     def pc_info(self):
-        """What this PC has — detected, never assumed — and where Dolmi keeps things."""
+        """What this computer has — detected, never assumed — and where Dolmi keeps things."""
         if self._pc is None:
             info = {"ram_gb": 0, "cores": os.cpu_count() or 1, "gpu": False, "gpu_name": "",
                     "model_dir": "", "data_dir": str(self._data)}
             try:
-                live_subs._enable_cuda_dlls()          # pip-installed CUDA libs count as installed
+                dolmi_platform.prepare_gpu()           # pip-installed CUDA libs count as installed
                 import models
                 s = models.system_info()
                 info.update(ram_gb=s["ram_gb"], cores=s["cores"], gpu=bool(s["gpu"]))
             except Exception as e:
                 print(f"pc_info: {e}")
-            info["gpu_name"] = _gpu_name()
+            info["gpu_name"] = dolmi_platform.gpu_name()   # graphics card (Windows) or Apple chip (Mac)
             try:
                 from huggingface_hub.constants import HF_HUB_CACHE
                 info["model_dir"] = str(HF_HUB_CACHE)
@@ -309,29 +247,8 @@ class Api:
         return self._pc
 
     def copy_text(self, text):
-        """Put text on the Windows clipboard (works regardless of WebView2 clipboard permissions)."""
-        k32 = ctypes.windll.kernel32
-        k32.GlobalAlloc.restype = ctypes.c_void_p
-        k32.GlobalLock.restype = ctypes.c_void_p
-        k32.GlobalLock.argtypes = [ctypes.c_void_p]
-        k32.GlobalUnlock.argtypes = [ctypes.c_void_p]
-        _u.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
-        data = (text or "").encode("utf-16-le") + b"\x00\x00"
-        for _ in range(10):
-            if _u.OpenClipboard(None):
-                break
-            time.sleep(0.05)
-        else:
-            return False
-        try:
-            _u.EmptyClipboard()
-            h = k32.GlobalAlloc(0x0002, len(data))          # GMEM_MOVEABLE
-            ctypes.memmove(k32.GlobalLock(h), data, len(data))
-            k32.GlobalUnlock(h)
-            _u.SetClipboardData(13, h)                       # CF_UNICODETEXT; the clipboard owns h now
-        finally:
-            _u.CloseClipboard()
-        return True
+        """Put text on the system clipboard (works regardless of the webview's clipboard permissions)."""
+        return dolmi_platform.copy_text(text)
 
     # ---- archive (a small JSON next to the data, so the shared inbox schema stays unchanged)
     def _archived(self):
@@ -577,7 +494,7 @@ class Api:
 
     # ------------------------------------------------------------------ models
     def _auto_speech(self):
-        return "large-v3-turbo" if self.pc_info()["gpu"] else "small"
+        return dolmi_platform.auto_speech(self.pc_info()["gpu"])
 
     def _needed_models(self):
         """The speech model and translator the next Start will use."""
@@ -704,14 +621,14 @@ class Api:
         if d:
             try:
                 Path(d).mkdir(parents=True, exist_ok=True)
-                os.startfile(d)
+                dolmi_platform.open_path(d)
             except OSError as e:
                 print(f"open model folder failed: {e}")
         return True
 
     # ------------------------------------------------------------------ meetings
     def _meeting_path(self, name):
-        """A meeting file inside the data folder, or None (blocks ..\\ and absolute paths)."""
+        """A meeting file inside the data folder, or None (blocks ..\\, ../ and absolute paths)."""
         try:
             base = self._data.resolve()
             p = (base / str(name)).resolve()
@@ -802,10 +719,9 @@ class Api:
         return True
 
     def open_data_folder(self):
-        import os
         try:
             self._data.mkdir(exist_ok=True)
-            os.startfile(self._data)
+            dolmi_platform.open_path(self._data)
         except OSError as e:
             print(f"open folder failed: {e}")
         return True
@@ -1027,10 +943,8 @@ class Api:
         self._emit("onBar", False)
 
     def _stealth_overlay(self):
-        """The bar never has a taskbar button, and follows invisible mode for capture."""
-        hwnd = _native_hwnd(self._overlay.window if self._overlay else None, "Dolmi overlay")
-        _set_toolwindow(hwnd, True)
-        _set_capture(hwnd, self._settings["invisible"])
+        """No taskbar button (Windows) / on every Space (Mac); follows invisible mode for capture."""
+        dolmi_platform.overlay_stealth(self)
 
     # ------------------------------------------------------------------ invisible mode
     def toggle_invisible(self, on):
@@ -1038,19 +952,7 @@ class Api:
         with self._settings_lock:
             self._settings["invisible"] = on
             config.save_settings(self._settings)
-        main = _native_hwnd(self._window, "Dolmi")
-        _set_toolwindow(main, on)
-        _set_capture(main, on)                 # last: a style change can reset the affinity
-        if self._overlay:
-            # Changing capture affinity on a visible WebView2 window can leave it painted blank
-            # (white) until it's re-shown — so re-show it ourselves around the change.
-            ov_hwnd = _native_hwnd(self._overlay.window, "Dolmi overlay")
-            if self._overlay_visible:
-                self._overlay.hide()
-                _set_capture(ov_hwnd, on)
-                self._overlay.show()
-            else:
-                _set_capture(ov_hwnd, on)
+        dolmi_platform.apply_invisible(self, on)
         return on
 
     def recover(self):
