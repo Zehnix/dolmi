@@ -160,14 +160,10 @@ class Api:
                     ts = _clock(meta["start"])
                     with self._hist_lock:
                         self._history.append((ts, a, b, meta))
-                    if a or b:
-                        self._last_caption = time.time()
                     self._emit("onLine", ts[:5], a, b, meta)
                     self._ov("line", a, b)
                 elif kind == "draft":
                     meta = self._caption_meta(meta, final=False)
-                    if a or b:
-                        self._last_caption = time.time()
                     self._emit("onDraft", a, b, meta)
                     self._ov("draft", a, b)
                 elif kind == "ask_start":

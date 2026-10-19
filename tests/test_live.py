@@ -49,7 +49,6 @@ def test_pump_accepts_old_three_tuples(api):
     ts, hde, hen, hmeta = api._history[0]
     assert (hde, hen) == ("Hallo zusammen.", "Hello everyone.") and hmeta["shown"] == meta["shown"]
     assert ts == datetime.fromtimestamp(meta["start"]).strftime("%H:%M:%S")
-    assert api._last_caption >= before
 
 
 def test_pump_uses_speech_times_and_measures_lag(api, tmp_path):
@@ -141,6 +140,15 @@ def test_update_line_and_finish_rewrite_both_files(tmp_path):
     assert srt.startswith("1\n00:00:01,000 --> 00:00:02,000\nOne") and "2\n00:00:03,000 --> 00:00:04,000\nTwo\n" in srt
 
 
+def test_auto_ids_never_clash_with_producer_ids(tmp_path):
+    t = live_subs.Transcript(tmp_path)
+    auto = t.add(t.t0 + 1, t.t0 + 2, "Eins", "One")
+    t.add(t.t0 + 3, t.t0 + 4, "Zwei", "Two", {"id": 0})
+    assert auto != 0 and len(t.lines) == 2
+    t.finish()
+    assert t.md.read_text(encoding="utf-8").count("<sub>") == 2
+
+
 # ------------------------------------------------------------------ reading saved meetings
 def test_new_meeting_file_round_trips(api, tmp_path):
     t = live_subs.Transcript(api._data)
@@ -192,10 +200,32 @@ def live_page(tmp_path_factory):
     cmd = [exe, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
            f"--user-data-dir={tmp / 'profile'}", "--window-size=1280,900", "--virtual-time-budget=10000",
            "--dump-dom", page.as_uri()]
+    return _run_page(exe, cmd)
+
+
+def _run_page(exe, cmd):
     out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120).stdout
     found = re.findall(r'<pre id="result">(.*?)</pre>', out, re.S)
     assert found, f"harness did not report: {out[-800:]}"
     return json.loads(html_lib.unescape(found[-1]))
+
+
+def test_subtitle_bar_scrolls_and_stays_put_while_up(tmp_path):
+    exe = _browser()
+    if not exe:
+        pytest.skip("no Edge/Chrome for the headless page test")
+    html = (WEB / "overlay.html").read_text(encoding="utf-8")
+    html = html.replace("<head>", f'<head>\n<base href="{WEB.as_uri()}/">', 1)
+    html = html.replace("</body>", (ROOT / "tests" / "ui" / "overlay_scroll.html").read_text(encoding="utf-8") + "\n</body>", 1)
+    page = tmp_path / "overlay_scroll_page.html"
+    page.write_text(html, encoding="utf-8")
+    r = _run_page(exe, [exe, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+                        f"--user-data-dir={tmp_path / 'profile'}", "--window-size=600,130",
+                        "--virtual-time-budget=5000", "--dump-dom", page.as_uri()])
+    assert "error" not in r, r.get("error")
+    assert r["scrollable"] and r["followsAtBottom"]
+    assert r["stayedPut"] and r["keptWhileUp"] == 8
+    assert r["trimmed"] == 4 and r["followsAgain"]
 
 
 def test_page_scroll_up_stays_put_and_pill_counts(live_page):
@@ -205,6 +235,11 @@ def test_page_scroll_up_stays_put_and_pill_counts(live_page):
     assert r["scrollTopUnchanged"]
     assert "Jump to latest" in r["pill"] and "5 new" in r["pill"]
     assert r["backAtBottom"] and r["pillHiddenAfterJump"]
+
+
+def test_page_keeps_following_after_another_tab(live_page):
+    r = live_page
+    assert r["backFromTabAtBottom"] and r["tabStillFollowing"] and r["tabPillHidden"]
 
 
 def test_page_lag_figure(live_page):

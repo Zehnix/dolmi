@@ -191,7 +191,7 @@ class Transcript:
         self.t0 = time.time()      # meeting start: SRT times and the "+mm:ss" offsets count from here
         self.n = 0
         self.lines = {}            # id -> {"id", "start", "end", "de", "en", **meta}
-        self._next_id = 0
+        self._next_id = 0          # lines without a producer id get ("auto", n): never equal to a producer id
         self._lock = threading.Lock()
         self.md = self.srt = None
         if not save:   # privacy setting: live subtitles only, nothing written to disk
@@ -217,12 +217,12 @@ class Transcript:
         return f"{n}\n{self._ts(max(0.0, x['start'] - self.t0))} --> {self._ts(max(0.0, x['end'] - self.t0))}\n{x['en']}\n\n"
 
     def add(self, start, end, de, en, meta=None):
-        """Record one final line; returns its id (meta['id'] when given, else a running number)."""
+        """Record one final line; returns its id (meta['id'] when given, else ("auto", n))."""
         meta = dict(meta or {})
         with self._lock:
             key = meta.get("id")
             if key is None:
-                key = self._next_id
+                key = ("auto", self._next_id)
                 self._next_id += 1
             self.lines[key] = x = {**meta, "id": key, "start": start, "end": end, "de": de, "en": en}
             self.n += 1
