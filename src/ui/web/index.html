@@ -63,6 +63,7 @@
       <button class="go" id="go" aria-label="Start translating"><span class="ic"><i data-lucide="play"></i></span></button>
       <select class="field voc-profile" id="vocabProfile" title="Spelling-hint profile for this meeting (Vocabulary tab)" aria-label="Spelling-hint profile" hidden></select>
       <button class="srcchip" id="srcChip" title="What Dolmi listens to — click to switch between speaker and microphone"><span class="ic" id="srcIc"><i data-lucide="volume-2"></i></span><span><small id="srcKind">Speaker</small><b id="srcDev">Default speaker</b></span></button>
+      <button class="clar-link" id="clarLink" title="Words Dolmi was unsure about in the last meeting" hidden><i data-lucide="circle-help"></i><span id="clarLinkN"></span></button>
       <div class="track" id="track" aria-hidden="true"></div>
       <div class="status" id="status">Not loaded<b>models load on Start</b></div>
     </div>
@@ -128,6 +129,11 @@
       <button class="btn pri" id="vocabSave" disabled>Save</button>
     </div>
     <div class="card voc-problems" id="vocProblems" hidden></div>
+    <div class="card clar" id="clar">
+      <div class="cardh"><span class="ic"><i data-lucide="circle-help"></i></span>Did they say …?<span class="voc-n" id="clarN"></span>
+        <label class="clar-on" title="Collect words Dolmi is unsure about during a meeting (slightly slower captions)"><input type="checkbox" id="clarOn"> Ask after meetings</label></div>
+      <p class="voc-hint" id="clarHint">Turn on to get a short list of unsure words after you press Stop.</p>
+      <div class="clar-list" id="clarList"></div></div>
     <div class="grid2 voc-groups" id="vocRows">
       <div class="card voc-g" data-g="gloss"><div class="cardh"><span class="ic"><i data-lucide="book-a"></i></span>Spelling hints<span class="voc-n"></span></div>
         <p class="voc-hint">Names and terms Whisper should spell right. Most important first: only the first ~223 tokens reach Whisper. <span class="voc-lock-ic"><i data-lucide="lock"></i></span> also keeps a term in the translation. Per-meeting lists: a <code>## profile: Name</code> line in Raw text.</p>

@@ -290,3 +290,39 @@ $('#vocabSave').onclick=async()=>{
     vocStatus(n?'Saved — used from the next line, except the marked lines':'Saved — used from the next line', n?'warn':'ok'); }
   catch(e){ console.error('save_vocab',e); vocStatus('Could not save the vocabulary.','warn'); toast('Could not save the vocabulary.'); }
 };
+
+/* ---- VOC-9 clarify queue: after Stop, the words Dolmi was unsure about, one row each — "Did they say X?"
+   with the line it was heard in. Add puts the answer in the chosen group through save_vocab (clarify_add);
+   Skip drops the question, Never also remembers the word (clarify_ignore.txt). ---- */
+async function clarLoad(){
+  const b=bridge(); if(!b||!b.clarify_list) return;
+  let r; try{ r=await b.clarify_list(); }catch(e){ console.error('clarify_list',e); return; }
+  $('#clarOn').checked=!!r.on;
+  const items=r.items||[], list=$('#clarList'); list.textContent='';
+  $('#clarN').textContent=items.length?String(items.length):'';
+  $('#clarHint').textContent=!r.on?'Turn on to get a short list of unsure words after you press Stop.'
+    :items.length?'One click adds the answer to your vocabulary.':'Nothing to ask about yet — the list fills during a meeting.';
+  $('#clarLink').hidden=!items.length; $('#clarLinkN').textContent=items.length?items.length+' unsure':'';
+  for(const it of items){
+    const row=document.createElement('div'); row.className='clar-row';
+    const term=Object.assign(document.createElement('input'),{className:'field',value:it.suggest,title:'What they said'});
+    const dst=Object.assign(document.createElement('input'),{className:'field',placeholder:'English',title:'The English it must become'});
+    const grp=document.createElement('select'); grp.className='field';
+    for(const [k,v] of Object.entries(VOC_GROUPS)) grp.add(new Option(v,k,false,k===it.group));
+    const sync=()=>{ dst.hidden=!['german','english'].includes(grp.value); }; grp.onchange=sync; sync();
+    const btn=(t,cls,fn)=>{ const x=document.createElement('button'); x.className='btn '+cls; x.textContent=t; x.onclick=fn; return x; };
+    const q=document.createElement('q'); q.textContent=it.context;
+    const head=document.createElement('b'); head.textContent=`Did they say “${it.suggest}”?`+(it.count>1?` (${it.count}×)`:'');
+    row.append(head,q,term,grp,dst,
+      btn('Add','pri',async()=>{ try{ const r2=await b.clarify_add(it.heard,grp.value,term.value,dst.value);
+          if(r2&&r2.ok===false){ toast(r2.error); return; } toast('Added to '+VOC_GROUPS[grp.value]); if(!vocDirty) loadVocab(); vocSummary(); clarLoad(); }
+        catch(e){ console.error('clarify_add',e); toast('Could not add the word.'); } }),
+      btn('Skip','ghost',async()=>{ await b.clarify_skip(it.heard,false); clarLoad(); }),
+      btn('Never ask','ghost',async()=>{ await b.clarify_skip(it.heard,true); clarLoad(); }));
+    list.append(row);
+  }
+}
+$('#clarOn').onchange=async e=>{ try{ await bridge().set_setting('clarify_queue',e.target.checked); }catch(err){ console.error('set_setting',err); } clarLoad(); };
+$('#clarLink').onclick=()=>{ const n=$('[data-v="vocab"]'); if(n) n.click(); };
+{ const d=window.dolmi, o=d.onListening; d.onListening=(...a)=>{ const r=o&&o(...a); if(!a[0]) clarLoad(); return r; }; }
+document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) clarLoad(); else window.addEventListener('pywebviewready',clarLoad); });
