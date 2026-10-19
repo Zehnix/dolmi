@@ -75,6 +75,29 @@
     "mt_call_p50": 0.043,
     "mt_call_p95": 0.101
    }
+  },
+  "smoke|small|cpu|opus-de|terms": {
+   "date": "2026-10-19T18:20:22Z",
+   "git": "1d1d7e3",
+   "command": "python eval/run_eval.py --smoke --write-baseline --note QA-3 smoke baseline: exon/integration 1d1d7e3",
+   "component": {
+    "clips": 25,
+    "wer_de": 10.79,
+    "cer_de": 3.478,
+    "clips_de": 25,
+    "detected_de": 100.0,
+    "wer_by_tag": {
+     "fleurs": 10.79
+    },
+    "term_acc_asr": null,
+    "chrf_gold": 62.505,
+    "bleu_gold": 32.811,
+    "chrf_cascade": 60.419,
+    "bleu_cascade": 27.969,
+    "term_acc_mt": null,
+    "mt_pairs": 25,
+    "asr_rtf": 0.429
+   }
   }
  }
 }

@@ -1,0 +1,70 @@
+name: Eval smoke
+
+# QA-3: the test bench's smoke suite on CPU (25 FLEURS clips, Whisper small + Opus-MT, component mode).
+# Fails when German WER rises more than 1 point or chrF (gold or cascade) falls more than 1 point against
+# the "smoke" entry in eval/baseline.json. Same command locally:  python eval/run_eval.py --smoke
+# Models and the FLEURS clips are cached between runs; no audio or results are committed.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ["live_subs.py", "models.py", "cloud_speech.py", "dolmi_platform/**", "eval/**",
+            "requirements-lock.txt", ".github/workflows/eval-smoke.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eval-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      HF_HUB_DISABLE_SYMLINKS_WARNING: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          architecture: x64
+          cache: pip
+          cache-dependency-path: requirements-lock.txt
+
+      - name: Install the app's pinned packages
+        run: python -m pip install -r requirements-lock.txt
+
+      - name: Cache models (Whisper small, Opus-MT de-en)
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-smoke-${{ hashFiles('models.py') }}
+          restore-keys: hf-smoke-
+
+      - name: Cache FLEURS test clips
+        id: fleurs
+        uses: actions/cache@v5
+        with:
+          path: ~/AppData/Local/dolmi-eval/data/fleurs
+          key: fleurs-de-test-${{ hashFiles('eval/fetch_public.py') }}
+
+      - name: Fetch FLEURS (first run only)
+        if: steps.fleurs.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\dolmi-eval\data" | Out-Null
+          python eval/fetch_public.py
+
+      - name: Smoke run vs baseline
+        run: python eval/run_eval.py --smoke --note "CI ${{ github.sha }}"
+
+      - name: Keep the summary table
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: eval-smoke-summary
+          path: eval/results/*.md
+          retention-days: 14
