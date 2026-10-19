@@ -258,8 +258,8 @@ def _rebuild_main(api):
             api._emit("onListening", True, api._engine_label())
             with api._hist_lock:
                 lines = list(api._history)
-            for ts, de, en in lines:
-                api._emit("onLine", ts[:5], de, en)
+            for ts, de, en, *meta in lines:
+                api._emit("onLine", ts[:5], de, en, meta[0] if meta else {})
         api._emit("onBar", bool(api._overlay_visible))
     new.events.loaded += lambda *a: threading.Thread(target=loaded, daemon=True).start()
     api._window = new
