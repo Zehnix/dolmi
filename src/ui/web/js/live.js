@@ -41,13 +41,14 @@ function stamp(ts,meta){ const m=meta||{}; const t=typeof m.start==='number'?clo
 
 /* lag: end of speech -> line on screen, measured in Python (meta.lag); the figure is the median of the
    last 5 finals (meta.lag_median), '–' until one was measured; the latest draft's lag is in the tooltip */
-let lagLine=null,lagDraft=null;
+let lagLine=null,lagDraft=null,lagSplit=null;
 const secs=s=>(s<10?s.toFixed(1):String(Math.round(s)))+'s';
 function showLag(){ const el=$('#sLag'); if(!el) return; el.textContent=lagLine==null?'–':secs(lagLine);
-  el.parentElement.title='Lag: from the end of speech to the line on screen (median of the last 5 lines)'+(lagDraft==null?'':` · live draft ${secs(lagDraft)}`); }
+  el.parentElement.title='Lag: from the end of speech to the line on screen (median of the last 5 lines)'+(lagDraft==null?'':` · live draft ${secs(lagDraft)}`)
+    +(lagSplit?` · last line: ${secs(lagSplit[0])} waiting for the pause, ${secs(lagSplit[1])} recognizing and translating`:''); }
 
 function resetFeed(){ brows.innerHTML=''; lines=0;words=0; draftEl=null; $('#sLines').textContent=0; $('#sWords').textContent=0;
-  stuck=true; unseen=0; autoTop=0; setPill(); lagLine=lagDraft=null; showLag(); spkReset(); }
+  stuck=true; unseen=0; autoTop=0; setPill(); lagLine=lagDraft=lagSplit=null; showLag(); spkReset(); }
 function appendPair(ts,de,en,meta){ unstickIfScrolled(); clearIdle(); $$('.pair.cur').forEach(p=>p.classList.remove('cur'));
   const p=document.createElement('div'), t=esc(stamp(ts,meta)); p.className='pair cur pop';
   p.innerHTML=`<div class="c de"><span class="ts">${t}</span>${esc(de)}</div><div class="c en"><span class="ts">${t}</span>${esc(en)}</div>`;
@@ -56,12 +57,26 @@ function appendPair(ts,de,en,meta){ unstickIfScrolled(); clearIdle(); $$('.pair.
 function addFinal(ts,de,en,meta){ if(draftEl){draftEl.remove();draftEl=null;} appendPair(ts,de,en,meta);
   lines++; words+=en.split(/\s+/).filter(Boolean).length; $('#sLines').textContent=lines; $('#sWords').textContent=words;
   if(!stuck){ unseen++; setPill(); }
+  if(meta&&meta.lag_policy!=null&&meta.lag_compute!=null) lagSplit=[meta.lag_policy,meta.lag_compute];
   if(meta&&meta.lag_median!=null){ lagLine=meta.lag_median; showLag(); } }
-function showDraft(de,en,meta){ if(meta&&meta.lag!=null){ lagDraft=meta.lag; showLag(); }
+/* STR-2: a draft is committed words (solid, never rewritten) + a tentative tail (dim, italic). Older
+   producers send no split: then the whole draft is the tail. Only changed parts are rewritten, so the
+   committed words never jump. */
+function draftParts(text,committed,tentative){
+  if(typeof committed!=='string'&&typeof tentative!=='string') return ['',text||''];
+  return [committed||'',tentative||''];
+}
+function setPart(el,c,t){ if(el._c!==c){ el.querySelector('.cm').textContent=c+(c&&t?' ':''); el._c=c; }
+  if(el._t!==t){ el.querySelector('.tent').textContent=t; el._t=t; } }
+function showDraft(de,en,meta){ const m=meta||{}; if(m.lag!=null){ lagDraft=m.lag; showLag(); }
   if(!de&&!en){ if(draftEl){draftEl.remove();draftEl=null;} return; } unstickIfScrolled(); clearIdle();
-  if(!draftEl){ draftEl=document.createElement('div'); draftEl.className='pair cur'; draftEl.style.opacity='.7'; brows.append(draftEl); }
-  const t=esc(meta&&typeof meta.start==='number'?stamp('',meta)+' …':'…');
-  draftEl.innerHTML=`<div class="c de"><span class="ts">${t}</span>${esc(de)}</div><div class="c en"><span class="ts">${t}</span>${esc(en)}<span class="caret"></span></div>`;
+  if(!draftEl){ draftEl=document.createElement('div'); draftEl.className='pair cur draft';
+    draftEl.innerHTML='<div class="c de"><span class="ts"></span><span class="cm"></span><span class="tent"></span></div><div class="c en"><span class="ts"></span><span class="cm"></span><span class="tent"></span><span class="caret"></span></div>';
+    brows.append(draftEl); }
+  const t=typeof m.start==='number'?stamp('',m)+' …':'…';
+  draftEl.querySelectorAll('.ts').forEach(x=>{ if(x.textContent!==t) x.textContent=t; });
+  const [dc,dt]=draftParts(de,m.committed,m.tentative), [ec,et]=draftParts(en,m.en_committed,m.en_tentative);
+  setPart(draftEl.querySelector('.c.de'),dc,dt); setPart(draftEl.querySelector('.c.en'),ec,et);
   follow(); }
 
 function setLive(on,label){

@@ -23,6 +23,7 @@ import numpy as np
 import dolmi_platform
 import models
 import speakers as speaker_ids   # names and colours only: no model is loaded on import
+import streaming
 
 # ---------------------------------------------------------------- settings
 SR = 16000                 # Whisper sample rate
@@ -462,6 +463,10 @@ class Engine:
         # Load (and on first use download) the translator up front
         self._translator(models.translator_key(language), download=True)
         self.context = ""   # previous sentence -> better names/terms
+        # STR-1/STR-5: LocalAgreement drafts on the GPU by default; on the CPU only with DOLMI_STABLE_DRAFTS=1
+        # until STR-10 measured the word-timestamp cost there (DOLMI_STABLE_DRAFTS=0 turns it off anywhere)
+        flag = os.environ.get("DOLMI_STABLE_DRAFTS")
+        self.stable_drafts = flag == "1" if flag in ("0", "1") else device == "cuda"
         self.reload_terms()
 
     def reload_terms(self):
@@ -551,6 +556,27 @@ class Engine:
         """A cheap look at the sentence still being spoken: greedy decoding of its last DRAFT_WINDOW s."""
         return self.transcribe(audio[-int(DRAFT_WINDOW * SR):], retry_empty=False, beam=DRAFT_BEAM)
 
+    def transcribe_words(self, audio, prompt=""):
+        """STR-1 draft decode: greedy, with word timestamps -> ([(start, end, word)], language code).
+        `prompt` is the committed text that scrolled out of the buffer (else the previous sentence)."""
+        mixed = self.language not in ("auto", "en")
+        language = None if self.language == "auto" or mixed else self.language
+        for attempt in (0, 1):
+            vad = {"vad_filter": True, "vad_parameters": {"threshold": ASR_VAD_THRESHOLD}}
+            segs, info = self.asr.transcribe(
+                audio, language=language, beam_size=DRAFT_BEAM, condition_on_previous_text=False,
+                word_timestamps=True, hotwords=self.glossary or None,
+                initial_prompt=(prompt or self.context[-200:]) or None, **vad)
+            segs = list(segs)
+            if attempt or not mixed or info.language in (self.language, "en"):
+                break
+            language = self.language                      # misdetection on a short clip: decode again
+        words = [(w.start, w.end, w.word.strip()) for s in segs for w in (s.words or []) if w.word.strip()]
+        lang = info.language
+        if lang == "en" and self.language == "de" and looks_german(" ".join(w[2] for w in words)):
+            lang = "de"
+        return words, lang
+
     def _asr(self, audio, language, retry=False, beam=FINAL_BEAM):
         """Whisper segments (each with no_speech_prob and avg_logprob) and the detection info.
         Our own VAD already found speech, so Whisper's VAD only trims (at a lower threshold than its
@@ -573,6 +599,25 @@ class Engine:
         if len(both) > len(head) and [w.lower() for w in both[:len(head)]] == [w.lower() for w in head]:
             return " ".join(both[len(head):])
         return self.translate(text, lang)
+
+    def translate_prefix(self, text, lang, prefix=""):
+        """STR-5: translate `text` with the English already shown forced as the start of the output
+        (CTranslate2 target_prefix). Without a prefix, for English speech or with protected terms
+        (their X0X placeholders would not match the shown English) this is translate()."""
+        key = models.translator_key(lang if lang in models.LANGUAGES else self.language)
+        t = self.translators.get(key) or self.translators.get("opus-mul")
+        if not prefix or lang == "en" or t is None:
+            return self.translate(text, lang)
+        vocab = self.vocab
+        protected, slots = vocab.protect(text)
+        if slots:
+            return self.translate(text, lang)
+        mt, sp_src, sp_tgt = t
+        toks = sp_src.encode(protected, out_type=str)[:400] + ["</s>"]
+        pre = sp_tgt.encode(prefix, out_type=str)
+        res = mt.translate_batch([toks], target_prefix=[pre], beam_size=2, max_decoding_length=256)
+        out = [tok for tok in res[0].hypotheses[0] if tok not in ("</s>", "<pad>")]
+        return collapse_repeats(vocab.finish(sp_tgt.decode(out)))
 
     def translate(self, text, lang):
         if lang == "en" and self.language != "en":
@@ -921,7 +966,8 @@ class Transcript:
 # --------------------------------------------------------------- worker
 UI_Q_CONTRACT = """What worker() puts on ui_q (producer: this module; consumer: src/ui/app.py _pump).
 
-worker(eng, audio_q, ui_q, tr, stop, detect=speech_gap, clock=time.time, on_drop=None, diarizer=None)
+worker(eng, audio_q, ui_q, tr, stop, detect=speech_gap, clock=time.time, on_drop=None, diarizer=None,
+       session=None)
   audio_q   16 kHz mono float32 chunks (~100 ms each; any size works).
   detect    speech_gap-like: seconds since the last speech at the end of a ~1 s window, or None.
   clock     epoch seconds (time.time). Segmentation runs in AUDIO time (sample counts); the clock only
@@ -935,17 +981,30 @@ worker(eng, audio_q, ui_q, tr, stop, detect=speech_gap, clock=time.time, on_drop
   diarizer  optional: diarizer.assign(audio, start, end) -> (speaker_id | None, confidence), called for
             every final before it is emitted (local path) and before eng.submit (cloud path).
 
+  session   any hashable id of this session (the app passes id(session token)); default id(stop).
+
 Items are (kind, a, b) or (kind, a, b, meta). Times are time.time() epoch seconds (UTC).
+STR-3 message contract: every caption meta carries "session", "utt" (the Segmenter's utterance number;
+a joined line has the number of its last part) and "rev" (one increasing counter per session). The
+consumer drops drafts of an utterance that already has a final or an older rev than one shown, and
+anything from another session (streaming.CaptionGuard). Finals are FIFO and never dropped.
   ("final", heard, subtitle, meta)  meta = {"id": int, 1-based per session in emit order,
                                     "start": speech onset, "end": end of speech, "emitted": when it was
                                     put on ui_q, "lang": spoken language code, "speaker": None,
-                                    "speaker_conf": None}
-  ("draft", heard, subtitle, meta)  the sentence still being spoken; meta = {"start", "end", "emitted"}
-  ("draft", "", "", {})             clears the live line
-  ("draft", "", "", {"dropped": reason, "start": s, "end": e})
+                                    "speaker_conf": None, "session", "utt", "rev",
+                                    "trace": {speech_start, speech_end, vad_close, queued, asr_start,
+                                    asr_done, mt_start, mt_done, emitted} (STR-4; the pump adds shown)}
+  ("draft", heard, subtitle, meta)  the sentence still being spoken; meta = {"start", "end", "emitted",
+                                    "session", "utt", "rev", "committed", "tentative" (STR-1/2: heard =
+                                    committed + tentative; without stable drafts all of it is tentative),
+                                    and once translated "en_committed", "en_tentative" (STR-5)}
+  ("draft", "", "", {"session", "utt", "rev"})   clears the live line
+  ("draft", "", "", {"dropped": reason, "start": s, "end": e, "session", "utt", "rev"})
                                     the sentence that showed a draft ended empty/junk: no final follows
   ("final_update", id, subtitle, {"source", "emitted"})
                                     reserved for QA-7 (wave 2): a better subtitle for final `id`
+  ("overload", seconds, "", {"session"})   Whisper is this many seconds of speech behind (STR-3:
+                                    drafts pause, nothing is dropped)
   ("error", message, "")            from the cloud engine
 Each final is also written with tr.add(start, end, heard, subtitle, meta=meta).
 A final without . ? ! is held up to HOLD_MAX s and joined with the next final of the same speaker and
@@ -1122,12 +1181,23 @@ def _spoken(eng, detected):
     return detected if chosen in (None, "auto") else chosen
 
 
-def worker(eng, audio_q, ui_q, tr, stop, detect=speech_gap, clock=time.time, on_drop=None, diarizer=None):
+def _job_samples(job):
+    """Audio a job holds for the backlog count: finals only (drafts are shed under load anyway)."""
+    return len(job[1].audio) if job and job[0] == "final" else 0
+
+
+def worker(eng, audio_q, ui_q, tr, stop, detect=speech_gap, clock=time.time, on_drop=None, diarizer=None,
+           session=None):
     """Audio chunks -> subtitles on ui_q (see UI_Q_CONTRACT). This thread only segments; on the local
     path a second thread runs Whisper on finished utterances, so no speech is skipped while it works."""
     cloud = getattr(eng, "cloud", False)
     seg = Segmenter(detect, cloud=cloud)
     t0 = None                                    # epoch of sample 0
+    session = id(stop) if session is None else session
+    revs = itertools.count(1)                    # one counter per session: a newer caption has a higher rev
+
+    def tag(utt):
+        return {"session": session, "utt": utt, "rev": next(revs)}
 
     def epoch(n):
         return t0 + n / SR
@@ -1140,7 +1210,11 @@ def worker(eng, audio_q, ui_q, tr, stop, detect=speech_gap, clock=time.time, on_
     def speaker(audio, start, end):
         return (None, None) if diarizer is None else diarizer.assign(audio, start, end)
 
-    jobs, busy = queue.Queue(), threading.Event()
+    def overload(seconds):                       # never silent: logged and shown, nothing is dropped
+        print(f"Speech recognition is {seconds:.0f} s of speech behind; live drafts paused, no speech is lost")
+        ui_q.put(("overload", round(seconds), "", {"session": session}))
+
+    jobs, busy = streaming.SampleQueue(on_overload=overload, size=_job_samples), threading.Event()
     if cloud:
         eng.line_ids = itertools.count(1)
         eng.on_drop = drop                       # the engine reports failed and junk lines here
@@ -1148,7 +1222,7 @@ def worker(eng, audio_q, ui_q, tr, stop, detect=speech_gap, clock=time.time, on_
     else:
         every = DRAFT_EVERY
         threading.Thread(target=_asr_loop, name="dolmi-asr", daemon=True,
-                         args=(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker)).start()
+                         args=(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker, tag)).start()
     draft_uid, last_draft = None, None
     try:
         while not stop.is_set():
@@ -1160,14 +1234,16 @@ def worker(eng, audio_q, ui_q, tr, stop, detect=speech_gap, clock=time.time, on_
                 t0 = clock() - len(chunk) / SR
             for u in seg.feed(chunk):
                 start, end = epoch(u.onset), epoch(u.end)
+                trace = {"speech_start": start, "speech_end": end, "vad_close": epoch(seg.samples), "queued": clock()}
                 if u.end <= u.onset:                 # silence only: no decode, no ghost from the no-VAD retry
                     drop("no_speech", start, end)
                 elif not cloud:
-                    jobs.put(("final", u, start, end))
+                    jobs.put(("final", u, start, end, trace))
                 elif (u.end - u.onset) / SR >= CLOUD_MIN:
                     spk, conf = speaker(u.audio, start, end)
                     eng.submit(u.audio, start, end, ui_q, tr,
-                               meta={"speaker": spk, "speaker_conf": conf, "overlap": u.overlap})
+                               meta={"speaker": spk, "speaker_conf": conf, "overlap": u.overlap,
+                                     "session": session, "utt": u.uid, "trace": trace})
                 else:
                     drop("too_short", start, end)
             if not seg.active:
@@ -1180,7 +1256,7 @@ def worker(eng, audio_q, ui_q, tr, stop, detect=speech_gap, clock=time.time, on_
                 continue                             # not time for a draft yet
             meta = {"start": epoch(seg.onset), "end": epoch(seg.samples)}
             if cloud:                                # live line ~1 s after the words, not after the sentence
-                eng.draft(seg.audio(), ui_q, meta=meta)
+                eng.draft(seg.audio(), ui_q, meta={**meta, **tag(seg.uid)})
             elif jobs.empty() and not busy.is_set():   # drafts only when Whisper looks idle (a draft may
                 # slip in just as it picks up a job; _asr_loop then skips it as stale)
                 jobs.put(("draft", seg.uid, seg.audio(), seg.samples, meta))
@@ -1191,7 +1267,9 @@ def worker(eng, audio_q, ui_q, tr, stop, detect=speech_gap, clock=time.time, on_
             start, end = epoch(seg.onset), epoch(seg.last_voice)
             if not cloud and (seg.last_voice - seg.onset) / SR >= MIN_FLUSH:   # mid-sentence Stop: keep it
                 jobs.put(("final", Utterance(seg.uid, seg.audio(), seg.first, seg.onset, seg.last_voice,
-                                             seg.overlap, "stop"), start, end))
+                                             seg.overlap, "stop"), start, end,
+                          {"speech_start": start, "speech_end": end, "vad_close": epoch(seg.samples),
+                           "queued": clock()}))
             else:
                 drop("stopped", start, epoch(seg.samples))
     finally:
@@ -1230,29 +1308,102 @@ def _translate(eng, de, lang, last):
     return eng.translate(de, lang)
 
 
-def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker):
+_STOP = ("stop",)
+
+
+def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker, tag=None):
     """Whisper side of worker(): finals in the order spoken; a draft only while nothing else waits.
     A final without . ? ! is held up to HOLD_MAX s and joined with the next one, so a sentence cut
     in two is translated whole. After Stop it still transcribes the finals already queued, into the
-    transcript file only: that speech was captured, so it must not be lost because the CPU was behind."""
+    transcript file only: that speech was captured, so it must not be lost because the CPU was behind.
+
+    Drafts (STR-1/3/5): the German goes on ui_q at once; its translation is draft work for a second
+    thread fed through a latest-only Mailbox (a newer draft replaces one still waiting, at most one
+    call per DRAFT_MT_EVERY). With eng.stable_drafts a draft is committed words + a tentative tail
+    (streaming.StableDraft), and its English is translated from the committed German only, with the
+    shown English as forced prefix (streaming.StableTranslation)."""
+    tag = tag or (lambda utt: {})
     ids, draft_shown = itertools.count(1), None
     previous = (None, "")                        # (uid, text) of the last utterance; "" when it was dropped
     held = None                                  # a final without . ? ! waiting for the next one
     last = ("", "", None)                        # (German, English, lang) of the last line shown
+    stable = bool(getattr(eng, "stable_drafts", False)) and hasattr(eng, "transcribe_words")
+    cur = {"uid": None}                          # the utterance being drafted: its StableDraft, English
+    mailbox = streaming.Mailbox()
+
+    def behind(upto, end):
+        """Whisper is far behind the speaker: in audio time, or on the clock (the audio clock runs slow
+        when capture itself is late)."""
+        return max((seg.samples - upto) / SR, clock() - end) > DRAFT_MT_LAG
+
+    def new_draft(uid):
+        state = {"uid": uid, "lang": getattr(eng, "language", None), "en": "", "en_parts": {}}
+
+        def words(audio, prompt):
+            w, state["lang"] = eng.transcribe_words(audio, prompt)
+            return w
+        if stable:
+            state["proc"] = streaming.StableDraft(words)
+            state["mt"] = streaming.StableTranslation(
+                lambda src, prefix: eng.translate_prefix(src, state["lang"], prefix))
+        cur.clear()
+        cur.update(state)
+
+    def draft_mt():                              # draft translations, newest only, <= 1 per DRAFT_MT_EVERY
+        last_call = -streaming.DRAFT_MT_EVERY
+        while True:
+            item = mailbox.get()
+            if item is _STOP:
+                return
+            wait = streaming.DRAFT_MT_EVERY - (time.monotonic() - last_call)
+            if wait > 0:
+                stop.wait(wait)
+                newer = mailbox.get(timeout=0)
+                if newer is _STOP:
+                    return
+                item = newer or item
+            last_call = time.monotonic()
+            uid, de, lang, meta, src, upto = item
+            if stop.is_set() or uid != seg.uid or not seg.active or cur.get("uid") != uid or                     behind(upto, meta["end"]):
+                continue                         # stale, or so far behind the speaker it would be anyway
+            try:
+                mt = cur.get("mt")
+                if mt is not None:
+                    en_c, en_t = mt.update(src)
+                    if not en_c and not src:     # nothing committed yet: the whole draft, all tentative
+                        en_t = eng.translate(de, lang)
+                    parts = {"en_committed": en_c, "en_tentative": en_t}
+                    en = " ".join(x for x in (en_c, en_t) if x)
+                else:
+                    en, parts = eng.translate(de, lang), {}
+            except Exception as e:
+                print(f"Draft translation failed: {e!r}")
+                continue
+            if stop.is_set() or uid != seg.uid or cur.get("uid") != uid:
+                continue
+            cur["en"], cur["en_parts"] = en, parts
+            ui_q.put(("draft", de, en, {**meta, **parts, **tag(uid), "emitted": clock()}))
+
+    threading.Thread(target=draft_mt, name="dolmi-draft-mt", daemon=True).start()
 
     def emit(line):
         nonlocal last
+        trace = line.get("trace") or {}
+        trace["mt_start"] = clock()
         en = _translate(eng, line["de"], line["lang"], last)
+        trace["mt_done"] = clock()
         meta = {"id": next(ids), "start": line["start"], "end": line["end"], "emitted": clock(),
-                "lang": line["lang"], "speaker": line["speaker"], "speaker_conf": line["speaker_conf"]}
+                "lang": line["lang"], "speaker": line["speaker"], "speaker_conf": line["speaker_conf"],
+                **tag(line.get("utt")), "trace": trace}
+        trace["emitted"] = meta["emitted"]
         ui_q.put(("final", line["de"], en, meta))
         tr.add(line["start"], line["end"], line["de"], en, meta=meta)
         last = (line["de"], en, line["lang"])
-        ui_q.put(("draft", "", "", {}))
+        ui_q.put(("draft", "", "", tag(line.get("utt"))))
 
     def show_held():                             # the held words stay on the live line meanwhile
         ui_q.put(("draft", held["de"], eng.translate(held["de"], held["lang"]),
-                  {"start": held["start"], "end": held["end"], "emitted": clock()}))
+                  {"start": held["start"], "end": held["end"], **tag(held.get("utt")), "emitted": clock()}))
 
     def flush(line):                             # a held line on its own, outside the per-job guard
         try:
@@ -1264,84 +1415,104 @@ def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker):
     def due():
         return clock() - held["end"] >= HOLD_MAX or (seg.samples - held["upto"]) / SR >= HOLD_MAX
 
-    while True:
-        if held and (due() or stop.is_set()) and jobs.empty():
-            line, held = held, None
-            flush(line)
-        try:
-            job = jobs.get(timeout=0.1 if held else None)
-        except queue.Empty:
-            continue
-        if job is None:                          # worker() has stopped and queued everything it had
-            if held:
-                flush(held)
-            return
-        if stop.is_set():
-            ui_q = _Discard                      # nobody shows captions any more
-            if job[0] == "draft":
+    try:
+        while True:
+            if held and (due() or stop.is_set()) and jobs.empty():
+                line, held = held, None
+                flush(line)
+            try:
+                job = jobs.get(timeout=0.1 if held else None)
+            except queue.Empty:
                 continue
-        busy.set()
-        try:
-            if job[0] == "draft":
-                _, uid, audio, upto, meta = job
-                if uid != seg.uid or not seg.active or not jobs.empty():
-                    continue                     # stale: that sentence is over, or a final waits
-                de, lang = getattr(eng, "transcribe_draft", eng.transcribe)(audio)
-                if uid != seg.uid or not seg.active or not de or is_junk(de, lang=_spoken(eng, lang)):
+            if job is None:                          # worker() has stopped and queued everything it had
+                if held:
+                    flush(held)
+                return
+            if stop.is_set():
+                ui_q = _Discard                      # nobody shows captions any more
+                if job[0] == "draft":
                     continue
-                if len(audio) / SR >= MIN_SENTENCE and ends_sentence(de):
-                    seg.mark_sentence_end(uid, upto)   # final on the next short pause
-                if held and held["lang"] == lang:
-                    de, meta = f"{held['de']} {de}", {**meta, "start": held["start"]}
-                # Whisper is behind the speaker: the German now, no translation for a line about to change
-                en = "" if (seg.samples - upto) / SR > DRAFT_MT_LAG else eng.translate(de, lang)
-                ui_q.put(("draft", de, en, {**meta, "emitted": clock()}))
-                draft_shown = uid
-                continue
-            _, u, start, end = job
-            de, lang = eng.transcribe(u.audio)
-            if u.overlap and de and previous[0] == u.uid - 1:   # only against the part just before the cut
-                de = dedupe_overlap(previous[1], de)
-            for said in {previous[1], getattr(eng, "context", "")}:
-                de = strip_repeat(said, de) if said and de else de
-            if de:
-                reason = junk_reason(de, peak_rms(u.audio), _spoken(eng, lang))
-            else:
-                reason = "echo" if (getattr(eng, "last_info", None) or {}).get("echo") else "empty"
-            if reason:
-                previous = (u.uid, "")               # its words were not shown: none to de-duplicate
-                drop(reason, start, end, de)
-                gone = {"dropped": reason, "start": start, "end": end} if draft_shown == u.uid else {}
-                ui_q.put(("draft", "", "", gone))
-                if held:
-                    show_held()
-            else:
-                spk, conf = speaker(u.audio, start, end)
-                line = {"de": de, "lang": lang, "start": start, "end": end, "upto": u.end,
-                        "speaker": spk, "speaker_conf": conf}
-                if held:
-                    same = None in (spk, held["speaker"]) or spk == held["speaker"]
-                    if same and held["lang"] == lang and start - held["end"] <= HOLD_MAX:
-                        line.update(de=f"{held['de']} {de}", start=held["start"],
-                                    speaker=spk or held["speaker"], speaker_conf=conf or held["speaker_conf"])
+            busy.set()
+            try:
+                if job[0] == "draft":
+                    _, uid, audio, upto, meta = job
+                    if uid != seg.uid or not seg.active or not jobs.empty():
+                        continue                     # stale: that sentence is over, or a final waits
+                    if cur.get("uid") != uid:
+                        new_draft(uid)
+                    if stable:
+                        committed, tentative = cur["proc"].update(audio)
+                        lang = cur["lang"]
+                        de = " ".join(x for x in (committed, tentative) if x)
                     else:
-                        emit(held)
-                    held = None
-                previous = (u.uid, de)
-                if not stop.is_set():                # a new session may already use eng.context
-                    eng.context = line["de"]
-                if HOLD_MAX and not ends_sentence(line["de"]) and u.reason != "stop" and not stop.is_set():
-                    held = line
-                    show_held()
+                        de, lang = getattr(eng, "transcribe_draft", eng.transcribe)(audio)
+                        committed, tentative = "", de
+                    if uid != seg.uid or not seg.active or not de or is_junk(de, lang=_spoken(eng, lang)):
+                        continue
+                    if len(audio) / SR >= MIN_SENTENCE and ends_sentence(de):
+                        seg.mark_sentence_end(uid, upto)   # final on the next short pause
+                    if held and held["lang"] == lang:
+                        de, meta = f"{held['de']} {de}", {**meta, "start": held["start"]}
+                        committed = f"{held['de']} {committed}".strip()
+                    meta = {**meta, "committed": committed, "tentative": tentative}
+                    # Whisper is behind the speaker: the German now, no translation for a line about to change
+                    late = behind(upto, job[4]["end"])
+                    en, parts = ("", {}) if late else (cur["en"], cur["en_parts"])
+                    ui_q.put(("draft", de, en, {**meta, **parts, **tag(uid), "emitted": clock()}))
+                    if not late:
+                        mailbox.put((uid, de, lang, meta, committed, upto))
+                    draft_shown = uid
+                    continue
+                _, u, start, end, *rest = job
+                trace = dict(rest[0]) if rest else {}
+                trace["asr_start"] = clock()
+                de, lang = eng.transcribe(u.audio)
+                trace["asr_done"] = clock()
+                if u.overlap and de and previous[0] == u.uid - 1:   # only against the part just before the cut
+                    de = dedupe_overlap(previous[1], de)
+                for said in {previous[1], getattr(eng, "context", "")}:
+                    de = strip_repeat(said, de) if said and de else de
+                if de:
+                    reason = junk_reason(de, peak_rms(u.audio), _spoken(eng, lang))
                 else:
-                    emit(line)
-            draft_shown = None
-        except Exception as e:                   # one bad buffer must not end the captions
-            print(f"Speech recognition failed on one buffer: {e!r}")
-            if job[0] == "final":
-                drop("error", job[2], job[3])
-        finally:
-            busy.clear()
+                    reason = "echo" if (getattr(eng, "last_info", None) or {}).get("echo") else "empty"
+                if reason:
+                    previous = (u.uid, "")               # its words were not shown: none to de-duplicate
+                    drop(reason, start, end, de)
+                    gone = {"dropped": reason, "start": start, "end": end} if draft_shown == u.uid else {}
+                    ui_q.put(("draft", "", "", {**gone, **tag(u.uid)}))
+                    if held:
+                        show_held()
+                else:
+                    spk, conf = speaker(u.audio, start, end)
+                    line = {"de": de, "lang": lang, "start": start, "end": end, "upto": u.end,
+                            "speaker": spk, "speaker_conf": conf, "utt": u.uid, "trace": trace}
+                    if held:
+                        same = None in (spk, held["speaker"]) or spk == held["speaker"]
+                        if same and held["lang"] == lang and start - held["end"] <= HOLD_MAX:
+                            line.update(de=f"{held['de']} {de}", start=held["start"],
+                                        speaker=spk or held["speaker"], speaker_conf=conf or held["speaker_conf"])
+                            trace["speech_start"] = held["trace"].get("speech_start", held["start"])
+                        else:
+                            emit(held)
+                        held = None
+                    previous = (u.uid, de)
+                    if not stop.is_set():                # a new session may already use eng.context
+                        eng.context = line["de"]
+                    if HOLD_MAX and not ends_sentence(line["de"]) and u.reason != "stop" and not stop.is_set():
+                        held = line
+                        show_held()
+                    else:
+                        emit(line)
+                draft_shown = None
+            except Exception as e:                   # one bad buffer must not end the captions
+                print(f"Speech recognition failed on one buffer: {e!r}")
+                if job[0] == "final":
+                    drop("error", job[2], job[3])
+            finally:
+                busy.clear()
+    finally:
+        mailbox.put(_STOP)
 
 
 # ---------------------------------------------------------------- saving

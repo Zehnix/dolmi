@@ -269,9 +269,11 @@ def test_finals_carry_meta_with_audio_times_and_increasing_ids(fake_engine):
     assert a["emitted"] == 1000.0 and a["lang"] == "de" and (a["speaker"], a["speaker_conf"]) == ("S1", 0.9)
     assert len(calls) == 2 and [r[4] for r in tr.rows] == [a, b]
     assert all(len(i) == 4 for i in items if i[0] in ("final", "draft"))
-    assert ("draft", "", "", {}) in items
+    clears = [i for i in items if i[0] == "draft" and not i[1] and not i[2]]
+    assert clears and all(set(c[3]) == {"session", "utt", "rev"} for c in clears)    # STR-3 contract
     for d in (i for i in items if i[0] == "draft" and i[1]):
-        assert set(d[3]) == {"start", "end", "emitted"}
+        assert {"start", "end", "emitted", "session", "utt", "rev", "committed", "tentative"} <= set(d[3])
+    assert {a["session"], b["session"]} == {clears[0][3]["session"]} and a["utt"] < b["utt"] and a["rev"] < b["rev"]
 
 
 class Forgetful:

@@ -286,7 +286,7 @@ class CloudEngine(live_subs.Engine):
                     self._previous = (self._shown, heard, subtitle)
                     self.context = heard
                 if self._shown == self._utterance:           # nothing newer is being spoken
-                    ui_q.put(("draft", "", "", {}))
+                    ui_q.put(("draft", "", "", {k: m[k] for k in ("session", "utt") if k in m}))
 
     def _dedupe(self, uid, overlap, heard, subtitle):
         """A cut without a pause sends the last CLOUD_OVERLAP s twice: drop the repeated words from

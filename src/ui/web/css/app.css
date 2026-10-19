@@ -116,6 +116,9 @@ input,textarea,select{font:inherit;color:inherit}
 .pair.cur .c{background:var(--ac-soft)}
 .pair.cur .de{color:var(--ink)}
 .pair.cur .en{color:var(--ink)}
+/* STR-2: live draft = committed words (solid) + tentative tail (dim, italic); finals have neither mark */
+.pair.draft .tent{opacity:.55;font-style:italic}
+.pair.draft .ts{font-style:italic}
 .brows.hidede .pair{grid-template-columns:1fr}
 .brows.hidede .de{display:none}
 .bhead.hidede .de-h{display:none}

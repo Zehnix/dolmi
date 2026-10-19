@@ -41,7 +41,7 @@ def test_mac_spec_lists_only_existing_paths():
 def test_mac_spec_ships_the_shared_core():
     lists = _spec_lists()
     assert {"src", "dolmi_platform"} <= set(lists["APP_DIRS"])
-    for f in ("live_subs.py", "models.py", "cloud_speech.py", "assistant.py", "inbox.py", "VERSION"):
+    for f in ("live_subs.py", "models.py", "cloud_speech.py", "assistant.py", "inbox.py", "streaming.py", "VERSION"):
         assert f in lists["APP_FILES"], f
     spec = (MAC / "packaging" / "dolmi.spec").read_text(encoding="utf-8")
     assert 'VERSION = (ROOT / "VERSION")' in spec
