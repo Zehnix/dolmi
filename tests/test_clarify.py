@@ -85,6 +85,33 @@ def test_clarify_add_writes_the_right_file(api, fake_engine):
     assert api.clarify_add("x", "german", "Only", "")["ok"] is False
 
 
+def test_add_rule_no_duplicates_and_no_target_for_keep():
+    v = "[keep]\nNordlicht GmbH\n\n[german]\nKalibra = Calibra\n"
+    assert add_rule(v, "", "keep", "nordlicht gmbh") == (None, None)
+    assert add_rule("", "Zorbel\n", "gloss", "zorbel") == (None, None)
+    assert add_rule(v, "", "keep", "Zorbel", "stray")[0].startswith("[keep]\nNordlicht GmbH\nZorbel\n")
+    with pytest.raises(clarify.Exists):
+        add_rule(v, "", "german", "Kalibra", "Other")
+
+
+def test_clarify_add_existing_keep_writes_nothing(api, fake_engine):
+    import config
+    (config.CONFIG / "vocabulary.txt").write_text("[keep]\nNordlicht\n", encoding="utf-8")
+    api._clarify = Queue()
+    api._clarify.add([("Die", 0.9), ("Nordlich", 0.1)], "Die Nordlich")
+    assert api.clarify_add("Nordlich", "keep", "Nordlicht") == {"ok": True, "already": True}
+    assert (config.CONFIG / "vocabulary.txt").read_text(encoding="utf-8") == "[keep]\nNordlicht\n"
+    assert api.clarify_list()["items"] == []
+    assert api.clarify_add("x", "german", "Nordlicht", "y")["ok"] is True   # other section is fine
+
+
+def test_never_ask_hides_the_word_not_its_sound_alikes():
+    q = Queue(ignored=["Mueller"])
+    q.add([("x", 0.9), ("Mueller", 0.1)], "x Mueller")
+    q.add([("x", 0.9), ("Miller", 0.1)], "x Miller")
+    assert [e["heard"] for e in q.items()] == ["Miller"]
+
+
 def test_clarify_skip_forever_is_remembered(api):
     import config
     api._clarify = Queue()

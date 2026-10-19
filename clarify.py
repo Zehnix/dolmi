@@ -79,7 +79,7 @@ class Queue:
         self._lock = threading.Lock()
         self._known = known_terms(items)
         self._known_words = {w.lower() for _, t, _ in items for w in re.findall(r"\w+", t)}
-        self._ignored = {koelner(w) for w in ignored if koelner(w)}
+        self._ignored = {w.strip().lower() for w in ignored if w.strip()}   # exact words, not sounds
         self._entries = {}      # code -> entry dict, in first-heard order
 
     def add(self, words, line):
@@ -94,7 +94,7 @@ class Queue:
                 if not (unsure or odd_caps):
                     continue
                 code = koelner(w)
-                if not code or code in self._ignored:
+                if not code or w.lower() in self._ignored:
                     continue
                 e = self._entries.get(code)
                 if e:
@@ -116,13 +116,25 @@ class Queue:
             self._entries.pop(koelner(word), None)
 
 
+class Exists(ValueError):
+    """The group already has a rule for this word."""
+
+
 def add_rule(vocabulary, glossary, group, term, target=""):
     """(vocabulary, glossary) texts with one new term or rule in `group`; the other text is None
     (= unchanged, for save_vocab). A [section] that exists gets the line at its end, else it is added."""
-    term, target = str(term).strip().replace("#", "\\#"), str(target).strip().replace("#", "\\#")
-    if group not in GROUPS or not term or (group in ("german", "english") and not target):
+    rule = group in ("german", "english")
+    term = str(term).strip().replace("#", "\\#")
+    target = str(target).strip().replace("#", "\\#") if rule else ""   # a target only means something for a rule
+    if group not in GROUPS or not term or (rule and not target):
         raise ValueError("group/term/target")
+
+    def source(l):
+        return l.split("#")[0].split("=")[0].strip().lower()
+
     if group == "gloss":
+        if term.lower() in {source(l) for l in glossary.splitlines()}:
+            return None, None                                  # already a spelling hint: nothing to write
         return None, (glossary.rstrip() + "\n" if glossary.strip() else "") + term
     line = f"{term} = {target}" if target else term
     lines = vocabulary.rstrip().splitlines()
@@ -132,6 +144,10 @@ def add_rule(vocabulary, glossary, group, term, target=""):
     end = head + 1
     while end < len(lines) and not lines[end].strip().startswith("["):
         end += 1
+    if term.lower() in {source(l) for l in lines[head + 1:end]}:
+        if rule:
+            raise Exists(term)                                 # a second rule for one word would conflict
+        return None, None                                      # already kept: no duplicate line
     while end > head + 1 and not lines[end - 1].strip():
         end -= 1
     return "\n".join(lines[:end] + [line] + lines[end:]), None
