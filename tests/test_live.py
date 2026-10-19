@@ -130,6 +130,15 @@ def test_numpy_meta_is_sent_as_plain_numbers(api):
     assert m["id"] == 3 and isinstance(m["start"], float)
 
 
+def test_numpy_flags_and_missing_times_still_reach_the_page(api):
+    """Producers now send meta: a numpy flag or an explicit end=None must not drop the line."""
+    np = pytest.importorskip("numpy")
+    _session(api)
+    api._ui_q.put(("final", "Eins.", "One.", {"id": 1, "speech": np.bool_(True), "end": None, "start": None}))
+    (_, _, _, m), = _calls(api, "onLine", 1)
+    assert m["speech"] is True and m["lag"] is None and isinstance(m["start"], float) and m["start"] == m["end"]
+
+
 # ------------------------------------------------------------------ transcript files
 def test_transcript_writes_speech_times(tmp_path):
     t = live_subs.Transcript(tmp_path)

@@ -71,10 +71,12 @@ def _seconds(hhmmss):
 
 
 def _plain(meta):
-    """A JSON-safe copy of a caption's meta (producers may hand over numpy numbers)."""
+    """A JSON-safe copy of a caption's meta (producers may hand over numpy values)."""
     out = {}
     for k, v in meta.items():
-        if isinstance(v, numbers.Integral) and not isinstance(v, bool):
+        if type(v).__module__ == "numpy" and hasattr(v, "tolist"):   # np.bool_, np.float32, arrays
+            v = v.tolist()
+        elif isinstance(v, numbers.Integral) and not isinstance(v, bool):
             v = int(v)
         elif isinstance(v, numbers.Real) and not isinstance(v, bool):
             v = float(v)
@@ -237,9 +239,11 @@ class Api:
             self._lag_session, self._lags = session, deque(maxlen=LAG_WINDOW)
         now = time.time()
         measured = isinstance(meta.get("end"), (int, float))
-        if final:
-            meta.setdefault("end", now)
-            meta.setdefault("start", meta["end"])
+        if final:                                     # a missing or non-numeric time counts as unknown
+            if not measured:
+                meta["end"] = now
+            if not isinstance(meta.get("start"), (int, float)):
+                meta["start"] = meta["end"]
         meta["shown"] = now
         meta["lag"] = max(0.0, now - meta["end"]) if measured else None
         tr = session.get("transcript") if session else None
