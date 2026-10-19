@@ -31,6 +31,12 @@ def engines(monkeypatch, fake_engine):
     return built
 
 
+@pytest.fixture(autouse=True)
+def _no_subtitle_window(api):
+    """Start opens the subtitle bar; a real webview window cannot be created from the test's Start thread."""
+    api._settings["overlay"] = False
+
+
 @pytest.fixture
 def installed(api, monkeypatch):
     monkeypatch.setattr(api, "missing_models", lambda: [])
