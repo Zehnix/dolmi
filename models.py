@@ -88,6 +88,37 @@ for _code, _mb in TRANSLATOR_SIZES.items():
         TRANSLATE, _mb, 1, 2, "no", 0, 4, 5, f"Translates {_src} sentences into {_dst} in ~0.06 s, even on CPU."))
 BY_KEY = {m.key: m for m in CATALOG}
 
+# Candidates measured by the test bench (QA-4, QA-5), NOT offered in the app: no reputable publisher ships
+# them as CTranslate2, so they exist only as local conversions (eval/README.md, "Candidate models").
+# Adopting one needs Exon's sign-off and a hosted CT2 copy; until then the app's defaults stay.
+CANDIDATES = {
+    "opus-tc-big-gmw-en": {
+        "job": TRANSLATE, "folder": "opus-mt-tc-bible-big-gmw-en-ct2",
+        "source": "https://object.pouta.csc.fi/Tatoeba-MT-models/gmw-eng/"
+                  "opusTCv20230926max50+bt+jhubc_transformer-big_2024-08-17.zip",
+        "license": "CC-BY-4.0", "size_mb": 242,
+        "note": "Helsinki-NLP transformer-big, West Germanic -> English (there is no tc-big de-en): "
+                "chrF +0.2 synthetic, +1.2 FLEURS, fewer known meeting mistakes; ~2x slower than Opus-MT."},
+    "opus-de-bt-2021": {
+        "job": TRANSLATE, "folder": "opus-mt-deu-eng-bt-2021-04-30-ct2",
+        "source": "https://object.pouta.csc.fi/Tatoeba-MT-models/deu-eng/opus+bt-2021-04-30.zip",
+        "license": "CC-BY-4.0", "size_mb": 152,
+        "note": "Helsinki-NLP base model with back-translation: chrF -2.3 synthetic, +0.1 FLEURS. Not better."},
+    "large-v3-turbo-german": {
+        "job": SPEECH, "folder": "whisper-large-v3-turbo-german-ct2",
+        "source": "https://huggingface.co/primeline/whisper-large-v3-turbo-german",
+        "license": "Apache-2.0", "size_mb": 1618,
+        "note": "primeline's German fine-tune of large-v3-turbo, converted to CTranslate2 float16 "
+                "(+ the turbo tokenizer.json). See the QA-5 notes for WER and English detection."},
+}
+
+
+def candidate_dir(key):
+    """Where the bench keeps a candidate's local CTranslate2 conversion (outside git)."""
+    import os
+    base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".cache") / "Dolmi-eval" / "models"
+    return base / CANDIDATES[key]["folder"]
+
 # ------------------------------------------------------------------ this computer
 # system_info(), gpu_ready() and auto_speech() are platform code (dolmi_platform), re-exported above.
 

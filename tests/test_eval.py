@@ -385,3 +385,151 @@ def test_data_folder_can_live_outside_the_checkout(tmp_path, monkeypatch):
     assert paths.resolve("data/synthetic/s01.wav") == wav
     assert paths.name_of(wav) == "data/synthetic/s01.wav"
     assert paths.resolve("manifest.json") == EVAL / "manifest.json"
+
+
+# ------------------------------------------------------------------ QA-3 smoke, QA-4/7 translation A/B, QA-9 text sets
+import ab_blind  # noqa: E402
+import make_private_text  # noqa: E402
+import translators  # noqa: E402
+
+
+def test_smoke_args_are_the_ci_suite():
+    a = run_eval.parse_args(["--smoke"])
+    assert (a.mode, a.set, a.limit, a.model, a.device) == ("component", "fleurs", 25, "small", "cpu")
+    run = {"set": "smoke", "model": "small", "device": "cpu", "translator": "opus-de", "terms": True}
+    assert run_eval.run_key(run) == run_eval.SMOKE_KEY
+
+
+def test_check_baseline_fails_on_wer_up_one_or_chrf_down_one():
+    base = {"runs": {"k": {"component": {"wer_de": 10.0, "chrf_gold": 60.0, "chrf_cascade": 58.0}}}}
+    ok = {"component": {"wer_de": 10.9, "chrf_gold": 59.1, "chrf_cascade": 58.5}}
+    assert run_eval.check_baseline(ok, "k", base=base) == []
+    bad = {"component": {"wer_de": 11.2, "chrf_gold": 58.9, "chrf_cascade": 58.0}}
+    fails = run_eval.check_baseline(bad, "k", base=base)
+    assert len(fails) == 2 and fails[0].startswith("wer_de") and fails[1].startswith("chrf_gold")
+    assert "no baseline entry" in run_eval.check_baseline(ok, "missing", base=base)[0]
+
+
+def test_committed_smoke_baseline_entry_exists():
+    base = json.loads((EVAL / "baseline.json").read_text(encoding="utf-8"))
+    entry = base["runs"][run_eval.SMOKE_KEY]["component"]
+    assert entry["clips"] == 25 and {"wer_de", "chrf_gold", "chrf_cascade"} <= set(entry)
+
+
+class _Local:
+    """The app's Opus-MT stand-in: a fixed, slightly worse translation."""
+    language, glossary, vocab = "de", "", None
+
+    def translate(self, text, lang):
+        return {"Wir liefern am Freitag.": "We deliver at Friday.", "Das ist gut.": "That is good."}.get(text, text)
+
+
+def _cloud(reply, delay=0.0):
+    calls = []
+
+    def post(url, payload, headers, timeout=30):
+        calls.append(payload["contents"][0]["parts"][0]["text"])
+        if delay:
+            time.sleep(delay)
+        de = calls[-1].rsplit("New line (German): ", 1)[1]
+        return {"candidates": [{"content": {"parts": [{"text": reply.get(de, de)}]}}]}
+    return translators.CloudMT("gemini", _Local(), key="test", timeout=2.0, post=post), calls
+
+
+def test_run_mt_cloud_vs_local_with_context_and_wins():
+    eng, calls = _cloud({"Wir liefern am Freitag.": "We ship on Friday.", "Das ist gut.": "That is good."})
+    lines = [{"id": "a", "de": "Wir liefern am Freitag.", "en": "We ship on Friday.", "en_terms": ["Friday"]},
+             {"id": "b", "de": "Das ist gut.", "en": "That is good.", "avoid": ["That is bad"]}]
+    rows = []
+    out = run_eval.run_mt(eng, lines, rows)
+    assert rows[0]["mt_gold"] == "We ship on Friday." and rows[0]["mt_gold_local"] == "We deliver at Friday."
+    assert "Wir liefern am Freitag." in calls[1] and "We ship on Friday." in calls[1]   # context = accepted English
+    assert out["chrf_gold"] > out["chrf_gold_local"] and out["chrf_sentence_wins"] == 100.0
+    assert out["chrf_sentence_decided"] == 1 and out["mistakes_avoided"] == 100.0 and out["term_acc_mt"] == 100.0
+    stats = eng.stats()
+    assert stats["cloud_calls"] == 2 and stats["cloud_fallback_rate"] == 0.0
+    table = run_eval.summary_table({"set": "x", "model": "none", "device": "cpu", "translator": "gemini",
+                                    "date": "d", "git": "g", "mt": {**out, **stats}})
+    assert "| vs local | chrF local / delta |" in table and "Lines where chrF beats local | 100.0 %" in table
+
+
+def test_cloud_answers_slower_than_the_app_waits_count_as_fallbacks():
+    eng, _ = _cloud({}, delay=0.0)
+    eng.latency = [0.4, 1.6, 0.9, 2.0]
+    assert eng.stats()["cloud_fallback_rate"] == 50.0
+
+
+def test_text_set_loading(tmp_path):
+    p = tmp_path / "set.json"
+    p.write_text(json.dumps({"kind": "text", "lines": [{"id": 1, "de": "Hallo."}]}), encoding="utf-8")
+    assert translators.load_text_set(p)["lines"][0]["de"] == "Hallo."
+    assert run_eval.mt_lines(f"private:{p}", [])[0]["id"] == 1
+    assert translators.load_text_set(tmp_path) is None                      # a folder is an audio set
+    (tmp_path / "bad.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        translators.load_text_set(tmp_path / "bad.json")
+
+
+MEETING = """# Meeting 2026-10-16_10-09
+
+<!-- started 10:09:00 -->
+
+**10:10:33–10:10:40** I see the Velorix build.  
+<sub>Ich sehe den Velorix Build heute.</sub>
+
+**10:11:43–10:11:50** That is the nuclear technology of us.  
+<sub>Das ist unsere Kerntechnik im Haus.</sub>
+
+**10:12:00–10:12:05** Yes.  
+<sub>Ja.</sub>
+"""
+FINDINGS = """### meeting_2026-10-16_10-09.md (fictional)
+
+| Time | Transcribed (DE) / Translated (EN) | Most likely | Type | Conf. | Evidence |
+|---|---|---|---|---|---|
+| 10:11:43 | EN "the nuclear technology" for DE "Kerntechnik" | core technology | mistranslated (compound) | high | x |
+| 10:12:00 | DE "Ja" | yes | misheard | low | x |
+"""
+
+
+def test_private_text_set_builder(tmp_path):
+    (tmp_path / "meeting_2026-10-16_10-09.md").write_text(MEETING, encoding="utf-8")
+    (tmp_path / "findings.md").write_text(FINDINGS, encoding="utf-8")
+    data, counts = make_private_text.build(tmp_path, tmp_path / "findings.md", "[keep]\nVelorix\n", "Velorix")
+    assert counts == {"meetings": 1, "lines_read": 2, "lines_kept": 2, "with_terms": 1, "mistranslated": 1,
+                      "review_rows": 1}
+    by = {r["de"]: r for r in data["lines"]}
+    assert by["Ich sehe den Velorix Build heute."]["en_terms"] == ["Velorix"]
+    k = by["Das ist unsere Kerntechnik im Haus."]
+    assert k["avoid"] == ["the nuclear technology"] and k["hint"] == "core technology" and "app_en" not in k
+    assert data["vocabulary"].startswith("[keep]")
+    with pytest.raises(SystemExit):           # never inside the checkout
+        make_private_text.main(["--out", str(ROOT / "eval" / "x.json"), "--transcripts", str(tmp_path)])
+
+
+def test_blind_ab_sheet_and_score(tmp_path):
+    res = tmp_path / "run.jsonl"
+    rows = [{"kind": "mt", "id": i, "ref": f"Satz {i}", "mt_gold": f"cloud {i}", "mt_gold_local": f"local {i}"}
+            for i in range(5)] + [{"kind": "mt", "id": 9, "ref": "x", "mt_gold": "same", "mt_gold_local": "same"}]
+    res.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+    assert ab_blind.make(res, tmp_path / "ab", n=100) == 5                  # identical pairs left out
+    key = json.loads((tmp_path / "ab" / "key.json").read_text(encoding="utf-8"))
+    import csv
+    with (tmp_path / "ab" / "sheet.csv").open(encoding="utf-8-sig", newline="") as f:
+        sheet = list(csv.reader(f))
+    assert {sheet[1][2], sheet[1][3]} == {f"cloud {key['1']['id']}", f"local {key['1']['id']}"}
+    for row in sheet[1:]:                       # pick the cloud side on 4 lines, the local one on 1
+        cand = key[row[0]]["candidate"]
+        row[4] = cand if row[0] != "5" else ("B" if cand == "A" else "A")
+    with (tmp_path / "ab" / "sheet.csv").open("w", encoding="utf-8-sig", newline="") as f:
+        csv.writer(f).writerows(sheet)
+    r = ab_blind.score(tmp_path / "ab")
+    assert (r["wins"], r["losses"], r["win_rate"], r["passes_60"]) == (4, 1, 80.0, True)
+
+
+def test_candidates_are_not_offered_in_the_app():
+    import models
+    assert models.CANDIDATES and not set(models.CANDIDATES) & set(models.BY_KEY)
+    for key, c in models.CANDIDATES.items():
+        assert c["job"] in (models.SPEECH, models.TRANSLATE) and c["source"].startswith("https://")
+        assert models.candidate_dir(key).name == c["folder"]

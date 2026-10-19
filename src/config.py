@@ -45,6 +45,7 @@ DEFAULTS = {
     #   "my_key": 1,                              # APP-99: what it does
     "warn_silence": True,                         # APP-3: 'Dolmi hears nothing' warning while live
     "vocab_profile": "",                          # VOC-11: spelling-hint profile for meetings ('' = every term)
+    "translator": "local", "translator_timeout": 1.5,   # QA-7: cloud subtitles for finals (local|gemini|deepl), s to wait
 }
 
 

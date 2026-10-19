@@ -41,6 +41,7 @@ for _p in (str(EVAL), str(ROOT)):
 
 import metrics  # noqa: E402
 import paths  # noqa: E402
+import translators  # noqa: E402
 
 SR = 16000
 CHUNK_S = 0.1
@@ -140,7 +141,7 @@ def load_clips(set_name, warnings, limit=None):
             a = max(0.0, u["start"] - min(0.25, before / 2))
             b = u["end"] + min(0.25, after / 2)
             clips.append({**u, "load": (lambda a=a, b=b, f=session_audio: f()[int(a * SR):int(b * SR)]),
-                          "en": u.get("en")})
+                          "en": u.get("en"), "session": sess["id"]})
             if limit and len(clips) >= limit:
                 return clips
     return clips
@@ -169,34 +170,41 @@ def term_files(folder, terms):
         "[keep]\n" + "\n".join(keep) + "\n\n[german]\n" + "\n".join(german) + "\n", encoding="utf-8")
 
 
-def make_engine(args, terms):
-    """The app's real live_subs.Engine with the fictional term files and the chosen translator."""
+def make_engine(args, terms, text_set=None, mt_only=False):
+    """The app's real live_subs.Engine with the fictional term files and the chosen translator.
+    A text set may bring its own vocabulary/glossary (private: written next to the set, never here).
+    mt_only: no Whisper (translation half only). --translator gemini|deepl wraps the local engine in
+    translators.CloudMT (the local Opus-MT stays for the side-by-side numbers)."""
     cfg = paths.data_dir() / "config"
-    if args.no_terms:
+    if text_set is not None and ("vocabulary" in text_set or "glossary" in text_set):
+        cfg = Path(text_set["_path"]).parent / "_engine_config"
+        cfg.mkdir(parents=True, exist_ok=True)
+        for name in ("glossary", "vocabulary"):
+            (cfg / f"{name}.txt").write_text(text_set.get(name) or "", encoding="utf-8")
+    elif args.no_terms:
         cfg.mkdir(parents=True, exist_ok=True)
         for name in ("glossary.txt", "vocabulary.txt"):
             (cfg / name).unlink(missing_ok=True)
     else:
         term_files(cfg, terms)
     os.environ["DOLMI_CONFIG"] = str(cfg)
-    import live_subs
-    eng = live_subs.Engine(args.model, args.device, language="de")
-    if args.translator not in ("", "default", "opus-de"):
-        eng.translators["opus-de"] = load_translator(args.translator, eng.device)
+    if mt_only:
+        eng = translators.mt_engine(args.translator, args.device)
+    else:
+        import live_subs
+        import models
+        model = str(models.candidate_dir(args.model)) if args.model in models.CANDIDATES else args.model
+        eng = live_subs.Engine(model, args.device, language="de")
+        if args.translator not in ("", "default", "opus-de") and args.translator not in translators.CLOUD:
+            eng.translators["opus-de"] = load_translator(args.translator, eng.device)
+    if args.translator in translators.CLOUD:
+        eng = translators.CloudMT(args.translator, eng, timeout=args.cloud_timeout)
     return eng
 
 
 def load_translator(name, device):
-    """A CTranslate2 Marian model for German -> English: a models.py key or a Hugging Face repo id."""
-    import ctranslate2
-    import sentencepiece as spm
-    from huggingface_hub import snapshot_download
-    import models
-    repo = models.BY_KEY[name].repo if name in models.BY_KEY else name
-    d = Path(snapshot_download(repo))
-    return (ctranslate2.Translator(str(d), device=device, compute_type="int8"),
-            spm.SentencePieceProcessor(model_file=str(d / "source.spm")),
-            spm.SentencePieceProcessor(model_file=str(d / "target.spm")))
+    """A CTranslate2 Marian model for German -> English: a local folder, a models.py key or a HF repo id."""
+    return translators.load_marian(name, device)
 
 
 class Timed:
@@ -218,6 +226,12 @@ class Timed:
         self.calls["mt"].append(_time.perf_counter() - t)
         return out
 
+    def translate_ctx(self, text, lang, context):
+        t = _time.perf_counter()
+        out = self._eng.translate_ctx(text, lang, context)
+        self.calls["mt"].append(_time.perf_counter() - t)
+        return out
+
     def __getattr__(self, name):
         return getattr(self._eng, name)
 
@@ -229,6 +243,7 @@ class Timed:
 def run_component(eng, clips, rows, log=print):
     """ASR + MT on single clips. Appends one row per clip to `rows`; returns the summary dict."""
     asr_time = audio_time = 0.0
+    ctx = {"session": None, "gold": [], "asr": []}
     for k, c in enumerate(clips):
         audio = c["load"]()
         eng.context = ""   # clips are independent: no previous-sentence prompt
@@ -240,14 +255,88 @@ def run_component(eng, clips, rows, log=print):
                "hyp": hyp, "detected": lang, "dur": round(len(audio) / SR, 2),
                "wer": round(metrics.wer(c["text"], hyp, c["lang"]), 2) if c["text"] else None}
         if c.get("en") and c["lang"] != "en":
-            row["mt_gold"] = eng.translate(c["text"], c["lang"])
-            row["mt_asr"] = eng.translate(hyp, lang) if hyp else ""
+            if c.get("session") != ctx["session"]:
+                ctx.update(session=c.get("session"), gold=[], asr=[])
+            row.update(translate_row(eng, c["text"], c["lang"], ctx["gold"]))
+            row["mt_asr"] = translate_row(eng, hyp, lang, ctx["asr"])["mt_gold"] if hyp else ""
             row["en_ref"] = c["en"]
         row["terms"], row["en_terms"] = c.get("terms", []), c.get("en_terms", [])
         rows.append(row)
         if (k + 1) % 25 == 0:
             log(f"  component {k + 1}/{len(clips)}")
     return summarize_component(rows, asr_time, audio_time)
+
+
+def translate_row(eng, de, lang, context):
+    """{'mt_gold': subtitle[, 'mt_gold_local': the app's Opus-MT]} for one line. With a context-aware
+    (cloud) translator the previous lines go along and the accepted English is remembered."""
+    inner = object.__getattribute__(eng, "_eng") if isinstance(eng, Timed) else eng
+    if not hasattr(type(inner), "translate_ctx"):
+        return {"mt_gold": eng.translate(de, lang)}
+    local = inner.local.translate(de, lang)
+    out = eng.translate_ctx(de, lang, context[-3:]) or ""
+    context.append((de, out or local))
+    del context[:-3]
+    return {"mt_gold": out, "mt_gold_local": local}
+
+
+def run_mt(eng, lines, rows, log=print):
+    """Translation only: each line's gold German through the translator (no audio, no Whisper)."""
+    context = []
+    for k, ln in enumerate(lines):
+        if not ln.get("de"):
+            continue
+        row = {"kind": "mt", "id": ln.get("id", k), "tags": ln.get("tags", []), "ref": ln["de"],
+               "en_ref": ln.get("en"), "en_terms": ln.get("en_terms", []), "avoid": ln.get("avoid", [])}
+        row.update(translate_row(eng, ln["de"], ln.get("lang", "de"), context))
+        rows.append(row)
+        if (k + 1) % 50 == 0:
+            log(f"  mt {k + 1}/{len(lines)}")
+    return summarize_mt(rows)
+
+
+def _mt_scores(mt, key, suffix=""):
+    """chrF/BLEU on lines with a reference, term accuracy and the known-mistake check for one output column."""
+    out = {}
+    scored = [r for r in mt if r.get("en_ref")]
+    if scored:
+        refs = [r["en_ref"] for r in scored]
+        out["chrf_gold" + suffix] = metrics.chrf(refs, [r[key] or "" for r in scored])
+        out["bleu_gold" + suffix] = metrics.bleu(refs, [r[key] or "" for r in scored])
+    with_terms = [r for r in mt if r.get("en_terms")]
+    if with_terms:
+        out["term_acc_mt" + suffix] = metrics.term_accuracy(((r["en_terms"], r[key] or "") for r in with_terms), "en")[2]
+    with_avoid = [r for r in mt if r.get("avoid")]
+    if with_avoid:
+        bad = sum(any(a.lower() in (r[key] or "").lower() for a in r["avoid"]) for r in with_avoid)
+        out["mistakes_avoided" + suffix] = 100 * (1 - bad / len(with_avoid))
+        out["mistake_lines"] = len(with_avoid)
+    return out
+
+
+def summarize_mt(rows):
+    """Translation numbers for 'mt' rows; with a cloud translator also the local column and the wins."""
+    mt = [r for r in rows if r.get("kind") == "mt"]
+    out = {"mt_lines": len(mt), "mt_pairs": sum(bool(r.get("en_ref")) for r in mt)}
+    out.update(_mt_scores(mt, "mt_gold"))
+    if any("mt_gold_local" in r for r in mt):
+        out.update(_mt_scores(mt, "mt_gold_local", "_local"))
+        out.update(sentence_wins(mt))
+    return out
+
+
+def sentence_wins(rows):
+    """Share of lines where the candidate's sentence chrF beats the local one (ties left out)."""
+    win = lose = 0
+    for r in rows:
+        if not r.get("en_ref") or "mt_gold_local" not in r:
+            continue
+        a = metrics.chrf(r["en_ref"], r["mt_gold"] or "")
+        b = metrics.chrf(r["en_ref"], r["mt_gold_local"] or "")
+        win, lose = win + (a > b), lose + (a < b)
+    if not win + lose:
+        return {}
+    return {"chrf_sentence_wins": 100 * win / (win + lose), "chrf_sentence_decided": win + lose}
 
 
 def summarize_component(rows, asr_time=None, audio_time=None):
@@ -259,6 +348,7 @@ def summarize_component(rows, asr_time=None, audio_time=None):
             out[f"wer_{lang}"] = metrics.wer([r["ref"] for r in rs], [r["hyp"] for r in rs], lang)
             out[f"cer_{lang}"] = metrics.cer([r["ref"] for r in rs], [r["hyp"] for r in rs], lang)
             out[f"clips_{lang}"] = len(rs)
+            out[f"detected_{lang}"] = 100 * sum(r.get("detected") == lang for r in rs) / len(rs)   # QA-5 code-switching
     tags = sorted({t for r in asr for t in r.get("tags", [])})
     out["wer_by_tag"] = {t: round(metrics.wer([r["ref"] for r in asr if t in r["tags"]],
                                               [r["hyp"] for r in asr if t in r["tags"]], "de"), 2)
@@ -274,17 +364,22 @@ def summarize_component(rows, asr_time=None, audio_time=None):
         out["bleu_cascade"] = metrics.bleu(refs, [r["mt_asr"] for r in mt])
         out["term_acc_mt"] = metrics.term_accuracy(((r["en_terms"], r["mt_gold"]) for r in mt), "en")[2]
         out["mt_pairs"] = len(mt)
+        if any("mt_gold_local" in r for r in mt):
+            out["chrf_gold_local"] = metrics.chrf(refs, [r["mt_gold_local"] for r in mt])
+            out["bleu_gold_local"] = metrics.bleu(refs, [r["mt_gold_local"] for r in mt])
+            out["term_acc_mt_local"] = metrics.term_accuracy(((r["en_terms"], r["mt_gold_local"]) for r in mt), "en")[2]
+            out.update(sentence_wins(mt))
     if asr_time is not None and audio_time:
         out["asr_rtf"] = asr_time / audio_time
     return out
 
 
-def run_comet(python, rows):
+def run_comet(python, rows, key="mt_gold"):
     """COMET (Unbabel/wmt22-comet-da) in a separate venv that has unbabel-comet; None + reason if not."""
-    mt = [r for r in rows if r.get("mt_gold")]
+    mt = [r for r in rows if r.get(key) is not None and r.get("en_ref")]
     if not python or not mt:
         return None, "COMET skipped: pass --comet-python <venv python with unbabel-comet>"
-    data = [{"src": r["ref"], "mt": r["mt_gold"], "ref": r["en_ref"]} for r in mt]
+    data = [{"src": r["ref"], "mt": r[key] or "", "ref": r["en_ref"]} for r in mt]
     script = ("import json,sys\nfrom comet import download_model, load_from_checkpoint\n"
               "m=load_from_checkpoint(download_model('Unbabel/wmt22-comet-da'))\n"
               "d=json.load(open(sys.argv[1],encoding='utf-8'))\n"
@@ -735,7 +830,7 @@ def fmt(v, digits=1, unit=""):
 
 def summary_table(run):
     c, s = run.get("component") or {}, run.get("stream") or {}
-    lines = [f"### Dolmi test bench: {run['set']} · {run['model']} on {run['device']} · {run['translator']}",
+    lines = [f"### Dolmi test bench: {run['set']} · {Path(run['model']).name} on {run['device']} · {Path(run['translator']).name}",
              "", f"{run['date']} · git {run['git']} · {run.get('note', '')}".rstrip(" ·"), "",
              "| Area | Metric | Value |", "|---|---|---|"]
     if c:
@@ -743,6 +838,7 @@ def summary_table(run):
             f"| ASR | WER German (normalized) | {fmt(c.get('wer_de'), 2, ' %')} |",
             f"| ASR | CER German | {fmt(c.get('cer_de'), 2, ' %')} |",
             f"| ASR | WER English lines | {fmt(c.get('wer_en'), 2, ' %')} |",
+            f"| ASR | Language detected right: German / English lines | {fmt(c.get('detected_de'), 1, ' %')} / {fmt(c.get('detected_en'), 1, ' %')} |",
             f"| ASR | Term accuracy (fictional terms) | {fmt(c.get('term_acc_asr'), 1, ' %')} |",
             f"| ASR | Real-time factor (clips) | {fmt(c.get('asr_rtf'), 3)} |",
             f"| MT | chrF on gold German | {fmt(c.get('chrf_gold'), 2)} |",
@@ -752,6 +848,18 @@ def summary_table(run):
             f"| MT | Term accuracy in English | {fmt(c.get('term_acc_mt'), 1, ' %')} |",
             f"| MT | COMET wmt22-da | {fmt(c.get('comet'), 2) if c.get('comet') is not None else c.get('comet_note', 'n/a')} |",
         ]
+        lines += versus_local(c)
+    m = run.get("mt") or {}
+    if m:
+        lines += [
+            f"| MT | Lines (with a reference) | {m.get('mt_lines')} ({m.get('mt_pairs')}) |",
+            f"| MT | chrF / BLEU on gold German | {fmt(m.get('chrf_gold'), 2)} / {fmt(m.get('bleu_gold'), 2)} |",
+            f"| MT | Term accuracy in English | {fmt(m.get('term_acc_mt'), 1, ' %')} |",
+            f"| MT | Call time p50 / p95 | {fmt(m.get('mt_call_p50'), 3, ' s')} / {fmt(m.get('mt_call_p95'), 3, ' s')} |",
+            f"| MT | Known mistakes avoided ({m.get('mistake_lines', 0)} lines) | {fmt(m.get('mistakes_avoided'), 1, ' %')} |",
+            f"| MT | COMET wmt22-da | {fmt(m.get('comet'), 2) if m.get('comet') is not None else m.get('comet_note', 'n/a')} |",
+        ]
+        lines += versus_local(m)
     if s:
         lines += [
             f"| Stream | Missed-segment rate (no overlapping final) | {fmt(s.get('missed_rate'), 1, ' %')} |",
@@ -779,6 +887,22 @@ def summary_table(run):
     for w in run.get("warnings", []):
         lines.append(f"\n> {w}")
     return "\n".join(lines) + "\n"
+
+
+def versus_local(c):
+    """Rows comparing a cloud translator with the app's local Opus-MT on the same lines (QA-7 adoption)."""
+    if "chrf_gold_local" not in c and "mistakes_avoided_local" not in c and "term_acc_mt_local" not in c:
+        return []
+    d = lambda a, b: fmt(c[a] - c[b], 2) if c.get(a) is not None and c.get(b) is not None else "n/a"
+    return [
+        f"| vs local | chrF local / delta | {fmt(c.get('chrf_gold_local'), 2)} / {d('chrf_gold', 'chrf_gold_local')} |",
+        f"| vs local | COMET local / delta | {fmt(c.get('comet_local'), 2)} / {d('comet', 'comet_local')} |",
+        f"| vs local | Term accuracy local | {fmt(c.get('term_acc_mt_local'), 1, ' %')} |",
+        f"| vs local | Known mistakes avoided, local | {fmt(c.get('mistakes_avoided_local'), 1, ' %')} |",
+        f"| vs local | Lines where chrF beats local | {fmt(c.get('chrf_sentence_wins'), 1, ' %')} of {c.get('chrf_sentence_decided', 0)} |",
+        f"| Cloud | Answer time p50 / p95 | {fmt(c.get('cloud_latency_p50'), 2, ' s')} / {fmt(c.get('cloud_latency_p95'), 2, ' s')} |",
+        f"| Cloud | Kept local (failed or > 1.5 s) | {fmt(c.get('cloud_fallback_rate'), 1, ' %')} |",
+    ]
 
 
 def git_rev():
@@ -810,10 +934,9 @@ def write_baseline(run):
     base = json.loads(BASELINE.read_text(encoding="utf-8")) if BASELINE.exists() else {
         "about": "Test bench numbers (no text, no audio). Key: set|model|device|translator|terms. "
                  "Re-run the same command to compare; see eval/README.md.", "runs": {}}
-    key = "|".join([run["set"], run["model"], run["device"], run["translator"], "terms" if run["terms"] else "no-terms"])
+    key = run_key(run)
     base["runs"][key] = {"date": run["date"], "git": run["git"], "command": run["command"],
-                         "component": numbers_only(run.get("component") or {}),
-                         "stream": numbers_only(run.get("stream") or {})}
+                         **{k: numbers_only(run.get(k) or {}) for k in ("component", "stream", "mt") if run.get(k)}}
     BASELINE.write_text(json.dumps(base, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     return key
 
@@ -830,21 +953,63 @@ def warm_up(eng, set_name, warnings):
     eng.calls["mt"].clear()
 
 
+# ================================================================== smoke (CI) and baseline checks
+SMOKE = {"mode": "component", "set": "fleurs", "limit": 25, "model": "small", "device": "cpu"}
+SMOKE_KEY = "smoke|small|cpu|opus-de|terms"
+# a smoke run fails when a number moves past these limits vs its baseline entry (QA-3)
+SMOKE_LIMITS = {"wer_de": 1.0, "chrf_gold": -1.0, "chrf_cascade": -1.0}
+
+
+def run_key(run):
+    return "|".join([run["set"], run["model"], run["device"], run["translator"], "terms" if run["terms"] else "no-terms"])
+
+
+def check_baseline(run, key=None, limits=SMOKE_LIMITS, base=None):
+    """Regressions of `run` against its baseline entry: ['wer_de 5.10 > 3.90 + 1.0', ...]; [] = pass.
+    A positive limit is how far a number may rise (error rates), a negative one how far it may fall."""
+    base = base if base is not None else (json.loads(BASELINE.read_text(encoding="utf-8")) if BASELINE.exists() else {})
+    key = key or run_key(run)
+    entry = (base.get("runs") or {}).get(key)
+    if not entry:
+        return [f"no baseline entry '{key}' in eval/baseline.json (run once with --write-baseline)"]
+    out = []
+    for metric, limit in limits.items():
+        was, now = entry.get("component", {}).get(metric), (run.get("component") or {}).get(metric)
+        if was is None or now is None:
+            continue
+        if (limit > 0 and now > was + limit) or (limit < 0 and now < was + limit):
+            out.append(f"{metric} {now:.2f} vs baseline {was:.2f} (limit {limit:+.1f})")
+    return out
+
+
+def mt_lines(set_name, warnings, limit=None):
+    """Lines for --mode mt: a text set's lines, or the gold German + English of an audio set's clips."""
+    if set_name.startswith("private:"):
+        ts = translators.load_text_set(set_name.split(":", 1)[1])
+        if ts is not None:
+            return ts["lines"][:limit] if limit else ts["lines"]
+    clips = load_clips(set_name, warnings)
+    lines = [{"id": c["id"], "de": c["text"], "en": c.get("en"), "en_terms": c.get("en_terms", []),
+              "tags": c.get("tags", []), "lang": c["lang"]} for c in clips if c.get("en") and c["lang"] != "en"]
+    return lines[:limit] if limit else lines
+
+
 # ================================================================== main
-def main(argv=None):
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, ValueError):
-        pass
+def parse_args(argv=None):
     ap = argparse.ArgumentParser(description="Dolmi test bench", formatter_class=argparse.RawDescriptionHelpFormatter,
                                  epilog=__doc__.split("\n\n", 1)[1])
-    ap.add_argument("--mode", choices=("component", "stream", "both"), default="both")
-    ap.add_argument("--set", default="synthetic", help="synthetic | fleurs | private:<folder>")
-    ap.add_argument("--model", default="small", help="speech model (models.py key, e.g. small, large-v3-turbo)")
+    ap.add_argument("--mode", choices=("component", "stream", "both", "mt"), default="both",
+                    help="mt = translation only (gold German, no Whisper); a text set always runs mt")
+    ap.add_argument("--set", default="synthetic",
+                    help="synthetic | fleurs | private:<folder> | private:<text set .json>; several: a,b")
+    ap.add_argument("--model", default="small", help="speech model: models.py key, e.g. small, or a CTranslate2 folder")
     ap.add_argument("--device", default="cpu", choices=("cpu", "cuda", "auto"))
     ap.add_argument("--translator", default="opus-de",
-                    help="opus-de (the app's) or another CTranslate2 Marian model: models.py key or HF repo")
-    ap.add_argument("--limit", type=int, help="component: first N clips; stream: first N sessions")
+                    help="opus-de (the app's), another CTranslate2 Marian model (models.py key, HF repo or "
+                         "folder), or gemini | deepl (QA-7 cloud translator, your saved key)")
+    ap.add_argument("--cloud-timeout", type=float, default=10.0,
+                    help="cloud translator: seconds to wait per line (answers after 1.5 s count as fallbacks)")
+    ap.add_argument("--limit", type=int, help="component/mt: first N clips/lines; stream: first N sessions")
     ap.add_argument("--no-terms", action="store_true", help="run without the fictional glossary/vocabulary")
     ap.add_argument("--comet", action="store_true", help="also score COMET (needs --comet-python)")
     ap.add_argument("--comet-python", default=os.environ.get("DOLMI_COMET_PYTHON"),
@@ -853,36 +1018,57 @@ def main(argv=None):
     ap.add_argument("--speed", type=float, default=1.0, help="with --realtime: playback speed")
     ap.add_argument("--compute-scale", type=float, default=1.0,
                     help="stream: count compute time x this (e.g. 2 = pretend the PC is twice as slow)")
+    ap.add_argument("--smoke", action="store_true",
+                    help="CI smoke: 25 FLEURS clips, Whisper small + Opus-MT on CPU, component mode; exits 1 when "
+                         "WER rises > 1 or chrF falls > 1 vs the 'smoke' baseline entry")
+    ap.add_argument("--check-baseline", action="store_true", help="exit 1 on the smoke limits vs the matching entry")
     ap.add_argument("--write-baseline", action="store_true", help="store the numbers in eval/baseline.json")
     ap.add_argument("--note", default="", help="free text shown under the table title")
     args = ap.parse_args(argv)
+    if args.smoke:
+        for k, v in SMOKE.items():
+            setattr(args, k, v)
+    return args
 
+
+def run_set(args, set_name, argv):
     warnings = []
     man = load_manifest()
     terms = man.get("terms") or []
+    text_set = translators.load_text_set(set_name.split(":", 1)[1]) if set_name.startswith("private:") else None
+    if text_set is not None:
+        text_set["_path"] = set_name.split(":", 1)[1]
+    mode = "mt" if text_set is not None else args.mode
     started = datetime.now(timezone.utc)
-    run = {"set": args.set if not args.set.startswith("private:") else "private", "model": args.model,
-           "device": args.device, "translator": args.translator, "terms": not args.no_terms,
+    label = "smoke" if args.smoke else (set_name if not set_name.startswith("private:") else
+                                        "private-text" if text_set is not None else "private")
+    run = {"set": label, "model": "none" if mode == "mt" else args.model,
+           "device": args.device, "translator": args.translator, "terms": not args.no_terms, "mode": mode,
            "date": started.strftime("%Y-%m-%dT%H:%M:%SZ"), "git": git_rev(), "note": args.note,
-           "command": "python eval/run_eval.py " + " ".join(a if not a.startswith("private:") else "private:<folder>"
-                                                           for a in (argv if argv is not None else sys.argv[1:]))}
-    print(f"Loading {args.model} on {args.device} ...")
-    eng = Timed(make_engine(args, terms))
+           "command": "python eval/run_eval.py " + " ".join(
+               "private:<private>" if "private:" in a else a for a in (argv if argv is not None else sys.argv[1:]))}
+    print(f"[{label}] Loading {run['model']} on {args.device} ({args.translator}) ...")
+    eng = Timed(make_engine(args, terms, text_set=text_set, mt_only=mode == "mt"))
     run["device"] = getattr(eng, "device", args.device) if args.device == "auto" else args.device
-    warm_up(eng, args.set, warnings)
+    if mode != "mt":
+        warm_up(eng, set_name, warnings)
     rows = []
-    if args.mode in ("component", "both"):
-        clips = load_clips(args.set, warnings, args.limit)
+    if mode == "mt":
+        lines = mt_lines(set_name, warnings, args.limit)
+        print(f"Translation only: {len(lines)} lines")
+        run["mt"] = run_mt(eng, lines, rows)
+        run["mt"]["mt_call_p50"] = metrics.percentile(eng.calls["mt"], 50)
+        run["mt"]["mt_call_p95"] = metrics.percentile(eng.calls["mt"], 95)
+        _comet(args, rows, run["mt"], warnings)
+        _cloud_stats(eng, run["mt"])
+    if mode in ("component", "both"):
+        clips = load_clips(set_name, warnings, args.limit)
         print(f"Component mode: {len(clips)} clips")
         run["component"] = run_component(eng, clips, rows)
-        if args.comet:
-            score, note = run_comet(args.comet_python, rows)
-            run["component"]["comet"] = score
-            if note:
-                run["component"]["comet_note"] = note
-                warnings.append(note)
-    if args.mode in ("stream", "both"):
-        sessions = load_sessions(args.set, warnings)[:args.limit] if args.limit else load_sessions(args.set, warnings)
+        _comet(args, rows, run["component"], warnings)
+        _cloud_stats(eng, run["component"])
+    if mode in ("stream", "both"):
+        sessions = load_sessions(set_name, warnings)[:args.limit] if args.limit else load_sessions(set_name, warnings)
         parts = []
         eng.calls["asr"].clear()
         eng.calls["mt"].clear()
@@ -903,22 +1089,64 @@ def main(argv=None):
             run["stream"][f"{stage}_call_p95"] = metrics.percentile(eng.calls[stage], 95)
     run["warnings"] = warnings
 
-    RESULTS.mkdir(parents=True, exist_ok=True)
-    name = f"{started:%Y%m%d-%H%M%S}_{run['set']}_{args.model}_{run['device']}"
-    with (RESULTS / f"{name}.jsonl").open("w", encoding="utf-8") as f:
-        f.write(json.dumps({"kind": "run", **{k: v for k, v in run.items() if k not in ("component", "stream")}},
+    # private sets: per-line results stay next to the private data, never in the checkout
+    private = Path(set_name.split(":", 1)[1]).expanduser().resolve() if set_name.startswith("private:") else None
+    out_dir = RESULTS if private is None else (private if private.is_dir() else private.parent) / "results"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tr_tag = Path(args.translator).name if args.translator != "opus-de" else ""
+    name = "_".join(x for x in (f"{started:%Y%m%d-%H%M%S}", run["set"], Path(run["model"]).name, run["device"], tr_tag) if x)
+    with (out_dir / f"{name}.jsonl").open("w", encoding="utf-8") as f:
+        f.write(json.dumps({"kind": "run", **{k: v for k, v in run.items() if k not in ("component", "stream", "mt")}},
                            ensure_ascii=False) + "\n")
         for r in rows:
             f.write(json.dumps({"run": name, **r}, ensure_ascii=False) + "\n")
-        f.write(json.dumps({"kind": "summary", "component": numbers_only(run.get("component") or {}),
-                            "stream": numbers_only(run.get("stream") or {})}, ensure_ascii=False) + "\n")
+        f.write(json.dumps({"kind": "summary", **{k: numbers_only(run.get(k) or {}) for k in ("component", "stream", "mt")}},
+                           ensure_ascii=False) + "\n")
     table = summary_table(run)
-    (RESULTS / f"{name}.md").write_text(table, encoding="utf-8")
+    (out_dir / f"{name}.md").write_text(table, encoding="utf-8")
     print("\n" + table)
-    print(f"Results: {RESULTS / name}.jsonl / .md")
-    if args.write_baseline:
+    print(f"Results: {out_dir / name}.jsonl / .md")
+    if args.write_baseline and private is not None:
+        print("Not written to eval/baseline.json: numbers from a private set stay out of the repo")
+    elif args.write_baseline:
         print(f"Baseline updated: {write_baseline(run)}")
     return run
+
+
+def _comet(args, rows, summary, warnings):
+    if not args.comet:
+        return
+    score, note = run_comet(args.comet_python, rows)
+    summary["comet"] = score
+    if note:
+        summary["comet_note"] = note
+        warnings.append(note)
+    elif any("mt_gold_local" in r for r in rows):
+        summary["comet_local"], _ = run_comet(args.comet_python, rows, "mt_gold_local")
+
+
+def _cloud_stats(eng, summary):
+    inner = getattr(eng, "_eng", eng)
+    if hasattr(inner, "stats"):
+        summary.update(inner.stats())
+
+
+def main(argv=None):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+    args = parse_args(argv)
+    sets = [s for s in args.set.split(",") if s] if not args.set.startswith("private:") or "," in args.set else [args.set]
+    wall = _time.perf_counter()
+    runs = [run_set(args, s, argv) for s in sets]
+    if args.smoke or args.check_baseline:
+        key = SMOKE_KEY if args.smoke else None
+        failed = [f for r in runs for f in check_baseline(r, key)]
+        print(f"Smoke check ({_time.perf_counter() - wall:.0f} s): " + ("PASS" if not failed else "FAIL\n  " + "\n  ".join(failed)))
+        if failed and not args.write_baseline:
+            raise SystemExit(1)
+    return runs[0] if len(runs) == 1 else runs
 
 
 if __name__ == "__main__":

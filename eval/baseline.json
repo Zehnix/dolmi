@@ -2,17 +2,20 @@
  "about": "Test bench numbers (no text, no audio). Key: set|model|device|translator|terms. Re-run the same command to compare; see eval/README.md.",
  "runs": {
   "synthetic|large-v3-turbo|cuda|opus-de|terms": {
-   "date": "2026-10-19T11:06:14Z",
-   "git": "d50e5ad",
-   "command": "python eval/run_eval.py --model large-v3-turbo --device cuda --write-baseline --note Foundation baseline: exon/integration d50e5ad, before wave-1 pipeline fixes",
+   "date": "2026-10-19T19:04:36Z",
+   "git": "1d1d7e3",
+   "command": "python eval/run_eval.py --mode component|stream --model large-v3-turbo --device cuda (two runs)",
+   "note": "wave 1 merged (exon/integration 1d1d7e3); the GPU was shared with another bench run, so latency/RTF read high. Foundation (d50e5ad) numbers are in git history and the QA-1 notes.",
    "component": {
     "clips": 410,
     "wer_de": 3.775,
     "cer_de": 1.269,
     "clips_de": 367,
+    "detected_de": 97.003,
     "wer_en": 0.133,
     "cer_en": 0.051,
     "clips_en": 43,
+    "detected_en": 100.0,
     "wer_by_tag": {
      "B": 15.29,
      "C": 10.78,
@@ -28,29 +31,29 @@
      "soft_start": 3.18
     },
     "term_acc_asr": 96.333,
-    "chrf_gold": 79.378,
-    "bleu_gold": 61.829,
-    "chrf_cascade": 75.237,
-    "bleu_cascade": 54.874,
-    "term_acc_mt": 99.648,
+    "chrf_gold": 79.37,
+    "bleu_gold": 62.0,
+    "chrf_cascade": 75.236,
+    "bleu_cascade": 54.862,
+    "term_acc_mt": 100.0,
     "mt_pairs": 367,
-    "asr_rtf": 0.27
+    "asr_rtf": 0.261
    },
    "stream": {
     "sessions": 4,
     "utterances": 410,
-    "finals": 494,
+    "finals": 346,
     "missed_rate": 0.0,
-    "lost_text_rate": 2.683,
-    "word_recall": 93.41,
-    "stream_wer": 9.69,
-    "clipped_first_word_rate": 5.779,
-    "mid_word_cut_rate": 54.285,
-    "mid_utterance_cut_rate": 63.47,
-    "final_latency_p50": 2.569,
-    "final_latency_p95": 7.367,
-    "first_text_latency_p50": 2.145,
-    "first_text_latency_p95": 2.927,
+    "lost_text_rate": 0.976,
+    "word_recall": 96.939,
+    "stream_wer": 3.731,
+    "clipped_first_word_rate": 1.021,
+    "mid_word_cut_rate": 2.339,
+    "mid_utterance_cut_rate": 19.006,
+    "final_latency_p50": 3.171,
+    "final_latency_p95": 10.223,
+    "first_text_latency_p50": 2.273,
+    "first_text_latency_p95": 4.917,
     "missed_by_tag": {
      "B": 0.0,
      "C": 0.0,
@@ -67,13 +70,36 @@
     },
     "drops": 0,
     "drop_reasons": {},
-    "rtf": 0.947,
-    "clock": "patched",
-    "on_drop": false,
-    "asr_call_p50": 1.249,
-    "asr_call_p95": 1.472,
-    "mt_call_p50": 0.043,
-    "mt_call_p95": 0.101
+    "rtf": 0.959,
+    "clock": "injected",
+    "on_drop": true,
+    "asr_call_p50": 1.375,
+    "asr_call_p95": 1.74,
+    "mt_call_p50": 0.121,
+    "mt_call_p95": 0.343
+   }
+  },
+  "smoke|small|cpu|opus-de|terms": {
+   "date": "2026-10-19T18:20:22Z",
+   "git": "1d1d7e3",
+   "command": "python eval/run_eval.py --smoke --write-baseline --note QA-3 smoke baseline: exon/integration 1d1d7e3",
+   "component": {
+    "clips": 25,
+    "wer_de": 10.79,
+    "cer_de": 3.478,
+    "clips_de": 25,
+    "detected_de": 100.0,
+    "wer_by_tag": {
+     "fleurs": 10.79
+    },
+    "term_acc_asr": null,
+    "chrf_gold": 62.505,
+    "bleu_gold": 32.811,
+    "chrf_cascade": 60.419,
+    "bleu_cascade": 27.969,
+    "term_acc_mt": null,
+    "mt_pairs": 25,
+    "asr_rtf": 0.429
    }
   }
  }
