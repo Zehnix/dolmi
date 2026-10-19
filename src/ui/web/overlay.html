@@ -36,19 +36,22 @@ html,body{height:100%;background:transparent;overflow:hidden;font-family:var(--u
 .grip{position:fixed;right:3px;bottom:3px;width:16px;height:16px;cursor:nwse-resize;opacity:.5}
 .grip:before{content:"";position:absolute;right:3px;bottom:3px;width:9px;height:9px;border-right:2px solid #9a917b;border-bottom:2px solid #9a917b;border-radius:0 0 3px 0}
 #draft .tent{opacity:.6;font-style:italic}
+[role="button"]:focus-visible{outline:2px solid var(--ac);outline-offset:1px}   /* APP-14 */
 </style>
 </head>
 <body>
 <div class="hud">
-  <div class="bar pywebview-drag-region" id="dragbar"><span class="dot pulse" id="dot"></span><span class="nm">Dolmi</span><span class="sp"></span><span class="srcb" id="srcb" title="Listening to the speaker — click to switch to the microphone"><svg viewBox="0 0 24 24"><path id="srcp" d="M11 5 6 9H2v6h4l5 4V5zM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg><span id="srct">Speaker</span></span><span class="lockm" id="lockMark" title="Locked: clicks go through. Unlock in Dolmi or with the shortcut"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>Locked</span><span class="x" id="close" title="Hide">✕</span></div>
-  <div class="body" id="body"><div class="idle" id="idle">Listening…</div></div>
-  <div class="grip" id="grip"></div>
+  <div class="bar pywebview-drag-region" id="dragbar"><span class="dot pulse" id="dot"></span><span class="nm">Dolmi</span><span class="sp"></span><span class="srcb" id="srcb" role="button" tabindex="0" title="Listening to the speaker — click to switch to the microphone"><svg viewBox="0 0 24 24"><path id="srcp" d="M11 5 6 9H2v6h4l5 4V5zM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg><span id="srct">Speaker</span></span><span class="lockm" id="lockMark" title="Locked: clicks go through. Unlock in Dolmi or with the shortcut"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>Locked</span><span class="x" id="close" role="button" tabindex="0" aria-label="Hide the subtitle bar" title="Hide">✕</span></div>
+  <div class="body" id="body" role="log" aria-live="off" aria-label="Subtitles"><div class="idle" id="idle">Listening…</div></div>
+  <div class="grip" id="grip" aria-hidden="true"></div>
 </div>
 <script>
 const $=s=>document.querySelector(s);
 const api=()=>window.pywebview&&window.pywebview.api;
 const esc=s=>(''+s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const body=$('#body');
+/* APP-14: the corner controls are spans (the bar is a drag region): Enter and Space press them too */
+document.addEventListener('keydown',e=>{ const t=e.target; if((e.key==='Enter'||e.key===' ')&&t.matches&&t.matches('[role="button"]')){ e.preventDefault(); t.click(); } });
 function clearIdle(){ const i=$('#idle'); if(i) i.remove(); }
 /* follow new lines only while the bar is scrolled to the bottom (scrolling up to re-read stays put).
    Only the reader un-sticks it: autoTop is where follow() last scrolled, so a resize does not. Checked on
