@@ -13,7 +13,7 @@ v2 improvements over v1:
 The window and subtitle bar live in src/ (webview UI). Run: start.bat (Windows), Mac/start.command (macOS)
 or the installed app.
 """
-import os, queue, re, threading, time
+import os, queue, re, threading, time, unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -29,14 +29,22 @@ PAUSE_TO_FINALIZE = 0.6    # s of silence that ends a sentence
 MAX_UTTERANCE = 12.0       # s, force-finalize long monologues
 MIN_SENTENCE = 3.0         # s, a draft ending in . ? ! this long is finalized without a pause
 SILENCE_RMS = 0.006        # energy threshold (raise if noisy)
+LOW_ENERGY_RMS = 0.015     # loudest 100 ms below this: a lone "Thank you." there is Whisper's ghost
 CLOUD_SPLIT, CLOUD_BREATH, CLOUD_MAX = 3.0, 0.2, 6.0   # cloud captions: cut long speech sooner
 
-HALLUCINATIONS = [         # typical Whisper output on silence / noise
-    "untertitel", "amara.org", "zdf", "vielen dank fürs zuschauen",
-    "danke fürs zuschauen", "bis zum nächsten mal", "copyright",
-    "swr", "wdr", "tschüss", "abonniert",
-    "thanks for watching", "thank you for watching", "subscribe to", "sous-titrage",
+# Typical Whisper output on silence / noise. A line is junk only when these phrases (whole words)
+# make up most of it: "Tschüss, bis morgen alle!" is a real line.
+HALLUCINATIONS = [
+    "untertitel im auftrag des zdf", "untertitel im auftrag des", "untertitel der amara.org-community",
+    "untertitel von", "untertitel", "untertitelung", "amara.org", "zdf", "swr", "wdr",
+    "vielen dank fürs zuschauen", "danke fürs zuschauen", "bis zum nächsten mal", "copyright",
+    "abonniert", "abonnieren", "thanks for watching", "thank you for watching", "subscribe to",
+    "sous-titrage", "sous-titres",
 ]
+SILENCE_GHOSTS = {         # kept when someone says them; dropped alone on near-silent audio
+    "thank you", "thank you very much", "thanks", "vielen dank", "tschüss",
+}
+NON_LATIN_LANGUAGES = {"ru", "uk", "bg", "el", "ar", "fa", "ur", "hi", "zh", "ja", "ko"}
 
 # --------------------------------------------------------------- capture
 # Capture is platform code; re-exported here so callers keep using live_subs.loopback_stream etc.
@@ -175,9 +183,41 @@ def echoes_terms(text: str, terms: set) -> bool:
     hits = sum(w.lower() in terms for w in re.findall(r"\w+", text))
     return len(parts) >= 5 and hits >= 2 and sum(len(x.split()) <= 2 for x in parts) >= 0.7 * len(parts)
 
-def is_junk(t: str) -> bool:
-    low = t.lower()
-    return len(re.sub(r"\W", "", low)) < 3 or any(h in low for h in HALLUCINATIONS)
+_URL = re.compile(r"https?://|www\.\S", re.I)
+_W = "A-Za-z0-9À-ɏ"   # Latin letters (with accents): only these mark word edges, as Whisper glues CJK onto "Amara.org"
+_DOMAIN = re.compile(rf"(?<![{_W}.-])[{_W}-]+(?:\.[{_W}-]+)*\.(?:com|org|net|de|io|tv|info|eu|at|ch)(?![{_W}])", re.I)
+_HALLUCINATION = re.compile("|".join(rf"(?<![{_W}]){re.escape(h)}(?![{_W}])" for h in
+                                     sorted(HALLUCINATIONS, key=len, reverse=True)), re.I)
+
+def _letters(t: str) -> int:
+    return sum(c.isalnum() for c in t)
+
+def junk_reason(t: str, energy=None, lang=None):
+    """Why a line is Whisper junk rather than speech (None = keep it).
+
+    energy: loudest 100 ms RMS of the audio (None = unknown: lone ghost phrases are kept);
+    lang: the spoken language (None or "auto" = unknown: other scripts are kept)."""
+    letters = _letters(t)
+    if letters < 2:                                   # '..', '-' (but 'Ja', 'OK' are lines)
+        return "no_words"
+    if _URL.search(t) or sum(_letters(m.group()) for m in _DOMAIN.finditer(t)) >= 0.5 * letters:
+        return "url"
+    covered = sum(_letters(m.group()) for m in _HALLUCINATION.finditer(t))
+    if covered >= 0.6 * letters:
+        return "hallucination"
+    if lang not in (None, "auto") and lang not in NON_LATIN_LANGUAGES:
+        alpha = [c for c in t if c.isalpha()]
+        latin = sum("LATIN" in unicodedata.name(c, "") for c in alpha)
+        if alpha and latin < 0.5 * len(alpha):        # Cyrillic, Hangul, CJK, Arabic ... on German audio
+            return "non_latin"
+    if energy is not None and energy < LOW_ENERGY_RMS and \
+            re.sub(r"[^\w\s]", "", t).strip().lower() in SILENCE_GHOSTS:
+        return "silence_ghost"
+    return None
+
+def is_junk(t: str, energy=None, lang=None) -> bool:
+    return junk_reason(t, energy, lang) is not None
+
 
 # ------------------------------------------------------------ transcript
 class Transcript:
