@@ -26,6 +26,7 @@ import config
 import assistant
 import inbox
 import live_subs
+import clarify
 import cloud_speech
 import cloud_translate
 import dolmi_platform
@@ -56,9 +57,10 @@ SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_tran
             "preload_models",                                  # APP-4
             "check_updates",                                   # APP-6
             "shortcuts_on",                                    # APP-7
-            "speaker_labels"}                                  # SPK-4
+            "speaker_labels",                                  # SPK-4
+            "clarify_queue"}                                   # VOC-9
 BOOL_SETTINGS = {"warn_silence", "preload_models", "check_updates", "shortcuts_on",
-                 "speaker_labels"}                       # on/off switches that must be true or false
+                 "speaker_labels", "clarify_queue"}                       # on/off switches that must be true or false
 SPEAKER_NAME_MAX = 40                                    # SPK-4: longest speaker name
 # APP-3 'nothing heard' warning: how quiet counts as silence, and how long before Dolmi says so
 HEARD_SILENCE_RMS = live_subs.SILENCE_RMS
@@ -843,6 +845,8 @@ class Api:
             if not self._alive(token):                # stopped while the models loaded
                 return
             self._engine.language = self._settings["language"]
+            self._engine.clarify = self._clarify = (clarify.Queue(self._vocab_rows(), self._clarify_ignored())
+                                                    if self._settings.get("clarify_queue") else None)
             with self._hist_lock:
                 self._history = []
             self._chat_id, self._ai_history = None, []
@@ -1609,6 +1613,45 @@ class Api:
         if self._engine:
             self._engine.reload_terms()
         return {"ok": True, "profile": match}
+
+    # ------------------------------------------------------------------ VOC-9 clarify queue
+    CLARIFY_IGNORE = "clarify_ignore.txt"   # words the user said never to ask about again (config folder)
+
+    def _vocab_rows(self):
+        return _vocab_items(self._read_file("vocabulary.txt"), self._read_file("glossary.txt"))
+
+    def _clarify_ignored(self):
+        return [w.strip() for w in self._read_file(self.CLARIFY_IGNORE).splitlines() if w.strip()]
+
+    def clarify_list(self):
+        """The last meeting's unsure words: {on, items: [{heard, suggest, group, known, context, count}]}."""
+        q = getattr(self, "_clarify", None)
+        return {"on": bool(self._settings.get("clarify_queue")),
+                "items": [{k: e[k] for k in ("heard", "suggest", "group", "known", "context", "count")}
+                          for e in (q.items() if q else [])]}
+
+    def clarify_add(self, heard, group, term, target=""):
+        """Answer one question: add `term` (and `target` for German -> English / Fix English) to `group`
+        through save_vocab, then drop the question."""
+        try:
+            vocabulary, glossary = clarify.add_rule(self._read_file("vocabulary.txt"), self._read_file("glossary.txt"),
+                                                    str(group), str(term), str(target or ""))
+        except ValueError:
+            return {"ok": False, "error": "Pick a group and type the term (and its English for a rule)."}
+        res = self.save_vocab(vocabulary, glossary)
+        self.clarify_skip(heard)
+        return res
+
+    def clarify_skip(self, heard, forever=False):
+        """Drop one question; forever=True also remembers the word so it is never asked again."""
+        q = getattr(self, "_clarify", None)
+        if q:
+            q.drop(str(heard))
+        if forever and str(heard).strip():
+            words = self._clarify_ignored()
+            if str(heard).strip() not in words:
+                _replace_text(config.CONFIG / self.CLARIFY_IGNORE, "\n".join(words + [str(heard).strip()]) + "\n")
+        return {"ok": True}
 
     def _vocab_mtimes(self):
         out = {}

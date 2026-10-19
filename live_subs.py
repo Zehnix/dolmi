@@ -486,6 +486,9 @@ class Engine:
         raw = " ".join(t for t in (s.text.strip() for s in segs) if t)
         text = drop_echoes(segs, self.terms)
         self.last_info = {"retried": retried, "echo": text != raw}
+        q = getattr(self, "clarify", None)   # VOC-9: unsure words of finals, for "Did they say ...?" after Stop
+        if q is not None and beam == FINAL_BEAM and text:
+            q.add([(w.word, w.probability) for s in segs for w in (getattr(s, "words", None) or [])], text)
         lang = info.language
         if lang == "en" and self.language == "de" and looks_german(text):
             lang = "de"
@@ -500,6 +503,8 @@ class Engine:
         Our own VAD already found speech, so Whisper's VAD only trims (at a lower threshold than its
         default); the retry skips it entirely."""
         vad = {"vad_filter": False} if retry else {"vad_filter": True, "vad_parameters": {"threshold": ASR_VAD_THRESHOLD}}
+        if getattr(self, "clarify", None) is not None and beam == FINAL_BEAM:
+            vad["word_timestamps"] = True    # VOC-9: word probabilities, finals only (they cost time)
         segs, info = self.asr.transcribe(
             audio, language=language, beam_size=beam, condition_on_previous_text=False, **vad,
             # spelling hints go in as hotwords; only the previous sentence is the prompt
