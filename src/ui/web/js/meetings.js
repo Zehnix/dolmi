@@ -55,16 +55,22 @@ async function loadMeetings(){
 /* meeting list with checkboxes: tick several, then Archive/Delete act on all of them */
 let mItems=[],mSel=new Set();
 const mTitle=m=>m.title||`${m.day} ${m.time}`;
-function markHit(text){ const words=mQuery.split(/\s+/).filter(Boolean); let h=esc(text);
-  words.forEach(w=>{ const fold=s=>s.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase(), plain=String(text), f=fold(plain), i=f.indexOf(fold(w));
-    if(i>=0&&f.length===plain.length) h=h.replace(esc(plain.slice(i,i+w.length)),s=>`<mark>${s}</mark>`); });
+const mFold=s=>String(s||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+const mWords=()=>mQuery.split(/\s+/).map(mFold).filter(Boolean);
+/* the line of a hit that shows the search words: German, or English when the words are only there */
+function hitLine(hit){ const n=t=>mWords().filter(w=>mFold(t).includes(w)).length; return n(hit.en)>n(hit.de)?hit.en:hit.de; }
+/* mark the words on the plain text, then escape each piece, so a mark never lands inside an HTML entity */
+function markHit(text){ const plain=String(text||''), f=mFold(plain); if(f.length!==plain.length) return esc(plain);
+  const on=new Array(plain.length).fill(false);
+  mWords().forEach(w=>{ for(let i=f.indexOf(w);i>=0;i=f.indexOf(w,i+w.length)) on.fill(true,i,i+w.length); });
+  let h='', i=0; while(i<plain.length){ let j=i; while(j<plain.length&&on[j]===on[i]) j++; const part=esc(plain.slice(i,j)); h+=on[i]?`<mark>${part}</mark>`:part; i=j; }
   return h; }
 function renderMeetingList(active){
   const n=mSel.size, info=$('#mSelInfo');
   if(info) info.innerHTML=`${n?`<b>${n} selected</b>`:(mQuery?`${mItems.length} found`:'Tick to select several')}<span class="sp" style="flex:1"></span>${n<mItems.length?'<button id="mSelAll">Select all</button>':''}${n?'<button id="mSelNone">Clear</button>':''}`;
   const rows=$('#mRows'); if(!rows) return;
   rows.innerHTML=mItems.map(m=>{ const on=mSel.has(m.name), hit=m.hits&&m.hits[0];
-    const sub=hit?`<span class="mhit">${markHit(hit.de)}${m.matches>1?` <i style="font-style:normal;color:var(--faint)">+${m.matches-1}</i>`:''}</span>`:`<span>${esc(m.name)}</span>`;
+    const sub=hit?`<span class="mhit">${markHit(hitLine(hit))}${m.matches>1?` <i style="font-style:normal;color:var(--faint)">+${m.matches-1}</i>`:''}</span>`:`<span>${esc(m.name)}</span>`;
     return `<div class="rowc${on?' sel':''}"><span class="ck${on?' on':''}" role="checkbox" aria-checked="${on}" tabindex="0" data-n="${esc(m.name)}" title="Select"><i data-lucide="check"></i></span><button class="row${m.name===active?' a':''}" data-n="${esc(m.name)}" data-title-source="${esc(m.titleSource||'')}"><span class="t">${esc(m.day)} · ${esc(m.time)} · ${m.lines} lines</span><b>${esc(mTitle(m))}</b>${sub}</button>${m.name===active?`<button class="mren" data-ren="${esc(m.name)}" title="Rename" aria-label="Rename" style="padding:12px 2px;color:var(--faint)"><i data-lucide="pencil" style="width:14px;height:14px"></i></button>`:''}</div>`; }).join('');
   icons();
   rows.querySelectorAll('.row').forEach(r=>r.onclick=async()=>{ renderMeetingList(r.dataset.n); await openMeeting(r.dataset.n); showHit(r.dataset.n); });
@@ -88,7 +94,7 @@ function renameMeeting(name){ const row=[...$$('#mRows .row')].find(r=>r.dataset
   inp.addEventListener('blur',()=>finish(true)); }
 /* a search opened this meeting: scroll its transcript to the first matching line */
 function showHit(name){ const m=mItems.find(x=>x.name===name), hit=m&&m.hits&&m.hits[0]; if(!hit) return;
-  const line=[...$$('#mDetail .pair2')].find(e=>e.textContent.includes(hit.de)); if(line) line.scrollIntoView({block:'center'}); }
+  const line=[...$$('#mDetail .pair2')].find(e=>e.textContent.includes(hitLine(hit))); if(line) line.scrollIntoView({block:'center'}); }
 /* the ticked meetings, or else the open one */
 const mTargets=()=>mSel.size?[...mSel]:(currentMeeting?[currentMeeting]:[]);
 

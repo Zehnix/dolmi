@@ -162,6 +162,8 @@
     ok(sc.length===1&&sc[0].args[0]==='Sprint',`${label}: search does not call search_meetings('Sprint'): ${JSON.stringify(sc)}`);
     ok(qa('#mRows .row').length===1&&q('#mRows .mhit mark')&&/sprint/i.test(q('#mRows .mhit mark').textContent),`${label}: a search hit is not shown with the matching line`);
     noOverflow(q('#v-meetings'),`${label} meetings search`);
+    s.value='planning'; s.dispatchEvent(new Event('input')); await tick(450);      // a word only in the English line
+    ok(q('#mRows .mhit mark')&&q('#mRows .mhit mark').textContent==='planning',`${label}: a hit only in the English line is not shown marked`);
     s.value='zzz-nothing'; s.dispatchEvent(new Event('input')); await tick(450);
     ok(/No meeting matches/.test(q('#mRows').textContent),`${label}: an empty search result says nothing`);
     s.value=''; s.dispatchEvent(new Event('input')); await tick(450);

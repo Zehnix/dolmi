@@ -55,7 +55,7 @@
     missing_models:()=>[],
     use_model:()=>true, download_model:()=>true, remove_model:()=>({ok:true}),
     list_meetings:()=>meetings,
-    search_meetings:(q)=>meetings.filter(m=>!q||/sprint/i.test(q)).map(m=>q?{...m,matches:1,hits:[lines[0]]}:m).slice(0,q?1:3),
+    search_meetings:(q)=>meetings.filter(m=>!q||/sprint|planning/i.test(q)).map(m=>q?{...m,matches:1,hits:[lines[0]]}:m).slice(0,q?1:3),
     rename_meeting:(n,title)=>({ok:true,title:title||'Weekly sync',titleSource:title?'custom':'lines'}),
     read_meeting:()=>lines,
     meeting_txt:()=>'Dolmi meeting',
