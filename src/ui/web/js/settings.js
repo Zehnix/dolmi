@@ -200,3 +200,41 @@ if($('#swBarLock')) $('#swBarLock').addEventListener('click',async()=>{ const b=
 { const prev=window.dolmi.onBarLock; window.dolmi.onBarLock=on=>{ if(prev) prev(on); setSw('#swBarLock',on); }; }
 async function barLockBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state(); setSw('#swBarLock',!!s.barLocked); }catch(e){ console.error('bar lock boot',e); } }
 document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) barLockBoot(); else window.addEventListener('pywebviewready',barLockBoot); });
+
+/* ---- APP-7 global shortcuts: work while Teams or Zoom has the focus. Click a key button, then press the new
+   keys (Esc cancels, Backspace puts the default back). ---- */
+const SHORTCUTS=[['toggle_live','Start / stop captions'],['toggle_bar','Show / hide the subtitle bar'],['toggle_source','Switch speaker / microphone'],['toggle_lock','Lock / unlock the subtitle bar']];
+let scMap={},scStatus={},scRec=null;
+function fmtCombo(c){ if(!c) return '—'; const parts=c.split('+'), key=parts.pop().toUpperCase();
+  if(PLATFORM.os==='mac') return parts.map(m=>({ctrl:'⌃',alt:'⌥',shift:'⇧',meta:'⌘'})[m]||m).join('')+key;
+  return [...parts.map(m=>({ctrl:'Ctrl',alt:'Alt',shift:'Shift',meta:'Win'})[m]||m),key].join('+'); }
+{ const m=settingsMount('about.shortcuts');
+  if(m){ m.innerHTML=`<div class="set" data-kw="shortcuts hotkeys keyboard global keys teams zoom"><div><div class="lab">Global shortcuts</div><div class="ps" id="scHint">Work while your meeting app has the focus</div></div><button class="sw on" data-sw id="swShortcuts"></button></div>`
+      +SHORTCUTS.map(([k,lab])=>`<div class="set" data-kw="shortcut hotkey keyboard ${esc(lab.toLowerCase())}"><div><div class="lab">${esc(lab)}</div><div class="ps" id="scs-${k}">Click, then press the keys</div></div><button class="btn ghost" id="sc-${k}" data-sc="${k}" style="font-family:var(--mono);font-size:12px;min-width:150px">—</button></div>`).join('');
+    wireNewSwitches(m); } }
+function applyShortcuts(map,status,on){ scMap=map||scMap; scStatus=status||scStatus;
+  SHORTCUTS.forEach(([k])=>{ const b=$('#sc-'+k), s=$('#scs-'+k); if(!b) return; if(scRec!==k) b.textContent=fmtCombo(scMap[k]);
+    if(s) s.textContent=on===false?'Shortcuts are off':scStatus[k]===false?'Another app uses these keys. Pick others':'Click, then press the keys'; });
+  if($('#scHint')) $('#scHint').textContent=`Work while your meeting app has the focus. ${W('hotkey')} always shows Dolmi`;
+  if($('#barLockHint')&&scMap.toggle_lock) $('#barLockHint').textContent=`Clicks go through it to the meeting window. Unlock here or with ${fmtCombo(scMap.toggle_lock)}`; }
+function stopRec(){ if(!scRec) return; const k=scRec; scRec=null; const b=$('#sc-'+k); if(b){ b.classList.remove('on'); b.textContent=fmtCombo(scMap[k]); } }
+$$('[data-sc]').forEach(btn=>btn.addEventListener('click',()=>{ const k=btn.dataset.sc; if(scRec===k){ stopRec(); return; } stopRec(); scRec=k; btn.classList.add('on'); btn.textContent='Press keys…'; }));
+function comboFromKey(e){ const c=e.code||'', key=/^Key[A-Z]$/.test(c)?c.slice(3).toLowerCase():/^Digit\d$/.test(c)?c.slice(5):/^F\d{1,2}$/.test(c)?c.toLowerCase():null;
+  if(!key) return null; return [e.ctrlKey&&'ctrl',e.altKey&&'alt',e.shiftKey&&'shift',e.metaKey&&'meta'].filter(Boolean).concat(key).join('+'); }
+document.addEventListener('keydown',async e=>{ if(!scRec) return; e.preventDefault(); e.stopPropagation();
+  if(e.key==='Escape'){ stopRec(); return; }
+  const k=scRec, combo=(e.key==='Backspace'||e.key==='Delete')?'':comboFromKey(e);
+  if(combo===null) return;                                                     /* only a modifier so far */
+  const b=bridge(); stopRec(); if(!b) return;
+  const r=await b.set_shortcut(k,combo);
+  if(!r.ok){ toast(r.message); return; }
+  applyShortcuts(r.shortcuts,r.status); toast(combo?`Shortcut set: ${fmtCombo(r.shortcuts[k])}`:'Shortcut back to its default'); },true);
+if($('#swShortcuts')) $('#swShortcuts').addEventListener('click',async()=>{ const b=bridge(); if(!b) return; const on=$('#swShortcuts').classList.contains('on');
+  await b.set_setting('shortcuts_on',on); const s=await b.state(); applyShortcuts(s.shortcuts,s.shortcutStatus,s.shortcutsOn); });
+/* a shortcut pressed anywhere: do what the button on screen does */
+{ const prev=window.dolmi.onShortcut; window.dolmi.onShortcut=name=>{ if(prev) prev(name);
+  if(name==='toggle_live') $('#go').click();
+  else if(name==='toggle_bar') setBar(!$('#barBtn').classList.contains('on'));
+  else if(name==='toggle_source') switchSource($('#srcChip').classList.contains('mic')?'speaker':'mic'); }; }
+async function shortcutsBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state(); setSw('#swShortcuts',s.shortcutsOn!==false); applyShortcuts(s.shortcuts||{},s.shortcutStatus||{},s.shortcutsOn); }catch(e){ console.error('shortcuts boot',e); } }
+document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) shortcutsBoot(); else window.addEventListener('pywebviewready',shortcutsBoot); });

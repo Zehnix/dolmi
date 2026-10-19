@@ -46,6 +46,7 @@ DEFAULTS = {
     "warn_silence": True,                         # APP-3: 'Dolmi hears nothing' warning while live
     "preload_models": True,                       # APP-4: load downloaded models when Dolmi opens, keep them
     "check_updates": True,                        # APP-6: ask GitHub for a newer release when Dolmi opens
+    "shortcuts_on": True, "shortcuts": {},       # APP-7: global shortcuts on/off; {action: combo} (empty = defaults)
     "bar_locked": False, "bar_positions": {}, "bar_screen": "",  # APP-8: click-through lock; bar place per screen
 }
 

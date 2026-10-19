@@ -78,6 +78,7 @@ def main():
         api._start_update_check()        # APP-6: is a newer release out? (setting; silent when offline)
         # a system-wide hotkey always brings Dolmi back, even hidden from the taskbar / Dock
         dolmi_platform.start_recover_hotkey(api.recover)
+        api._start_shortcuts()           # APP-7: start/stop, bar, source, lock from any app (after the recover key)
 
     icon = dolmi_platform.app_icon(ROOT)
     webview.start(on_start, gui=dolmi_platform.WEBVIEW_GUI, private_mode=False, icon=str(icon))

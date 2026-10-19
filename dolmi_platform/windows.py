@@ -534,3 +534,77 @@ def start_recover_hotkey(on_press):
     """Ctrl+Alt+Shift+D: a system-wide hotkey that always brings Dolmi back, even hidden from the taskbar."""
     return GlobalHotkey(MOD_CONTROL | MOD_ALT | MOD_SHIFT, VK_D, on_press,
                         name=f"show Dolmi ({WORDS['hotkey']})").start()
+
+
+# ------------------------------------------------------------------ global shortcuts (APP-7)
+MOD_WIN = 0x0008
+WM_QUIT = 0x0012
+_SHORTCUT_MODS = {"ctrl": MOD_CONTROL, "alt": MOD_ALT, "shift": MOD_SHIFT, "meta": MOD_WIN}
+
+
+def _shortcut_vk(key):
+    """Virtual-key code for a shortcut key: a-z, 0-9, f1-f24; None for anything else."""
+    if len(key) == 1 and (key.isascii() and (key.isalpha() or key.isdigit())):
+        return ord(key.upper())
+    if key[:1] == "f" and key[1:].isdigit() and 1 <= int(key[1:]) <= 24:
+        return 0x6F + int(key[1:])                          # VK_F1 = 0x70
+    return None
+
+
+class Shortcuts(threading.Thread):
+    """Dolmi's global shortcuts (start/stop, bar, source, lock): RegisterHotKey on one thread, so they work
+    while Teams or Zoom has the focus. `status` says which ones Windows accepted (another app may own
+    one). stop() unregisters them all; `on_press(name)` runs on its own short thread."""
+
+    def __init__(self, bindings, on_press):
+        super().__init__(daemon=True, name="dolmi-shortcuts")
+        self.bindings, self.on_press = dict(bindings), on_press
+        self.status = {}
+        self.ready = threading.Event()
+        self._tid = None
+
+    def run(self):
+        from ctypes import wintypes
+        u = _user32()
+        self._tid = ctypes.windll.kernel32.GetCurrentThreadId()
+        ids = {}
+        for i, (name, (mods, key)) in enumerate(self.bindings.items(), start=100):
+            vk = _shortcut_vk(key)
+            bits = 0
+            for m in mods:
+                bits |= _SHORTCUT_MODS.get(m, 0)
+            ok = bool(vk and bits and u.RegisterHotKey(None, i, bits | MOD_NOREPEAT, vk))
+            self.status[name] = ok
+            if ok:
+                ids[i] = name
+            else:
+                print(f"Dolmi: could not register the shortcut for {name} (another app may use it)")
+        self.ready.set()
+        msg = wintypes.MSG()
+        try:
+            while u.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                name = ids.get(msg.wParam) if msg.message == WM_HOTKEY else None
+                if name:
+                    threading.Thread(target=self._fire, args=(name,), daemon=True).start()
+        finally:
+            for i in ids:
+                u.UnregisterHotKey(None, i)
+
+    def _fire(self, name):
+        try:
+            self.on_press(name)
+        except Exception as e:
+            print(f"Dolmi shortcut {name} failed: {e}")
+
+    def stop(self):
+        if self._tid:
+            ctypes.windll.user32.PostThreadMessageW(self._tid, WM_QUIT, 0, 0)
+        self.join(2)
+
+
+def start_shortcuts(bindings, on_press):
+    """Register {name: (modifiers, key)} system-wide; returns the handle (.status {name: bool}, .stop())."""
+    s = Shortcuts(bindings, on_press)
+    s.start()
+    s.ready.wait(2)
+    return s

@@ -87,6 +87,11 @@
     ['bar','#swBarLock','click','set_bar_locked',false],
     ['about','#swUpdates','click','set_setting','check_updates'],                          // APP-6
     ['about','#setCheckUpdate','click','check_update',true],
+    ['about','#swShortcuts','click','set_setting','shortcuts_on'],                          // APP-7
+    ['about','#sc-toggle_live','rec:ctrl+alt+shift+KeyK','set_shortcut','toggle_live'],
+    ['about','#sc-toggle_bar','rec:ctrl+alt+shift+F9','set_shortcut','toggle_bar'],
+    ['about','#sc-toggle_source','rec:ctrl+alt+Digit7','set_shortcut','toggle_source'],
+    ['about','#sc-toggle_lock','rec:Backspace','set_shortcut','toggle_lock'],
     ['about','#setDownloadUpdate','click','open_release','https://github.com/Zehnix/dolmi/releases/tag/v2.3.0'],
   ];
   window.__uiControls=CONTROLS;   // other checks (new features) push rows here before run() starts
@@ -96,6 +101,9 @@
     else if(act==='click2'){ el.click(); await tick(); el.click(); }
     else if(act==='change'){ el.value=val; el.dispatchEvent(new Event('change',{bubbles:true})); }
     else if(act==='input'){ el.value=val; el.dispatchEvent(new Event('input',{bubbles:true})); await tick(250); }
+    else if(act==='rec'){ el.click(); await tick(); const parts=val.split('+'), code=parts.pop();
+      const has=m=>parts.includes(m), key=code==='Backspace'?'Backspace':code.replace(/^Key|^Digit/,'');
+      document.dispatchEvent(new KeyboardEvent('keydown',{key,code,ctrlKey:has('ctrl'),altKey:has('alt'),shiftKey:has('shift'),metaKey:has('meta'),bubbles:true})); }
     else if(act==='key'){ el.dispatchEvent(new KeyboardEvent('keydown',{key:val,bubbles:true})); }
   }
   async function settingsChecks(label){
@@ -189,6 +197,21 @@
   }
 
   window.__uiExtra=window.__uiExtra||[];   // async (label, h) => {} checks for newer features
+  /* APP-7/8: a global shortcut does what the button on screen does; the lock switch follows Python */
+  window.__uiExtra.push(async(label,{ok,tick,q,mark,since})=>{
+    let m=mark(); window.dolmi.onShortcut('toggle_live'); await tick(80);
+    ok(since(m,'start_listening').length===1,`${label}: the start/stop shortcut does not start captions`);
+    window.dolmi.onListening(false,''); await tick();
+    m=mark(); window.dolmi.onShortcut('toggle_bar'); await tick(80);
+    ok(since(m,'show_overlay').length+since(m,'hide_overlay').length===1,`${label}: the bar shortcut does not show/hide the bar`);
+    m=mark(); window.dolmi.onShortcut('toggle_source'); await tick(80);
+    ok(since(m,'set_source').length===1,`${label}: the source shortcut does not switch the source`);
+    window.dolmi.onBarLock(true); await tick();
+    ok(q('#swBarLock').classList.contains('on'),`${label}: the lock switch does not follow a lock by shortcut`);
+    window.dolmi.onBarLock(false); await tick();
+    ok(/Ctrl\+Alt\+Shift\+S/.test(q('#sc-toggle_live').textContent),`${label}: shortcut keys are not shown (${q('#sc-toggle_live').textContent})`);
+    ok(/another app/i.test(q('#scs-toggle_lock').textContent),`${label}: a shortcut another app owns is not flagged`);
+  });
 
   async function run(){
     const vp={w:innerWidth,h:innerHeight,dpr:devicePixelRatio};

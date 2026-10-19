@@ -42,8 +42,9 @@ SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_tran
             "overlay", "theme", "ai_length", "ai_context", "opacity", "font",
             "warn_silence",                                    # APP-3
             "preload_models",                                  # APP-4
-            "check_updates"}                                   # APP-6
-BOOL_SETTINGS = {"warn_silence", "preload_models", "check_updates"}                         # on/off switches that must be true or false
+            "check_updates",                                   # APP-6
+            "shortcuts_on"}                                    # APP-7
+BOOL_SETTINGS = {"warn_silence", "preload_models", "check_updates", "shortcuts_on"}                         # on/off switches that must be true or false
 # APP-3 'nothing heard' warning: how quiet counts as silence, and how long before Dolmi says so
 HEARD_SILENCE_RMS = live_subs.SILENCE_RMS
 HEARD_AFTER_S = 20.0
@@ -52,6 +53,39 @@ HEARD_SOUND_NOW_S = 3.0          # sound in the last 3 s counts as "sound presen
 # APP-4 Instant Start: settings that change which models the next Start needs
 ENGINE_SETTINGS = ("model", "language", "speech_source")
 WARM_DEBOUNCE_S = 0.5            # several setting changes in a row load the models once
+
+
+# APP-7 global shortcuts: what each does, and its default (Ctrl+Alt+Shift+D stays "show Dolmi")
+DEFAULT_SHORTCUTS = {"toggle_live": "ctrl+alt+shift+s", "toggle_bar": "ctrl+alt+shift+b",
+                     "toggle_source": "ctrl+alt+shift+m", "toggle_lock": "ctrl+alt+shift+l"}
+RESERVED_SHORTCUTS = {"ctrl+alt+shift+d": "showing Dolmi"}
+_SHORTCUT_MOD_ORDER = ("ctrl", "alt", "shift", "meta")
+_SHORTCUT_MOD_NAMES = {"ctrl": "ctrl", "control": "ctrl", "alt": "alt", "option": "alt", "opt": "alt",
+                       "shift": "shift", "meta": "meta", "cmd": "meta", "command": "meta", "win": "meta", "super": "meta"}
+
+
+def normalize_shortcut(text):
+    """'Ctrl+Shift+Alt+S' -> 'ctrl+alt+shift+s'; None unless it is two or more modifiers (not only Shift)
+    plus a letter, digit or F1-F24, so it can't take an everyday key like Ctrl+S from other apps."""
+    if not isinstance(text, str) or len(text) > 40:
+        return None
+    parts = [x.strip().lower() for x in text.split("+")]
+    if len(parts) < 3 or not all(parts):
+        return None
+    *mods, key = parts
+    mods = {_SHORTCUT_MOD_NAMES.get(m) for m in mods}
+    if None in mods or len(mods) != len(parts) - 1 or mods == {"shift"} or len(mods) < 2:
+        return None
+    ok_key = (len(key) == 1 and key.isascii() and key.isalnum()) or (
+        key[:1] == "f" and key[1:].isdigit() and 1 <= int(key[1:]) <= 24 and key[1:2] != "0")
+    if not ok_key:
+        return None
+    return "+".join([m for m in _SHORTCUT_MOD_ORDER if m in mods] + [key])
+
+
+def _shortcut_parts(combo):
+    *mods, key = combo.split("+")
+    return tuple(mods), key
 
 
 BAR_SAVE_DELAY_S = 0.6           # APP-8: save the bar's place once it stops moving
@@ -178,6 +212,8 @@ class Api:
     # when _engine_state is "ready" (idle | loading | ready | missing)
     _engine_state = "idle"
     _settings_gen = 0                    # bumped by every change to ENGINE_SETTINGS (a load in flight is stale)
+    _shortcuts = None                    # APP-7: the platform's registered shortcuts (None = not started)
+    _shortcut_status = {}                # action -> registered (False: another app has that key)
     _update = None                       # APP-6: the last update check's answer (updates.check), None before
 
     def __init__(self):
@@ -392,6 +428,8 @@ class Api:
             "opacity": s.get("opacity", 0.88), "font": s.get("font", 22),
             "warnSilence": bool(s.get("warn_silence", True)),
             "barVisible": bool(self._overlay_visible), "barLocked": bool(s.get("bar_locked")),
+            "shortcutsOn": bool(s.get("shortcuts_on", True)), "shortcuts": self._shortcut_map(),
+            "shortcutStatus": dict(self._shortcut_status),
             "engine": self._engine_label(), "engineState": self._engine_state,
             "preloadModels": bool(s.get("preload_models", True)),
             "checkUpdates": bool(s.get("check_updates", True)), "update": self._update, "dataFolder": str(self._data), "version": VERSION,
@@ -419,6 +457,8 @@ class Api:
         if key in ENGINE_SETTINGS and not self._session:
             self._drop_engine()              # next Start loads the newly chosen model/translator
             self._request_warm()
+        if key == "shortcuts_on" and self._shortcuts is not None:
+            self._start_shortcuts()
         if key == "preload_models":
             if value:
                 self._request_warm()
@@ -1312,6 +1352,67 @@ class Api:
 
         threading.Thread(target=work, daemon=True).start()
         return {"ok": True}
+
+    # ------------------------------------------------------------------ global shortcuts (APP-7)
+    def _shortcut_map(self):
+        """{action: combo}: the saved ones that are still valid, defaults for the rest."""
+        saved = self._settings.get("shortcuts")
+        saved = saved if isinstance(saved, dict) else {}
+        out = {}
+        for name, default in DEFAULT_SHORTCUTS.items():
+            combo = normalize_shortcut(saved.get(name)) if name in saved else default
+            out[name] = combo or default
+        return out
+
+    def _start_shortcuts(self):
+        """(Re-)register the global shortcuts with the system (main, after the window is up; and after
+        every change). Off: none are registered."""
+        old, self._shortcuts = self._shortcuts, False      # False = started but none registered
+        if old:
+            try:
+                old.stop()
+            except Exception as e:
+                print(f"shortcuts stop: {e}")
+        self._shortcut_status = {}
+        if not self._settings.get("shortcuts_on", True):
+            return {}
+        bindings = {name: _shortcut_parts(combo) for name, combo in self._shortcut_map().items()}
+        try:
+            self._shortcuts = dolmi_platform.start_shortcuts(bindings, self._on_shortcut)
+            self._shortcut_status = dict(self._shortcuts.status)
+        except Exception as e:
+            print(f"Global shortcuts unavailable: {e}")
+        return dict(self._shortcut_status)
+
+    def _on_shortcut(self, name):
+        """A global shortcut was pressed (on the platform's thread). The lock is switched here; the others
+        go to the page, which presses its own button, so the screen and the missing-model prompt stay right."""
+        if name == "toggle_lock":
+            self.toggle_bar_lock()
+        elif name in DEFAULT_SHORTCUTS:
+            self._emit("onShortcut", name)
+
+    def set_shortcut(self, name, combo):
+        """Change one shortcut ('' = back to its default). Refuses everyday keys, a key another action
+        has, and Dolmi's own show-Dolmi key."""
+        if name not in DEFAULT_SHORTCUTS:
+            return {"ok": False, "message": "Unknown shortcut."}
+        combo = DEFAULT_SHORTCUTS[name] if combo in ("", None) else normalize_shortcut(combo)
+        if not combo:
+            return {"ok": False, "message": "Use two or more of Ctrl, Alt, Shift (or Win/Cmd) with a letter, digit or F-key."}
+        if combo in RESERVED_SHORTCUTS:
+            return {"ok": False, "message": f"That one is for {RESERVED_SHORTCUTS[combo]}."}
+        current = self._shortcut_map()
+        clash = next((n for n, c in current.items() if c == combo and n != name), None)
+        if clash:
+            return {"ok": False, "message": "Another Dolmi shortcut uses that already.", "clash": clash}
+        current[name] = combo
+        with self._settings_lock:
+            self._settings["shortcuts"] = {n: c for n, c in current.items() if c != DEFAULT_SHORTCUTS[n]}
+            config.save_settings(self._settings)
+        if self._shortcuts is not None:
+            self._start_shortcuts()
+        return {"ok": True, "shortcuts": self._shortcut_map(), "status": dict(self._shortcut_status)}
 
     # ------------------------------------------------------------------ update check (APP-6)
     def _start_update_check(self):
