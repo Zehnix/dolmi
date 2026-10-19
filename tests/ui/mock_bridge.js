@@ -67,6 +67,9 @@
     read_vocab:()=>({vocabulary:'[keep]\nNordlicht GmbH\n',glossary:'Nordlicht\n'}),
     validate_vocab:()=>({ok:true,vocabulary:[],glossary:[]}),
     save_vocab:()=>({ok:true,problems:{ok:true,vocabulary:[],glossary:[]}}),
+    vocab_summary:()=>({counts:{gloss:1,keep:1,german:0,english:0},problems:0,recent:[{group:'gloss',term:'Nordlicht'}],   // VOC-2/5/11
+      recentFrom:'files',profile:'',profiles:[],bias:[],
+      budget:{tokens:4,limit:224,exact:true,terms:1,chars:9,cut:[],tooLong:false,softTerms:60,softChars:600,cloud:false}}),
     list_chats:()=>[{id:1,title:'What did Lena say?',when:'Mon 19 Oct, 10:05',questions:1}],
     open_chat:()=>[{q:'What did Lena say?',a:'She will look at it next week.',err:'',when:'10:05'}],
     new_chat:()=>true, delete_chat:()=>true, archive_chat:()=>true, ask:()=>1,
