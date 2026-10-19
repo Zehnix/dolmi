@@ -5,12 +5,15 @@
    [german], [english] sections of vocabulary.txt. "Rows" edits them as term/replacement rows, "Raw text"
    as the files themselves; both save through save_vocab(vocabulary, glossary). Python's parser is the
    judge: validate_vocab returns the lines it will not use, with line numbers, before anything is saved.
-   Rows mode keeps the files' comments (header block, comments above a rule, inline notes) and any unknown
-   section verbatim; blank lines inside a section are not kept. ---- */
+   Rows mode keeps the files' comments (header block, comments above a rule, inline notes, notes on a
+   section header) and any unknown section verbatim, but writes all three sections in a fixed order with
+   unknown sections last; blank lines inside a section are not kept.
+   Hand edits to the files are used live (the app watches them), so the editor never saves over a file that
+   changed on disk since it was loaded: unchanged editors reload, edited ones ask before overwriting. ---- */
 const VOC_SECTIONS=['keep','german','english'];
 const VOC_GROUPS={gloss:'Spelling hints',keep:'Keep as is',german:'German → English',english:'Fix English'};
 const VOC_PH={gloss:['Term'],keep:['Term','Same in English'],german:['German','English'],english:['Wrong English','Correct English']};
-let voc=null, vocMode='rows', vocConfirm=false;
+let voc=null, vocMode='rows', vocConfirm=false, vocOverwrite=false, vocDirty=false, vocDisk=null;
 
 /* same comment rule as live_subs.strip_comment: '#' starts a comment, '\#' is a literal '#' */
 function vocStrip(raw){ const i=raw.search(/(?<!\\)#/);
@@ -19,7 +22,7 @@ const vocEsc=s=>String(s||'').trim().replace(/#/g,'\\#');
 const vocRow=(src='',dst='',note='',pre=[])=>({src,dst,note,pre});
 
 function vocParse(vtext,gtext){
-  const m={pre:[],tail:[],gpre:[],gpost:[],groups:{gloss:[],keep:[],german:[],english:[]},post:{keep:[],german:[],english:[]}};
+  const m={pre:[],tail:[],gpre:[],gpost:[],hnote:{},groups:{gloss:[],keep:[],german:[],english:[]},post:{keep:[],german:[],english:[]}};
   let sec=null, notes=[];
   const park=()=>{ if(notes.length) (sec?m.post[sec]:m.pre).push(...notes); notes=[]; };
   for(const raw of String(vtext||'').split(/\r?\n/)){
@@ -27,7 +30,7 @@ function vocParse(vtext,gtext){
     if(body.startsWith('[')){
       const name=body.endsWith(']')?body.slice(1,-1).trim().toLowerCase():'';
       if(sec!=='') park();
-      if(VOC_SECTIONS.includes(name)){ sec=name; continue; }
+      if(VOC_SECTIONS.includes(name)){ sec=name; if(note) m.hnote[name]=note; continue; }
       sec=''; m.tail.push(raw); continue;          // unknown section: kept as written, reported by Python
     }
     if(sec===''){ m.tail.push(raw); continue; }
@@ -54,7 +57,7 @@ function vocSerialize(){
   const v=[...voc.pre]; while(v.length&&!v[v.length-1].trim()) v.pop();
   for(const s of VOC_SECTIONS){
     if(v.length) v.push('');
-    v.push('['+s+']');
+    v.push('['+s+']'+(voc.hnote[s]?'  # '+voc.hnote[s]:''));
     for(const r of voc.groups[s]){ if(!r.src.trim()&&!r.dst.trim()) continue; v.push(...r.pre); v.push(line(r)); rowAt.set('v:'+v.length,r); }
     v.push(...voc.post[s]);
   }
@@ -90,7 +93,18 @@ function vocRowEl(g,r){
 }
 
 function vocStatus(text,kind=''){ const s=$('#vocabStatus'); s.textContent=text; s.className='voc-status'+(kind?' voc-'+kind:''); }
-function vocTouched(){ vocConfirm=false; $('#vocabSave').textContent='Save'; vocStatus('Unsaved changes'); }
+function vocTouched(){ vocConfirm=vocOverwrite=false; vocDirty=true; $('#vocabSave').textContent='Save'; vocStatus('Unsaved changes'); }
+
+/* what is on disk, compared the way save_vocab writes it (trailing whitespace and line endings ignored) */
+const vocNorm=s=>String(s||'').replace(/\r\n/g,'\n').replace(/\s+$/,'');
+const vocSnap=(v,g)=>({vocabulary:vocNorm(v),glossary:vocNorm(g)});
+const vocDiskChanged=d=>!vocDisk||vocNorm(d.vocabulary)!==vocDisk.vocabulary||vocNorm(d.glossary)!==vocDisk.glossary;
+function vocApply(v){
+  voc=vocParse(v.vocabulary,v.glossary); vocDisk=vocSnap(v.vocabulary,v.glossary);
+  vocDirty=vocConfirm=vocOverwrite=false; $('#vocabSave').textContent='Save';
+  $('#vocabRaw').value=v.vocabulary||''; $('#vocabBox').value=v.glossary||'';
+  vocRender();
+}
 
 /* problems from validate_vocab -> list above the groups + marked rows; returns how many */
 function vocShowProblems(res,rowAt){
@@ -140,14 +154,19 @@ async function loadVocab(){
   const b=bridge();
   if(!b){ vocStatus('Vocabulary loads when running in the app.'); return; }
   try{
-    const v=await b.read_vocab();
-    voc=vocParse(v.vocabulary,v.glossary);
-    $('#vocabRaw').value=v.vocabulary||''; $('#vocabBox').value=v.glossary||'';
-    vocRender();
+    vocApply(await b.read_vocab());
     $('#vocabSave').disabled=$('#vocabCheck').disabled=false;
     vocStatus('');
     vocCheck(true);
   }catch(e){ console.error('read_vocab',e); vocStatus('Could not load the vocabulary.','warn'); }
+}
+
+/* tab opened again: pick up hand edits, unless the editor holds unsaved work (Save then asks) */
+async function vocRefresh(){
+  const b=bridge(); if(!b||!voc||vocDirty) return;
+  try{ const d=await b.read_vocab();
+    if(vocDiskChanged(d)){ vocApply(d); vocStatus('Reloaded: the files changed outside Dolmi'); vocCheck(true); } }
+  catch(e){ console.error('read_vocab',e); }
 }
 
 $$('.voc-g').forEach(card=>card.querySelector('.voc-add').onclick=()=>{
@@ -161,6 +180,16 @@ $('#vocabCheck').onclick=()=>vocCheck(false);
 $('#vocabSave').onclick=async()=>{
   const b=bridge();
   if(!b||!voc){ toast('Vocabulary has not loaded yet.'); return; }
+  if(!vocOverwrite){
+    let d=null;
+    try{ d=await b.read_vocab(); }catch(e){ console.error('read_vocab',e); }
+    if(d&&vocDiskChanged(d)){
+      if(!vocDirty){ vocApply(d); vocCheck(true); vocStatus('The files changed outside Dolmi, so they were reloaded. Nothing was saved.','warn'); return; }
+      vocOverwrite=true; $('#vocabSave').textContent='Overwrite';
+      vocStatus('vocabulary.txt or glossary.txt changed outside Dolmi since this editor loaded them. Save again to replace them with what you see here.','warn');
+      return;
+    }
+  }
   const c=vocCurrent();
   let n=0;
   try{ n=vocShowProblems(await b.validate_vocab(c.vocabulary,c.glossary),c.rowAt); }catch(e){ console.error('validate_vocab',e); }
@@ -170,7 +199,7 @@ $('#vocabSave').onclick=async()=>{
     return;
   }
   try{ await b.save_vocab(c.vocabulary,c.glossary);
-    vocConfirm=false; $('#vocabSave').textContent='Save';
+    vocConfirm=vocOverwrite=vocDirty=false; vocDisk=vocSnap(c.vocabulary,c.glossary); $('#vocabSave').textContent='Save';
     vocStatus(n?'Saved — used from the next line, except the marked lines':'Saved — used from the next line', n?'warn':'ok'); }
   catch(e){ console.error('save_vocab',e); vocStatus('Could not save the vocabulary.','warn'); toast('Could not save the vocabulary.'); }
 };
