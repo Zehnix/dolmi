@@ -84,3 +84,18 @@ $('#go').onclick=()=>{
 async function startLive(download){ const b=bridge(); resetFeed(); setLive(true,download?'downloading models…':'loading…');
   const r=await b.start_listening(!!download);
   if(r&&r.missing){ setLive(false); if(!lines) showIdle(); askDownload(r.missing); } }
+
+/* ---- a better subtitle for a line already shown (QA-7 cloud translator): replaced in place ----
+   Python sends onLineUpdate(id, en, {source}) for final `id`; the pair keeps its time stamp and gets a
+   small "cloud" mark (tooltip: which service). Lines are found by data-line, set when the final arrives. */
+function onLineUpdate(id,en,meta){ const p=brows.querySelector(`.pair[data-line="${CSS.escape(String(id))}"]`); if(!p) return false;
+  const c=p.querySelector('.c.en'); if(!c) return false; const ts=c.querySelector('.ts');
+  const old=c.textContent.slice(ts?ts.textContent.length:0);
+  words+=String(en).split(/\s+/).filter(Boolean).length-old.split(/\s+/).filter(Boolean).length; $('#sWords').textContent=words;
+  [...c.childNodes].forEach(n=>{ if(n!==ts) n.remove(); }); c.append(document.createTextNode(en));
+  const src=(meta&&meta.source)||'cloud'; p.dataset.enSource=src; c.title='Improved by '+src+' (the local translation was shown first)';
+  c.classList.add('cloudfix'); return true; }
+{ const d=window.dolmi, onLine=d.onLine;
+  d.onLine=(ts,de,en,meta)=>{ onLine(ts,de,en,meta); const p=brows.lastElementChild;
+    if(p&&p.classList.contains('pair')&&meta&&meta.id!=null) p.dataset.line=meta.id; };
+  d.onLineUpdate=(id,en,meta)=>onLineUpdate(id,en,meta); }
