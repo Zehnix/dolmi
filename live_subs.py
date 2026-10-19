@@ -30,6 +30,7 @@ MAX_UTTERANCE = 12.0       # s, force-finalize long monologues
 MIN_SENTENCE = 3.0         # s, a draft ending in . ? ! this long is finalized without a pause
 SILENCE_RMS = 0.006        # energy threshold (raise if noisy)
 LOW_ENERGY_RMS = 0.015     # loudest 100 ms below this: a lone "Thank you." there is Whisper's ghost
+ASR_VAD_THRESHOLD = 0.35   # faster-whisper's own VAD: lower than its 0.5 default so soft speech survives
 CLOUD_SPLIT, CLOUD_BREATH, CLOUD_MAX = 3.0, 0.2, 6.0   # cloud captions: cut long speech sooner
 
 # Typical Whisper output on silence / noise. A line is junk only when these phrases (whole words)
@@ -138,18 +139,31 @@ class Engine:
 
         People switch to English mid-meeting, so a non-English setting still lets Whisper
         detect: the chosen language or English is kept; anything else is a misdetection
-        (usually a short clip) and is transcribed again in the chosen language."""
+        (usually a short clip) and is transcribed again in the chosen language.
+        Nothing heard: tried once more without Whisper's own VAD before the buffer is given up.
+        `last_info` says what happened ({'retried', 'echo'}) so the worker can log why a line is empty."""
         mixed = self.language not in ("auto", "en")
-        segs, info = self._asr(audio, None if self.language == "auto" or mixed else self.language)
+        language = None if self.language == "auto" or mixed else self.language
+        segs, info = self._asr(audio, language)
         if mixed and info.language not in (self.language, "en"):
-            segs, info = self._asr(audio, self.language)
-        text = collapse_repeats(" ".join(s.text.strip() for s in segs).strip())
-        return ("" if echoes_terms(text, self.terms) else text), info.language
+            language = self.language
+            segs, info = self._asr(audio, language)
+        retried = not any(s.text.strip() for s in segs)
+        if retried:
+            segs, info = self._asr(audio, language, retry=True)
+        raw = [s.text.strip() for s in segs]
+        kept = [echoes_terms(t, self.terms, getattr(s, "no_speech_prob", None), getattr(s, "avg_logprob", None))
+                for t, s in zip(raw, segs)]
+        self.last_info = {"retried": retried, "echo": kept != raw}
+        return collapse_repeats(" ".join(t for t in kept if t).strip()), info.language
 
-    def _asr(self, audio, language):
+    def _asr(self, audio, language, retry=False):
+        """Whisper segments (each with no_speech_prob and avg_logprob) and the detection info.
+        Our own VAD already found speech, so Whisper's VAD only trims (at a lower threshold than its
+        default); the retry skips it entirely."""
+        vad = {"vad_filter": False} if retry else {"vad_filter": True, "vad_parameters": {"threshold": ASR_VAD_THRESHOLD}}
         segs, info = self.asr.transcribe(
-            audio, language=language,
-            beam_size=5, vad_filter=True, condition_on_previous_text=False,
+            audio, language=language, beam_size=5, condition_on_previous_text=False, **vad,
             # spelling hints go in as hotwords; only the previous sentence is the prompt
             hotwords=self.glossary or None, initial_prompt=self.context[-200:] or None)
         return list(segs), info
@@ -176,12 +190,25 @@ def collapse_repeats(text: str) -> str:
     """Whisper sometimes loops: 'He's a good man. He's a good man.' -> said once."""
     return re.sub(r"(\b.{8,}?)(?:[\s,.!?]+\1\b)+", r"\1", text, flags=re.I)
 
-def echoes_terms(text: str, terms: set) -> bool:
+ECHO_TRUSTED = (0.2, -0.5)   # no_speech_prob below and avg_logprob above: Whisper is sure it heard speech
+
+def _is_term_list(sentence: str, terms: set) -> bool:
+    """A comma list of 5+ one- or two-word items (none longer than three) with 2+ of our own terms."""
+    parts = [x for x in re.split(r"[,;]", sentence) if x.strip()]
+    if len(parts) < 5 or any(len(x.split()) > 3 for x in parts):
+        return False
+    hits = sum(w.lower() in terms for w in re.findall(r"\w+", sentence))
+    return hits >= 2 and sum(len(x.split()) <= 2 for x in parts) >= 0.7 * len(parts)
+
+def echoes_terms(text: str, terms: set, no_speech_prob=None, avg_logprob=None) -> str:
     """On silence or music Whisper can read its hint list back: 'Acme, Alice, Bob, Carol, …'.
-    A comma list of mostly one- or two-word items that contains our own terms is that echo."""
-    parts = [x for x in re.split(r"[,;]", text) if x.strip()]
-    hits = sum(w.lower() in terms for w in re.findall(r"\w+", text))
-    return len(parts) >= 5 and hits >= 2 and sum(len(x.split()) <= 2 for x in parts) >= 0.7 * len(parts)
+    Returns `text` without the sentences that are that echo ('' when the whole line was one).
+    A Whisper segment that is confident it heard speech keeps its list: people do read out names."""
+    if no_speech_prob is not None and avg_logprob is not None and \
+            no_speech_prob < ECHO_TRUSTED[0] and avg_logprob > ECHO_TRUSTED[1]:
+        return text
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    return " ".join(x for x in sentences if x and not _is_term_list(x, terms))
 
 _URL = re.compile(r"https?://|www\.\S", re.I)
 _W = "A-Za-z0-9À-ɏ"   # Latin letters (with accents): only these mark word edges, as Whisper glues CJK onto "Amara.org"

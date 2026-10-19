@@ -67,9 +67,9 @@ def test_summary_sends_transcript_and_cuts_very_long_ones():
 def test_glossary_echo_is_dropped_but_real_sentences_stay():
     terms = {"crm", "alice", "bob", "carol", "acme", "falcon"}
     echo = "CRM, Perketer, Luzer, Erdmann, Kolor, Alice, Alice, Bob, Carol, Michel, Zellow, und Marseille."
-    assert m.echoes_terms(echo, terms)
-    assert not m.echoes_terms("Alice und Bob prüfen morgen das CRM-Release.", terms)
-    assert not m.echoes_terms("Wir brauchen Tests, Logs, Metriken, Alerts und ein Dashboard.", terms)
+    assert m.echoes_terms(echo, terms) == ""
+    for real in ("Alice und Bob prüfen morgen das CRM-Release.", "Wir brauchen Tests, Logs, Metriken, Alerts und ein Dashboard."):
+        assert m.echoes_terms(real, terms) == real
 
 def test_whisper_loops_are_said_once():
     assert m.collapse_repeats("Er ist ein sehr guter Mann. Er ist ein sehr guter Mann. Hallo.") == \
