@@ -833,7 +833,7 @@ def warm_up(eng, set_name, warnings):
 # ================================================================== main
 def main(argv=None):
     try:
-        sys.stdout.reconfigure(errors="replace")
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, ValueError):
         pass
     ap = argparse.ArgumentParser(description="Dolmi test bench", formatter_class=argparse.RawDescriptionHelpFormatter,
