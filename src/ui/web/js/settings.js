@@ -39,7 +39,7 @@ let curLang='de';
 function applyLang(l){ curLang=LANG[l]?l:'de'; const f=LANG[curLang], t=LANG[f.to];
   $('#chipFrom').textContent=f.self; $('#chipTo').textContent=t.self;
   $('#headFrom').textContent=f.self.toUpperCase(); $('#headTo').textContent=t.self.toUpperCase();
-  $('#idleHint').textContent=`Press start — ${f.name} on the left, ${t.name} on the right.`;
+  const hint=$('#idleHint'); if(hint) hint.textContent=`Press start — ${f.name} on the left, ${t.name} on the right.`;   /* gone while captions show */
   if($('#srcLab')) $('#srcLab').textContent=curLang==='auto'?'Show original speech':`Show ${f.name} source`;
   if($('#setLang')) $('#setLang').value=curLang;
   $$('#onbBody [data-lang]').forEach(x=>x.classList.toggle('on',x.dataset.lang===curLang)); }
