@@ -39,6 +39,10 @@ SILENCE_RMS = 0.006        # energy threshold (raise if noisy)
 LOW_ENERGY_RMS = 0.01      # loudest 100 ms below this: a lone "Thank you." there is Whisper's ghost
                            # (quiet remote speech peaks near 0.018, so this stays well under it)
 ASR_VAD_THRESHOLD = 0.35   # faster-whisper's own VAD: lower than its 0.5 default so soft speech survives
+FINAL_BEAM = 5             # Whisper beam for finals
+DRAFT_BEAM = 1             # drafts decode greedily: they are redone a second later anyway
+DRAFT_WINDOW = 6.0         # s, a draft decodes only the end of the sentence (cost stays flat on long ones)
+DRAFT_MT_LAG = 2.0         # s, a draft whose audio is this far behind the capture skips translation
 CLOUD_SPLIT, CLOUD_BREATH, CLOUD_MAX = 3.0, 0.2, 6.0   # cloud captions: cut long speech sooner
 CLOUD_MIN = 0.3            # s of speech a cloud utterance needs ("Ja, genau." is ~0.6 s)
 CLOUD_OVERLAP = 0.3        # s carried over (and de-duplicated) when a cloud cut finds no pause
@@ -456,7 +460,7 @@ class Engine:
         print(f"📥 Translator {m.name}")
         return self.translators[key]
 
-    def transcribe(self, audio, retry_empty=True):
+    def transcribe(self, audio, retry_empty=True, beam=FINAL_BEAM):
         """Speech -> (text in the spoken language, language code).
 
         People switch to English mid-meeting, so a non-English setting still lets Whisper
@@ -468,10 +472,11 @@ class Engine:
         `last_info` says what happened ({'retried', 'echo'}) so the worker can log why a line is empty."""
         mixed = self.language not in ("auto", "en")
         language = None if self.language == "auto" or mixed else self.language
-        segs, info = self._asr(audio, language)
+        opts = {} if beam == FINAL_BEAM else {"beam": beam}
+        segs, info = self._asr(audio, language, **opts)
         if mixed and info.language not in (self.language, "en"):
             language = self.language
-            segs, info = self._asr(audio, language)
+            segs, info = self._asr(audio, language, **opts)
         retried = retry_empty and not any(s.text.strip() for s in segs)
         if retried:
             segs, info = self._asr(audio, language, retry=True)
@@ -484,15 +489,16 @@ class Engine:
         return collapse_repeats(text), lang
 
     def transcribe_draft(self, audio):
-        return self.transcribe(audio, retry_empty=False)
+        """A cheap look at the sentence still being spoken: greedy decoding of its last DRAFT_WINDOW s."""
+        return self.transcribe(audio[-int(DRAFT_WINDOW * SR):], retry_empty=False, beam=DRAFT_BEAM)
 
-    def _asr(self, audio, language, retry=False):
+    def _asr(self, audio, language, retry=False, beam=FINAL_BEAM):
         """Whisper segments (each with no_speech_prob and avg_logprob) and the detection info.
         Our own VAD already found speech, so Whisper's VAD only trims (at a lower threshold than its
         default); the retry skips it entirely."""
         vad = {"vad_filter": False} if retry else {"vad_filter": True, "vad_parameters": {"threshold": ASR_VAD_THRESHOLD}}
         segs, info = self.asr.transcribe(
-            audio, language=language, beam_size=5, condition_on_previous_text=False, **vad,
+            audio, language=language, beam_size=beam, condition_on_previous_text=False, **vad,
             # spelling hints go in as hotwords; only the previous sentence is the prompt
             hotwords=self.glossary or None, initial_prompt=self.context[-200:] or None)
         return list(segs), info
