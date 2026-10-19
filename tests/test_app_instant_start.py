@@ -176,3 +176,13 @@ def test_cloud_source_without_a_key_stays_idle_quietly(installed):
     api._settings["speech_source"] = "openai"
     assert api._warm_once() is False
     assert api.state()["engineState"] == "idle" and "onError" not in api._window.js()
+
+
+def test_warm_up_also_loads_the_vad_and_the_real_decoder(installed, engines, monkeypatch):
+    """Bench (RTX 4060): without these the first caption after Start took ~4 s longer than the next ones."""
+    gaps = []
+    monkeypatch.setattr(live_subs, "speech_gap", lambda audio: gaps.append(float(abs(audio).max())) or None)
+    assert installed._warm_once() is True
+    runs = engines[0].asr.runs
+    assert gaps and gaps[0] > live_subs.SILENCE_RMS                    # loud enough to pass the early-out
+    assert any(kw["beam_size"] == 5 and kw["vad_filter"] is True for _, kw in runs)
