@@ -69,7 +69,7 @@ Assert-Exit "pip install"
 Get-ChildItem $site -Directory -Filter "bin" | Remove-Item -Recurse -Force   # console-script shims, unused
 
 Step "App files"
-foreach ($f in "live_subs.py", "cloud_speech.py", "assistant.py", "inbox.py", "models.py",
+foreach ($f in "live_subs.py", "cloud_speech.py", "assistant.py", "inbox.py", "models.py", "speakers.py",
                "vocabulary.example.txt", "glossary.example.txt") {
   Copy-Item (Join-Path $root $f) $appDir
 }
@@ -91,6 +91,10 @@ Assert-Exit "compileall"
 Step "Smoke test: the bundled runtime imports the whole app"
 & $rtPy -c "import sys; sys.path[:0] = [r'$appDir', r'$appDir\src']; import webview, faster_whisper, ctranslate2, onnxruntime, av, pyaudiowpatch, numpy, sentencepiece, huggingface_hub, anthropic, openai; import live_subs, models, assistant, inbox, dolmi_platform; assert dolmi_platform.OS == 'win'; from ui import app; print('imports ok, Dolmi', app.VERSION)"
 Assert-Exit "smoke test"
+# speaker labels (beta): the voice model runs on the one bundled onnxruntime (no second copy) - one
+# embedding when the model is already cached (the build itself never downloads it)
+& $rtPy -c "import sys; sys.path[:0] = [r'$appDir']; import numpy as np, onnxruntime, speakers; ok = speakers.is_installed(); v = speakers.Embedder(speakers.model_path())(np.random.default_rng(0).standard_normal(32000).astype('float32') * 0.1) if ok else None; assert v is None or v.shape == (512,), v.shape; print('speaker embedding ok' if ok else 'speaker model not cached, embedding skipped;', 'onnxruntime', onnxruntime.__version__, onnxruntime.__file__)"
+Assert-Exit "speaker model smoke test"
 & $rtPy -m pip --version | Out-Null
 Assert-Exit "bundled pip (needed by the GPU add-on)"
 

@@ -55,8 +55,11 @@ SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_tran
             "warn_silence",                                    # APP-3
             "preload_models",                                  # APP-4
             "check_updates",                                   # APP-6
-            "shortcuts_on"}                                    # APP-7
-BOOL_SETTINGS = {"warn_silence", "preload_models", "check_updates", "shortcuts_on"}                         # on/off switches that must be true or false
+            "shortcuts_on",                                    # APP-7
+            "speaker_labels"}                                  # SPK-4
+BOOL_SETTINGS = {"warn_silence", "preload_models", "check_updates", "shortcuts_on",
+                 "speaker_labels"}                       # on/off switches that must be true or false
+SPEAKER_NAME_MAX = 40                                    # SPK-4: longest speaker name
 # APP-3 'nothing heard' warning: how quiet counts as silence, and how long before Dolmi says so
 HEARD_SILENCE_RMS = live_subs.SILENCE_RMS
 HEARD_AFTER_S = 20.0
@@ -498,6 +501,7 @@ class Api:
             "theme": s.get("theme", "paper"), "listening": bool(self._session),
             "opacity": s.get("opacity", 0.88), "font": s.get("font", 22),
             "warnSilence": bool(s.get("warn_silence", True)),
+            "speakerLabels": bool(s.get("speaker_labels", False)),
             "barVisible": bool(self._overlay_visible), "barLocked": bool(s.get("bar_locked")),
             "shortcutsOn": bool(s.get("shortcuts_on", True)), "shortcuts": self._shortcut_map(),
             "shortcutStatus": dict(self._shortcut_status),
@@ -833,6 +837,8 @@ class Api:
                     return
                 watch.set()
                 self._set_engine_state("ready")
+        meeting = {}                                  # the diarizer's merges relabel THIS meeting only
+        diarizer = self._make_diarizer(lambda: meeting.get("transcript"))  # SPK-3: None unless the beta is on
         with self._lock:
             if not self._alive(token):                # stopped while the models loaded
                 return
@@ -842,8 +848,9 @@ class Api:
             self._chat_id, self._ai_history = None, []
             stop, audio_q = threading.Event(), queue.Queue()
             tr = live_subs.Transcript(self._data, save=self._settings["save_transcripts"])
+            meeting["transcript"] = tr
             self._last_transcript = tr
-            self._session.update(stop=stop, transcript=tr)
+            self._session.update(stop=stop, transcript=tr, diarizer=diarizer)
 
         def capture():
             try:
@@ -869,7 +876,7 @@ class Api:
 
         threading.Thread(target=capture, daemon=True).start()
         threading.Thread(target=live_subs.worker, args=(self._engine, audio_q, self._ui_q, tr, stop),
-                         daemon=True).start()
+                         kwargs={"diarizer": diarizer}, daemon=True).start()
         self._emit("onListening", True, self._engine_label())
         if self._settings.get("overlay"):             # subtitles are the point of pressing Start
             self.show_overlay()
@@ -885,13 +892,118 @@ class Api:
             cap.set()
         self._level = 0.0
         tr = s.get("transcript") if s else None
+        if tr and s.get("diarizer"):                  # SPK-3: rewrite the files with the final speaker names
+            threading.Thread(target=self._finish_transcript, args=(tr,), daemon=True).start()
         self._emit("onListening", False, tr.md.name if tr and tr.md else "")
         return True
+
+    @staticmethod
+    def _finish_transcript(tr):
+        try:
+            tr.finish()
+        except OSError as e:
+            print(f"Could not rewrite the transcript {tr.md}: {e}")
 
     def _on_level(self, rms):
         self._level = rms
         if rms > self._level_peak:
             self._level_peak = rms
+
+    # ------------------------------------------------------------------ speaker labels (SPK-3/4, beta)
+    def _make_diarizer(self, transcript=lambda: None):
+        """The session's diarizer, or None when Speaker labels is off or its model cannot load
+        (captions still run, without labels). Its merges relabel transcript() - the meeting it was
+        built for - even when they run after Stop while the next meeting is already live."""
+        if not self._settings.get("speaker_labels"):
+            return None
+        try:
+            import speakers
+            if not speakers.is_installed():
+                self._emit("onEngine", f"downloading the speaker model ({speakers.MODEL_MB} MB)…")
+            return speakers.load_diarizer(
+                mode=self._source, on_merge=lambda old, new: self._on_speaker_merge(old, new, transcript()))
+        except Exception as e:
+            print(f"Speaker labels unavailable: {e!r}")
+            self._emit("onError", "Speaker labels are off for this meeting: the voice model could not load.")
+            return None
+
+    def _speaker_target(self):
+        """(transcript, diarizer, live) the speaker calls act on: this meeting, or the last one after Stop."""
+        s = self._session
+        tr = s.get("transcript") if s else None
+        if tr is None:
+            return self._last_transcript, None, False
+        return tr, s.get("diarizer"), True
+
+    def _speakers_changed(self, tr, live):
+        """After a rename/reassign/merge: tell the page, and after Stop rewrite the saved files at once."""
+        if not live:
+            self._finish_transcript(tr)
+        out = tr.speaker_list()
+        self._emit("onSpeakers", out)
+        return out
+
+    def _on_speaker_merge(self, old, new, tr=None):
+        """The diarizer found two ids are one voice (or the user merged them): relabel the lines of
+        `tr` (default: the meeting the speaker calls act on). The page only hears about it when `tr`
+        is the meeting it shows; a merge of an older meeting just rewrites that meeting's files."""
+        target, _, live = self._speaker_target()
+        if tr is None:
+            tr = target
+        if tr is None:
+            return
+        tr.relabel(old, new)
+        if tr is not target:                          # an older, stopped meeting
+            self._finish_transcript(tr)
+            return
+        self._emit("onSpeakerMerge", old, new)
+        self._speakers_changed(tr, live)
+
+    @staticmethod
+    def _speaker_id(v):
+        return isinstance(v, int) and not isinstance(v, bool) and v > 0
+
+    def speaker_list(self):
+        """[{id, name, colour, lines}] for this meeting (or the last one)."""
+        tr = self._speaker_target()[0]
+        return tr.speaker_list() if tr else []
+
+    def speaker_rename(self, speaker_id, name):
+        """Name a speaker; every past line of this meeting and its saved files follow."""
+        tr, _, live = self._speaker_target()
+        name = re.sub(r"[\s·*<>\[\]|]+", " ", str(name or "")).strip()[:SPEAKER_NAME_MAX].strip()
+        if tr is None or not self._speaker_id(speaker_id) or not name:
+            return {"ok": False, "message": "Type a name for this speaker."}
+        if any(s["id"] != speaker_id and s["name"].casefold() == name.casefold() for s in tr.speaker_list()):
+            return {"ok": False, "message": f"Another speaker is already called {name}. "
+                                            "If they are the same person, use 'Same person as'."}
+        tr.rename_speaker(speaker_id, name)
+        return {"ok": True, "speakers": self._speakers_changed(tr, live)}
+
+    def speaker_reassign(self, line_id, speaker_id=None):
+        """'This line is someone else': give one line another speaker (None = a new speaker)."""
+        tr, d, live = self._speaker_target()
+        if tr is None or (speaker_id is not None and not self._speaker_id(speaker_id)):
+            return {"ok": False, "message": "That speaker is not in this meeting."}
+        if speaker_id is None:
+            if d is not None:
+                speaker_id = d.new_speaker()
+            else:
+                speaker_id = tr.next_speaker_id()
+        if not tr.update_line(line_id, speaker=speaker_id, speaker_conf=1.0):
+            return {"ok": False, "message": "That line is no longer in this meeting."}
+        return {"ok": True, "speaker": speaker_id, "speakers": self._speakers_changed(tr, live)}
+
+    def speaker_merge(self, from_id, into_id):
+        """Two labels are the same person: every line of `from_id` becomes `into_id`."""
+        tr, d, live = self._speaker_target()
+        if tr is None or not (self._speaker_id(from_id) and self._speaker_id(into_id)) or from_id == into_id:
+            return {"ok": False, "message": "Pick two different speakers."}
+        if d is not None:
+            d.merge(from_id, into_id)                 # calls _on_speaker_merge
+        else:
+            self._on_speaker_merge(from_id, into_id)
+        return {"ok": True, "speakers": tr.speaker_list()}
 
     # ------------------------------------------------------------------ 'nothing heard' warning (APP-3)
     def _heard_watch_loop(self):
@@ -1318,10 +1430,16 @@ class Api:
         if not p or not p.exists():
             return []
         text = p.read_text(encoding="utf-8")
+        colours = self._speaker_colours(p)
         rows = []
-        for span, en, de in _MEETING_RE.findall(text):   # groups are (time span, en, de)
+        for span, en, de in _MEETING_RE.findall(text):   # groups are (time span[ · speaker], en, de)
+            span, _, who = span.partition(" · ")
             start, _, end = span.strip().replace("-", "–").partition("–")
-            rows.append({"ts": start.strip(), "end": end.strip(), "de": de.strip(), "en": en.strip()})
+            row = {"ts": start.strip(), "end": end.strip(), "de": de.strip(), "en": en.strip()}
+            if who.strip():                                # SPK-3: a speaker label (beta)
+                row["speaker"] = who.strip()
+                row["colour"] = colours.get(who.strip(), "")
+            rows.append(row)
         # offsets count from the meeting's start: the "started" note, else the file name's minute
         m = _STARTED_RE.search(text)
         t0 = _seconds(m.group(1)) if m else None
@@ -1334,6 +1452,15 @@ class Api:
             s = _seconds(r["ts"])
             r["offset"] = _offset((s - t0) % 86400) if s is not None and t0 is not None else ""
         return rows
+
+    @staticmethod
+    def _speaker_colours(md_path):
+        """name -> colour from meeting_<stamp>.speakers.json ({} when there is none or it is unreadable)."""
+        try:
+            data = json.loads(md_path.with_suffix(".speakers.json").read_text(encoding="utf-8"))
+            return {str(v["name"]): str(v.get("colour", "")) for v in data.values() if isinstance(v, dict) and v.get("name")}
+        except (OSError, ValueError, KeyError, AttributeError):
+            return {}
 
     def meeting_txt(self, name):
         """A saved meeting as plain text: each line's time, the caption (what was said) and its translation."""
@@ -1348,7 +1475,8 @@ class Api:
         out = [f"Dolmi meeting — {when}", f"{len(pairs)} lines · caption (what was said) and translation", ""]
         for x in pairs:
             span = x["ts"] + (f"–{x['end']}" if x.get("end") else "")
-            out += [f"[{span}]" + (f" {x['offset']}" if x.get("offset") else ""),
+            out += [f"[{span}]" + (f" {x['offset']}" if x.get("offset") else "")
+                    + (f" {x['speaker']}" if x.get("speaker") else ""),
                     f"Caption:     {x['de']}", f"Translation: {x['en']}", ""]
         return "\n".join(out)
 
@@ -1381,7 +1509,7 @@ class Api:
     def delete_meeting(self, name):
         p = self._meeting_path(name)
         if p:
-            for f in (p, p.with_suffix(".srt"), p.with_suffix(".json")):
+            for f in (p, p.with_suffix(".srt"), p.with_suffix(".json"), p.with_suffix(".speakers.json")):
                 try:
                     f.unlink()
                 except OSError:

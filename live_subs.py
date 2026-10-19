@@ -13,7 +13,7 @@ v2 improvements over v1:
 The window and subtitle bar live in src/ (webview UI). Run: start.bat (Windows), Mac/start.command (macOS)
 or the installed app.
 """
-import itertools, os, queue, re, threading, time, unicodedata
+import itertools, json, os, queue, re, threading, time, unicodedata
 from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
@@ -22,6 +22,7 @@ import numpy as np
 
 import dolmi_platform
 import models
+import speakers as speaker_ids   # names and colours only: no model is loaded on import
 
 # ---------------------------------------------------------------- settings
 SR = 16000                 # Whisper sample rate
@@ -687,26 +688,41 @@ def dedupe_overlap(previous: str, text: str, max_words=8) -> str:
     return text
 
 # ------------------------------------------------------------ transcript
+def _by_id(item):
+    """Sort key for (speaker id, value) pairs: 1, 2, ... 10 in number order."""
+    k = item[0]
+    return (0, k, "") if isinstance(k, int) else (1, 0, str(k))
+
+
 class Transcript:
     """One meeting's lines. Each final is appended to the .md and .srt the moment it arrives (nothing is
     lost on a crash) and also kept in `lines`, keyed by its id, so a later pass can change a line
     (update_line) and finish() rewrites both files from `lines`. Times are the speech's own start/end
-    (epoch seconds), not the time the line was written."""
+    (epoch seconds), not the time the line was written.
+
+    Speaker labels (beta): a line whose meta has a "speaker" id is written as "**HH:MM:SS–HH:MM:SS · Name**"
+    in the .md and as "Name: text" in the .srt. Lines are appended with the name known at that moment
+    ("Speaker 2"); rename_speaker / relabel / update_line change `speakers` and `lines`, and finish()
+    writes every line with the final names. meeting_<stamp>.speakers.json maps id -> {name, colour}
+    (nothing about the voice itself)."""
 
     def __init__(self, folder="transcripts", save=True):
         self.save = save
         self.t0 = time.time()      # meeting start: SRT times and the "+mm:ss" offsets count from here
         self.n = 0
         self.lines = {}            # id -> {"id", "start", "end", "de", "en", **meta}
+        self.speakers = {}         # speaker id -> {"name", "colour"}
+        self._merged = {}          # merged speaker id -> the id it became (a line cut before a merge, added after)
         self._next_id = 0          # lines without a producer id get ("auto", n): never equal to a producer id
         self._lock = threading.Lock()
-        self.md = self.srt = None
+        self.md = self.srt = self.speakers_json = None
         if not save:   # privacy setting: live subtitles only, nothing written to disk
             return
         Path(folder).mkdir(exist_ok=True)
         stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
         self.md = Path(folder) / f"meeting_{stamp}.md"
         self.srt = Path(folder) / f"meeting_{stamp}.srt"
+        self.speakers_json = Path(folder) / f"meeting_{stamp}.speakers.json"
         self._header = f"# Meeting {stamp}\n\n<!-- started {datetime.fromtimestamp(self.t0):%H:%M:%S} -->\n\n"
         self.md.write_text(self._header, encoding="utf-8")
 
@@ -715,13 +731,34 @@ class Transcript:
         h, r = divmod(s, 3600); m, s = divmod(r, 60)
         return f"{int(h):02}:{int(m):02}:{int(s):02},{int((s % 1) * 1000):03}"
 
-    @staticmethod
-    def _md_line(x):
+    def speaker_name(self, sid):
+        return (self.speakers.get(sid) or {}).get("name") or speaker_ids.default_name(sid)
+
+    def _md_line(self, x):
         span = f"{datetime.fromtimestamp(x['start']):%H:%M:%S}–{datetime.fromtimestamp(x['end']):%H:%M:%S}"
+        if x.get("speaker") is not None:
+            span += f" · {self.speaker_name(x['speaker'])}"
         return f"**{span}** {x['en']}  \n<sub>{x['de']}</sub>\n\n"
 
     def _srt_block(self, n, x):
-        return f"{n}\n{self._ts(max(0.0, x['start'] - self.t0))} --> {self._ts(max(0.0, x['end'] - self.t0))}\n{x['en']}\n\n"
+        who = f"{self.speaker_name(x['speaker'])}: " if x.get("speaker") is not None else ""
+        return f"{n}\n{self._ts(max(0.0, x['start'] - self.t0))} --> {self._ts(max(0.0, x['end'] - self.t0))}\n{who}{x['en']}\n\n"
+
+    def _known(self, sid):
+        """Register a speaker id the first time a line carries it (lock held); True when it was new."""
+        if sid is None or sid in self.speakers:
+            return False
+        self.speakers[sid] = {"name": speaker_ids.default_name(sid), "colour": speaker_ids.colour(sid)}
+        return True
+
+    def _write_speakers(self):
+        """meeting_<stamp>.speakers.json: {"<id>": {"name", "colour"}} (lock held)."""
+        if not self.save or not self.speakers:
+            return
+        data = {str(k): v for k, v in sorted(self.speakers.items(), key=_by_id)}
+        tmp = self.speakers_json.with_name(self.speakers_json.name + ".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, self.speakers_json)
 
     def add(self, start, end, de, en, meta=None):
         """Record one final line; returns its id (meta['id'] when given, else ("auto", n))."""
@@ -733,12 +770,17 @@ class Transcript:
                 self._next_id += 1
             self.lines[key] = x = {**meta, "id": key, "start": start, "end": end, "de": de, "en": en}
             self.n += 1
+            while x.get("speaker") in self._merged:
+                x["speaker"] = self._merged[x["speaker"]]
+            new_speaker = self._known(x.get("speaker"))
             if not self.save:
                 return key
             with self.md.open("a", encoding="utf-8") as f:
                 f.write(self._md_line(x))
             with self.srt.open("a", encoding="utf-8") as f:
                 f.write(self._srt_block(self.n, x))
+            if new_speaker:
+                self._write_speakers()
         return key
 
     def update_line(self, line_id, **fields):
@@ -749,7 +791,50 @@ class Transcript:
             if x is None:
                 return False
             x.update({k: v for k, v in fields.items() if k != "id"})
+            while x.get("speaker") in self._merged:   # a stale page may still offer a merged-away id
+                x["speaker"] = self._merged[x["speaker"]]
+            if self._known(x.get("speaker")):
+                self._write_speakers()
             return True
+
+    def speaker_list(self):
+        """[{id, name, colour, lines}] of the speakers that have lines, by id."""
+        with self._lock:
+            counts = {}
+            for x in self.lines.values():
+                if x.get("speaker") is not None:
+                    counts[x["speaker"]] = counts.get(x["speaker"], 0) + 1
+            return [{"id": sid, "name": self.speaker_name(sid), "colour": self.speakers.get(sid, {}).get(
+                        "colour") or speaker_ids.colour(sid), "lines": n}
+                    for sid, n in sorted(counts.items(), key=_by_id)]
+
+    def next_speaker_id(self):
+        """An id no speaker of this meeting has used: not a current one, not a renamed one whose
+        lines all moved away, not one merged into another."""
+        with self._lock:
+            used = set(self.speakers) | set(self._merged)
+            used |= {x["speaker"] for x in self.lines.values() if x.get("speaker") is not None}
+            return max(used, default=0) + 1
+
+    def rename_speaker(self, sid, name):
+        """Name speaker `sid` on every line of the meeting (speakers.json at once, .md/.srt on finish())."""
+        with self._lock:
+            self._known(sid)
+            self.speakers[sid]["name"] = name
+            self._write_speakers()
+
+    def relabel(self, old, new):
+        """Every line of speaker `old` becomes speaker `new` (a merge). Returns the changed line ids."""
+        with self._lock:
+            changed = [k for k, x in self.lines.items() if x.get("speaker") == old]
+            for k in changed:
+                self.lines[k]["speaker"] = new
+            self._known(new)
+            self.speakers.pop(old, None)
+            if old != new:
+                self._merged[old] = new
+            self._write_speakers()
+            return changed
 
     def finish(self):
         """Rewrite the .md and .srt from `lines` (call once the meeting has stopped)."""
@@ -759,6 +844,7 @@ class Transcript:
             rows = sorted(self.lines.values(), key=lambda x: x["start"])
             self.md.write_text(self._header + "".join(self._md_line(x) for x in rows), encoding="utf-8")
             self.srt.write_text("".join(self._srt_block(i, x) for i, x in enumerate(rows, 1)), encoding="utf-8")
+            self._write_speakers()
 
 # --------------------------------------------------------------- worker
 UI_Q_CONTRACT = """What worker() puts on ui_q (producer: this module; consumer: src/ui/app.py _pump).
