@@ -1,0 +1,80 @@
+{
+ "about": "Test bench numbers (no text, no audio). Key: set|model|device|translator|terms. Re-run the same command to compare; see eval/README.md.",
+ "runs": {
+  "synthetic|large-v3-turbo|cuda|opus-de|terms": {
+   "date": "2026-10-19T11:06:14Z",
+   "git": "d50e5ad",
+   "command": "python eval/run_eval.py --model large-v3-turbo --device cuda --write-baseline --note Foundation baseline: exon/integration d50e5ad, before wave-1 pipeline fixes",
+   "component": {
+    "clips": 410,
+    "wer_de": 3.775,
+    "cer_de": 1.269,
+    "clips_de": 367,
+    "wer_en": 0.133,
+    "cer_en": 0.051,
+    "clips_en": 43,
+    "wer_by_tag": {
+     "B": 15.29,
+     "C": 10.78,
+     "E": 1.95,
+     "M": 2.55,
+     "ME": 0.0,
+     "N": 1.37,
+     "Q": 4.26,
+     "S": 4.38,
+     "V": 0.47,
+     "long": 1.57,
+     "quiet": 11.33,
+     "soft_start": 3.18
+    },
+    "term_acc_asr": 96.333,
+    "chrf_gold": 79.378,
+    "bleu_gold": 61.829,
+    "chrf_cascade": 75.237,
+    "bleu_cascade": 54.874,
+    "term_acc_mt": 99.648,
+    "mt_pairs": 367,
+    "asr_rtf": 0.27
+   },
+   "stream": {
+    "sessions": 4,
+    "utterances": 410,
+    "finals": 494,
+    "missed_rate": 0.0,
+    "lost_text_rate": 2.683,
+    "word_recall": 93.41,
+    "stream_wer": 9.69,
+    "clipped_first_word_rate": 5.779,
+    "mid_word_cut_rate": 54.285,
+    "mid_utterance_cut_rate": 63.47,
+    "final_latency_p50": 2.569,
+    "final_latency_p95": 7.367,
+    "first_text_latency_p50": 2.145,
+    "first_text_latency_p95": 2.927,
+    "missed_by_tag": {
+     "B": 0.0,
+     "C": 0.0,
+     "E": 0.0,
+     "M": 0.0,
+     "ME": 0.0,
+     "N": 0.0,
+     "Q": 0.0,
+     "S": 0.0,
+     "V": 0.0,
+     "long": 0.0,
+     "quiet": 0.0,
+     "soft_start": 0.0
+    },
+    "drops": 0,
+    "drop_reasons": {},
+    "rtf": 0.947,
+    "clock": "patched",
+    "on_drop": false,
+    "asr_call_p50": 1.249,
+    "asr_call_p95": 1.472,
+    "mt_call_p50": 0.043,
+    "mt_call_p95": 0.101
+   }
+  }
+ }
+}
