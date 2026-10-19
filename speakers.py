@@ -62,8 +62,53 @@ def colour(speaker_id):
 
 
 def default_name(speaker_id):
-    """'Speaker 3' for an id; a string label (a name set by another producer) is its own name."""
-    return speaker_id if isinstance(speaker_id, str) else f"Speaker {speaker_id}"
+    """'Speaker 3' for an id, 'You' for YOU; a string label (a name set by another producer) is its own name."""
+    if isinstance(speaker_id, str):
+        return speaker_id
+    return "You" if speaker_id == YOU else f"Speaker {speaker_id}"
+
+
+# ------------------------------------------------------------------ "You" from the microphone (SPK-5)
+YOU = 0                    # the user's own lines; the clusterer's ids start at 1, so it never hands out 0
+# A line is "You" when, over its time, the microphone's energy (mean square) is at least YOU_RATIO times the
+# speaker loopback's. Echo: on laptop speakers the remote voice leaks into the mic, but the loopback carries
+# the same voice at full digital level, so the ratio stays far below 4 and the line is clustered as usual.
+# 4x energy = 6 dB: a headset mic hears the user ~20-40 dB above the (silent) loopback; overlapping talk or
+# a very quiet mic falls back to clustering (a mislabel there is "Speaker N", never a false "You").
+YOU_RATIO = 4.0
+YOU_MIN_RMS = 0.005        # a mic quieter than this over the line is no evidence (a muted or far mic)
+SOURCE_LOG_BLOCKS = 6000   # 10 min of 100 ms blocks: lines are labelled seconds after they were spoken
+
+
+class SourceLog:
+    """Per-100 ms energy of each source while mic and speaker are captured at once (dual_stream)."""
+
+    def __init__(self, maxlen=SOURCE_LOG_BLOCKS):
+        self._blocks = deque(maxlen=maxlen)    # (end time in epoch s, mic rms, speaker rms)
+        self._lock = threading.Lock()
+
+    def add(self, t, mic_rms, speaker_rms):
+        with self._lock:
+            self._blocks.append((t, float(mic_rms), float(speaker_rms)))
+
+    def window(self, start, end):
+        """(mic rms, speaker rms) over the 100 ms blocks whose middle lies in [start, end], or None."""
+        with self._lock:
+            got = [(m, s) for t, m, s in self._blocks if start <= t - 0.05 <= end]
+        if not got:
+            return None
+        m, s = np.asarray(got).T
+        return float(np.sqrt(np.mean(m * m))), float(np.sqrt(np.mean(s * s)))
+
+    def you(self, start, end):
+        """Confidence that the line [start, end] is the user's own (mic dominates), else None."""
+        w = self.window(start, end)
+        if w is None:
+            return None
+        mic, spk = w
+        if mic < YOU_MIN_RMS or mic * mic < YOU_RATIO * spk * spk:
+            return None
+        return 1.0 if mic * mic >= 4 * YOU_RATIO * spk * spk else 0.8
 
 
 # ------------------------------------------------------------------ model file
@@ -274,12 +319,14 @@ class Clusterer:
 
 class Diarizer:
     """What the worker calls: assign(audio, start, end) -> (speaker id | None, confidence).
+    With a source_log (mic + speaker captured at once) a line where the mic dominates is YOU.
     mode: "speaker" | "mic", or a callable returning it (the audio source can change mid-meeting).
     Never raises: a line it cannot embed keeps the previous speaker, or no label."""
 
-    def __init__(self, embed, mode="speaker", on_merge=None, clusterer=None):
+    def __init__(self, embed, mode="speaker", on_merge=None, clusterer=None, source_log=None):
         self.embed = embed
         self.mode = mode
+        self.source_log = source_log       # SPK-5: a SourceLog while mic + speaker are captured, else None
         self.clusters = clusterer or Clusterer(on_merge=on_merge)
         self.ms = deque(maxlen=500)        # recent embedding times (ms), for the bench and the log
         self._lock = threading.Lock()
@@ -290,6 +337,11 @@ class Diarizer:
 
     def assign(self, audio, start=None, end=None):
         seconds = len(audio) / SR
+        log = self.source_log
+        if log is not None and start is not None and end is not None:
+            conf = log.you(start, end)
+            if conf is not None:           # the user's own voice: not clustered, the others' centroids stay clean
+                return YOU, conf
         with self._lock:
             c = self.clusters
             if seconds < MIN_SECONDS and c.last is not None:

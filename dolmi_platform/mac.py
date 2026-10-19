@@ -136,6 +136,14 @@ def loopback_stream(out_q: queue.Queue, stop: threading.Event, device=None, on_l
         except subprocess.TimeoutExpired:
             proc.kill()
 
+def dual_stream(out_q: queue.Queue, stop: threading.Event, mic_device=None, speaker_device=None,
+                on_level=None, log=None):
+    """SPK-5 (beta): the microphone (sounddevice) and all Mac audio (the process-tap helper) or the
+    picked input at once, mixed into out_q; each 100 ms block's energy per source goes to
+    log.add(time, mic_rms, speaker_rms) (speakers.SourceLog)."""
+    from ._dual import dual
+    dual(mic_stream, loopback_stream, out_q, stop, mic_device, speaker_device, on_level, log)
+
 
 # ------------------------------------------------------------------ compute (always the CPU cores)
 def prepare_gpu():

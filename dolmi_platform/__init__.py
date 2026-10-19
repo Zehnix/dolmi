@@ -6,6 +6,7 @@ Both modules import on any OS (OS libraries load lazily inside functions), so te
 
     capture   output_devices() input_devices() loopback_stream(out_q, stop, device=None, on_level=None)
               mic_stream(out_q, stop, device=None, on_level=None) DEFAULT_SPEAKER
+              dual_stream(out_q, stop, mic_device=None, speaker_device=None, on_level=None, log=None)
     compute   prepare_gpu() compute_device(device) -> (device, compute_type) auto_speech(gpu=None)
               gpu_ready() system_info() gpu_name()
     desktop   copy_text(text) -> bool  open_path(path)  mic_privacy_url  register_app()  app_icon(root)
@@ -24,7 +25,7 @@ import sys
 
 API = (
     "OS", "WORDS", "MODEL_NOTES", "WEBVIEW_GUI", "DEFAULT_SPEAKER", "mic_privacy_url",
-    "output_devices", "input_devices", "loopback_stream", "mic_stream",
+    "output_devices", "input_devices", "loopback_stream", "mic_stream", "dual_stream",
     "prepare_gpu", "compute_device", "auto_speech", "gpu_ready", "system_info", "gpu_name",
     "copy_text", "open_path", "register_app", "app_icon",
     "overlay_stealth", "apply_invisible", "set_click_through", "click_through",

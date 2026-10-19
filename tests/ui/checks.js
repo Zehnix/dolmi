@@ -102,6 +102,7 @@
     ['captions','#setTrxKey','change:mock-key','translator_set_key','deepl'],
     ['captions','#setTranslator','change:local','translator_set','local'],
     ['privacy','#swSpeakers','click','set_setting','speaker_labels'],                      // SPK-4
+    ['audio','#swCaptureBoth','click','set_setting','capture_both'],                    // SPK-5
   ];
   window.__uiControls=CONTROLS;   // other checks (new features) push rows here before run() starts
   async function use(el,how){

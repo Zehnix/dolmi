@@ -53,6 +53,7 @@ DEFAULTS = {
     "bar_locked": False, "bar_positions": {}, "bar_screen": "",  # APP-8: click-through lock; bar place per screen
     "speaker_labels": False,                      # SPK-4: who said each line (beta, on-device voice model)
     "clarify_queue": False,                       # VOC-9: collect unsure words, ask "Did they say ...?" after Stop
+    "capture_both": False,                        # SPK-5: caption the microphone too (mic + speaker mixed, beta)
 }
 
 
