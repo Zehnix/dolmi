@@ -1786,8 +1786,13 @@ class Api:
         try:
             vocabulary, glossary = clarify.add_rule(self._read_file("vocabulary.txt"), self._read_file("glossary.txt"),
                                                     str(group), str(term), str(target or ""))
+        except clarify.Exists:
+            return {"ok": False, "error": f"'{str(term).strip()}' already has a rule there. Change it in the editor below."}
         except ValueError:
             return {"ok": False, "error": "Pick a group and type the term (and its English for a rule)."}
+        if vocabulary is None and glossary is None:      # already in that group: nothing to write
+            self.clarify_skip(heard)
+            return {"ok": True, "already": True}
         res = self.save_vocab(vocabulary, glossary)
         self.clarify_skip(heard)
         return res

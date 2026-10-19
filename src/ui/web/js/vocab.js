@@ -309,13 +309,15 @@ async function clarLoad(){
     const dst=Object.assign(document.createElement('input'),{className:'field',placeholder:'English',title:'The English it must become'});
     const grp=document.createElement('select'); grp.className='field';
     for(const [k,v] of Object.entries(VOC_GROUPS)) grp.add(new Option(v,k,false,k===it.group));
-    const sync=()=>{ dst.hidden=!['german','english'].includes(grp.value); }; grp.onchange=sync; sync();
+    const sync=()=>{ dst.hidden=!['german','english'].includes(grp.value); if(dst.hidden) dst.value=''; }; grp.onchange=sync; sync();
     const btn=(t,cls,fn)=>{ const x=document.createElement('button'); x.className='btn '+cls; x.textContent=t; x.onclick=fn; return x; };
     const q=document.createElement('q'); q.textContent=it.context;
     const head=document.createElement('b'); head.textContent=`Did they say “${it.suggest}”?`+(it.count>1?` (${it.count}×)`:'');
     row.append(head,q,term,grp,dst,
-      btn('Add','pri',async()=>{ try{ const r2=await b.clarify_add(it.heard,grp.value,term.value,dst.value);
-          if(r2&&r2.ok===false){ toast(r2.error); return; } toast('Added to '+VOC_GROUPS[grp.value]); if(!vocDirty) loadVocab(); vocSummary(); clarLoad(); }
+      btn('Add','pri',async()=>{ if(vocDirty){ toast('Save or undo your edits in the editor first.'); return; }
+        try{ const r2=await b.clarify_add(it.heard,grp.value,term.value,dst.value);
+          if(r2&&r2.ok===false){ toast(r2.error); return; }
+          toast((r2&&r2.already?'Already in ':'Added to ')+VOC_GROUPS[grp.value]); loadVocab(); vocSummary(); clarLoad(); }
         catch(e){ console.error('clarify_add',e); toast('Could not add the word.'); } }),
       btn('Skip','ghost',async()=>{ await b.clarify_skip(it.heard,false); clarLoad(); }),
       btn('Never ask','ghost',async()=>{ await b.clarify_skip(it.heard,true); clarLoad(); }));
