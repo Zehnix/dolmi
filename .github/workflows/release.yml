@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag like v2.1.0 (matching VERSION and Mac/VERSION) to build Dolmi-Setup-2.1.0.exe and
+# Push a tag like v2.1.0 (matching VERSION, shared by Windows and Mac) to build Dolmi-Setup-2.1.0.exe and
 # Dolmi-2.1.0-macOS.dmg, test both on clean runners, and publish them together as one draft GitHub
 # Release. Review the draft, then click Publish.
 # Run it from the Actions tab ("Run workflow") to build and test both without releasing anything.
@@ -37,7 +37,7 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --disable-pip-version-check -r requirements-lock.txt pytest
-          python -m pytest -q tests/test_helpers.py
+          python -m pytest -q tests
           python tests/test_webview_bridge.py
 
       - name: Ensure Inno Setup is installed
@@ -81,17 +81,16 @@ jobs:
 
       - name: Version
         run: |
-          file="$(tr -d '[:space:]' < Mac/VERSION)"
+          file="$(tr -d '[:space:]' < VERSION)"
           if [ "${{ github.ref_type }}" = "tag" ] && [ "${GITHUB_REF_NAME#v}" != "$file" ]; then
-            echo "Tag $GITHUB_REF_NAME does not match Mac/VERSION ($file). Bump Mac/VERSION first."; exit 1
+            echo "Tag $GITHUB_REF_NAME does not match VERSION ($file). Bump VERSION first."; exit 1
           fi
           echo "VERSION=$file" >> "$GITHUB_ENV"
 
-      - name: Tests
-        working-directory: Mac
+      - name: Tests (shared core, from the repo root, with the Mac packages)
         run: |
-          python -m pip install --disable-pip-version-check -r requirements-lock.txt pytest
-          python -m pytest -q tests/test_helpers.py
+          python -m pip install --disable-pip-version-check -r Mac/requirements-lock.txt pytest
+          python -m pytest -q tests
           python tests/test_webview_bridge.py
 
       - name: Build Dolmi.app and the disk image

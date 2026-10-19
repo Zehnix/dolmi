@@ -1,6 +1,7 @@
 """Dolmi.app entry point. The program ships as plain source in Contents/Resources/app (the same layout
-as the Mac folder), so config.ROOT, the web UI and the audio helper resolve exactly as when running
-from source; this launcher only puts that folder on sys.path and runs src/main.py."""
+as the repo root, plus the audio helper in app/audio), so config.ROOT, the web UI and dolmi_platform
+resolve exactly as when running from source; this launcher only puts that folder on sys.path and runs
+src/main.py."""
 import multiprocessing
 import os
 import runpy

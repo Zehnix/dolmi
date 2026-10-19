@@ -3,17 +3,23 @@ import os
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_all
 
-MAC = Path(SPECPATH).parent
-VERSION = (MAC / "VERSION").read_text().strip()
+MAC = Path(SPECPATH).parent          # Mac/: the audio helper and the icon
+ROOT = MAC.parent                     # repo root: the shared program (Windows and Mac)
+VERSION = (ROOT / "VERSION").read_text().strip()
 
-# the program itself, as source, in Contents/Resources/app (see launcher.py)
-APP_FILES = ["assistant.py", "cloud_speech.py", "inbox.py", "live_subs.py", "models.py", "stealth.py", "VERSION",
+# the program itself, as source, in Contents/Resources/app (see launcher.py): the shared files from
+# the repo root, plus the Mac-only audio helper from Mac/audio (into app/audio)
+APP_FILES = ["assistant.py", "cloud_speech.py", "inbox.py", "live_subs.py", "models.py", "VERSION",
              "vocabulary.example.txt", "glossary.example.txt", "LICENSE", "THIRD-PARTY-NOTICES.md",
-             "PRIVACY.md", "assets/dolmi.png", "audio/dolmi-audio"]
-datas = [(str(MAC / f), str(Path("app") / Path(f).parent)) for f in APP_FILES]
-for p in (MAC / "src").rglob("*"):
-    if p.is_file() and "__pycache__" not in p.parts:
-        datas.append((str(p), str(Path("app") / p.parent.relative_to(MAC))))
+             "PRIVACY.md", "assets/dolmi.png"]
+APP_DIRS = ["src", "dolmi_platform"]          # copied whole (web UI: src/ui/web incl. css/ and js/)
+MAC_FILES = ["audio/dolmi-audio"]
+datas = [(str(ROOT / f), str(Path("app") / Path(f).parent)) for f in APP_FILES]
+datas += [(str(MAC / f), str(Path("app") / Path(f).parent)) for f in MAC_FILES]
+for d in APP_DIRS:
+    for p in (ROOT / d).rglob("*"):
+        if p.is_file() and "__pycache__" not in p.parts:
+            datas.append((str(p), str(Path("app") / p.parent.relative_to(ROOT))))
 
 binaries, hiddenimports = [], []
 for pkg in ("faster_whisper", "ctranslate2", "webview", "sounddevice", "onnxruntime", "av",
