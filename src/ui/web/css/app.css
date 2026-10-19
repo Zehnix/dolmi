@@ -224,3 +224,30 @@ textarea.field{width:100%;font-family:var(--mono);line-height:1.7;resize:vertica
 /* OS-only rows: mark them data-os="win" or data-os="mac"; html[data-platform] is set at boot from
    state().platform.os, so the other platform's rows are hidden. */
 html[data-platform="mac"] [data-os="win"],html[data-platform="win"] [data-os="mac"]{display:none!important}
+
+/* Vocabulary editor (VOC-1): four row-editor groups over glossary.txt + vocabulary.txt, or raw text */
+.voc-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:-6px 0 16px}
+.voc-status{flex:1;min-width:0;font-size:12.5px;font-weight:600;color:var(--mute)}
+.voc-status.voc-ok{color:var(--ac-ink)}.voc-status.voc-warn{color:var(--src)}
+.voc-groups{margin-bottom:18px}.voc-groups[hidden],.voc-problems[hidden]{display:none}
+.voc-g{display:flex;flex-direction:column;min-width:0}
+.voc-n{margin-left:auto;font-family:var(--ui);font-size:12px;font-weight:700;color:var(--mute);background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:1px 9px}.voc-n:empty{display:none}
+.voc-hint{font-size:12.5px;color:var(--mute);margin:-6px 0 10px}.voc-hint code{font-family:var(--mono);font-size:12px;color:var(--ink)}
+.voc-list{display:flex;flex-direction:column;gap:6px;max-height:212px;overflow-y:auto;overflow-x:hidden;padding:2px;scrollbar-width:thin}
+.voc-row{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr) auto;align-items:center;gap:6px}
+.voc-row.voc-one{grid-template-columns:minmax(0,1fr) auto}
+.voc-row .field{width:100%;min-width:0;padding:6px 10px;font-size:13px;border-radius:10px}
+.voc-row.voc-bad .field{border-color:var(--src);background:var(--src-soft)}
+.voc-arrow{color:var(--faint);font-size:13px}
+.voc-del{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;color:var(--faint);transition:.2s}
+.voc-del:hover{color:var(--danger);background:var(--panel)}.voc-del svg{width:15px;height:15px}
+.voc-add{align-self:flex-start;display:inline-flex;align-items:center;gap:6px;margin-top:10px;font-size:13px;font-weight:700;color:var(--ac-ink);padding:6px 10px;border-radius:999px;transition:.2s}
+.voc-add:hover{background:var(--ac-soft)}.voc-add svg{width:15px;height:15px}
+.voc-empty{font-size:12.5px;color:var(--faint);padding:6px 2px}
+textarea.voc-raw{font-size:12.5px;white-space:pre;overflow-wrap:normal;overflow-x:auto}
+.voc-problems{margin-bottom:18px;border-color:var(--src)}.voc-problems .cardh .ic{color:var(--src)}
+.voc-plist{list-style:none;display:flex;flex-direction:column;gap:2px;max-height:180px;overflow:auto;scrollbar-width:thin}
+.voc-plist button{display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline;text-align:left;width:100%;padding:7px 10px;border-radius:10px;font-size:13px}
+.voc-plist button:hover{background:var(--panel)}
+.voc-plist code{font-family:var(--mono);font-size:12px;color:var(--src);overflow-wrap:anywhere}
+.voc-plist span{color:var(--mute);flex-basis:100%}
