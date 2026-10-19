@@ -28,6 +28,7 @@ WORDS = {
     "hotkey": "Ctrl+Alt+Shift+D",
     "taskbar": "taskbar",
     "speaker_default": "Default speaker",
+    "mic_privacy": "Windows privacy settings",
     "speaker_hint": "The speaker your meeting plays through",
     "key_storage": "Encrypted with Windows DPAPI",
     "fit_needs_gpu": "Needs NVIDIA GPU",

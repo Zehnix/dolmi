@@ -32,6 +32,7 @@ WORDS = {
     "hotkey": "⌃⌥⇧D",
     "taskbar": "Dock",
     "speaker_default": "All Mac audio",
+    "mic_privacy": "Privacy & Security settings",
     "speaker_hint": "Everything your Mac plays, or a microphone",
     "key_storage": "Encrypted with your Mac Keychain",
     "fit_needs_gpu": "Too slow for live use",

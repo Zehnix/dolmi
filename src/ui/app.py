@@ -32,7 +32,14 @@ _MEETING_RE = re.compile(r"\*\*(.+?)\*\*\s+(.*?)\s*\n<sub>(.*?)</sub>", re.S)
 # settings the page may change through set_setting (provider, keys and invisible have their own calls)
 SPEECH_SOURCES = ("local", *cloud_speech.PROVIDERS)   # Settings → Captions by
 SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_transcripts", "keep_days", "audio_device", "model",
-            "overlay", "theme", "ai_length", "ai_context", "opacity", "font"}
+            "overlay", "theme", "ai_length", "ai_context", "opacity", "font",
+            "warn_silence"}                                    # APP-3
+BOOL_SETTINGS = {"warn_silence"}                         # on/off switches that must be true or false
+# APP-3 'nothing heard' warning: how quiet counts as silence, and how long before Dolmi says so
+HEARD_SILENCE_RMS = live_subs.SILENCE_RMS
+HEARD_AFTER_S = 20.0
+HEARD_TICK_S = 1.0
+HEARD_SOUND_NOW_S = 3.0          # sound in the last 3 s counts as "sound present" (speech has short gaps)
 
 
 def _js(v):
@@ -45,6 +52,18 @@ def _spoken_language_ok(code):
 
 
 class Api:
+    # APP-3 watcher state (class defaults; underscore names are never exposed to the page).
+    # _clock is the one clock for the watcher and for _last_caption, which the caption pump sets on
+    # every non-empty final/draft (time.monotonic seconds); tests replace it with a fake clock.
+    _clock = staticmethod(time.monotonic)
+    _sleep = staticmethod(time.sleep)
+    _level_peak = 0.0                    # loudest input level since the watcher's last tick
+    _heard_state = None                  # None | "silent" | "no_captions": what the page shows
+    _heard_key = None                    # (session token, source label) the counts belong to
+    _heard_start = 0.0
+    _last_sound = 0.0
+    _heard_tick_at = None                # clock time of the last tick (one tick per clock step)
+
     def __init__(self):
         config.prepare()
         config.load_env()
@@ -137,6 +156,7 @@ class Api:
                 print(f"pump {kind} failed: {e}")
 
     def _level_loop(self):
+        threading.Thread(target=self._heard_watch_loop, daemon=True).start()
         while True:
             time.sleep(0.1)
             s = self._session
@@ -200,6 +220,7 @@ class Api:
             "sourceLabel": self._source_label(), "speechModel": s["model"], "overlay": bool(s.get("overlay")),
             "theme": s.get("theme", "paper"), "listening": bool(self._session),
             "opacity": s.get("opacity", 0.88), "font": s.get("font", 22),
+            "warnSilence": bool(s.get("warn_silence", True)),
             "barVisible": bool(self._overlay_visible),
             "engine": self._engine_label(), "dataFolder": str(self._data), "version": VERSION,
             "platform": {"os": dolmi_platform.OS, "words": dolmi_platform.WORDS},
@@ -211,6 +232,8 @@ class Api:
         if key == "language" and not _spoken_language_ok(value):
             return False
         if key == "speech_source" and value not in SPEECH_SOURCES:
+            return False
+        if key in BOOL_SETTINGS and not isinstance(value, bool):
             return False
         with self._settings_lock:
             self._settings[key] = value
@@ -491,6 +514,66 @@ class Api:
 
     def _on_level(self, rms):
         self._level = rms
+        if rms > self._level_peak:
+            self._level_peak = rms
+
+    # ------------------------------------------------------------------ 'nothing heard' warning (APP-3)
+    def _heard_watch_loop(self):
+        while True:
+            self._sleep(HEARD_TICK_S)
+            try:
+                self._heard_tick()
+            except Exception as e:
+                print(f"heard watch failed: {e}")
+
+    def _heard_tick(self):
+        """Once a second while live: 'silent' after 20 s below the silence level, 'no_captions' when
+        there is sound but no caption for 20 s; a caption, Stop or the setting turned off clears it.
+        Capture errors are not handled here (they already raise onError)."""
+        now = self._clock()
+        if self._heard_tick_at is not None and now <= self._heard_tick_at:
+            return
+        self._heard_tick_at = now
+        s = self._session
+        if not (s and s.get("stop") and self._settings.get("warn_silence", True)):
+            self._heard_key, self._level_peak = None, 0.0
+            self._set_heard(None)
+            return
+        peak, self._level_peak = self._level_peak, 0.0
+        key = (s.get("token"), json.dumps(self._source_label(), sort_keys=True))
+        if key != self._heard_key:
+            # new session or another device: count afresh from the previous tick (it went live or
+            # switched at most one tick ago), so the warning is never late
+            self._heard_key, self._heard_start, self._last_sound = key, now - HEARD_TICK_S, 0.0
+            self._set_heard(None)
+        if peak >= HEARD_SILENCE_RMS:
+            self._last_sound = now
+        since_caption = now - max(self._heard_start, getattr(self, "_last_caption", 0) or 0)
+        quiet_for = now - max(self._heard_start, self._last_sound)
+        if since_caption < HEARD_AFTER_S:
+            state = None                            # never while captions arrive
+        elif quiet_for >= HEARD_AFTER_S:
+            state = "silent"
+        elif quiet_for < HEARD_SOUND_NOW_S:
+            state = "no_captions"
+        else:
+            state = self._heard_state               # a pause in uncaptioned sound: keep what is shown
+        self._set_heard(state)
+
+    def _set_heard(self, state):
+        if state != self._heard_state:
+            self._heard_state = state
+            self._emit("onHeardWarn", state)
+
+    def open_mic_privacy(self):
+        """Open the OS microphone privacy page (Windows Settings / macOS System Settings). It only opens
+        the page; it changes nothing."""
+        try:
+            dolmi_platform.open_path(dolmi_platform.mic_privacy_url)
+            return True
+        except Exception as e:
+            print(f"open microphone privacy page failed: {e}")
+            return False
 
     # ------------------------------------------------------------------ models
     def _auto_speech(self):
