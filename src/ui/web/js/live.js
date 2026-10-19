@@ -162,3 +162,12 @@ document.addEventListener('DOMContentLoaded',()=>{ const slot=typeof settingsMou
     toast(on?(listening?'Speaker labels: from the next Start':'Speaker labels on (beta)'):'Speaker labels off'); };
   const load=async()=>{ const b=bridge(); if(!b) return; try{ const s=await b.state(); sw.classList.toggle('on',!!s.speakerLabels); }catch(e){ console.error('speaker labels',e); } };
   if(bridge()) load(); else window.addEventListener('pywebviewready',load); });
+/* Settings → Audio: caption the microphone too (SPK-5, beta, off by default; used from the next Start) */
+document.addEventListener('DOMContentLoaded',()=>{ const slot=typeof settingsMount==='function'&&settingsMount('audio.capture_both'); if(!slot) return;
+  slot.innerHTML=`<div class="set" data-kw="caption my microphone too both mic and speaker at once you my own voice beta"><div><div class="lab">Caption my microphone too <span class="mtag">beta</span></div><div class="ps">Listens to the speaker and your microphone at once, so your own words get captions. With Speaker labels on, your lines say You. From the next Start.</div></div><button class="sw" id="swCaptureBoth" aria-label="Caption my microphone too"></button></div>`;
+  const sw=$('#swCaptureBoth');
+  sw.onclick=async()=>{ const on=!sw.classList.contains('on'), b=bridge(); sw.classList.toggle('on',on);
+    if(b&&!await b.set_setting('capture_both',on)){ sw.classList.toggle('on',!on); return; }
+    toast(on?(listening?'Microphone too: from the next Start':'Microphone captions on (beta)'):'Microphone captions off'); };
+  const load=async()=>{ const b=bridge(); if(!b) return; try{ const s=await b.state(); sw.classList.toggle('on',!!s.captureBoth); }catch(e){ console.error('capture both',e); } };
+  if(bridge()) load(); else window.addEventListener('pywebviewready',load); });

@@ -56,9 +56,10 @@ SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_tran
             "preload_models",                                  # APP-4
             "check_updates",                                   # APP-6
             "shortcuts_on",                                    # APP-7
-            "speaker_labels"}                                  # SPK-4
+            "speaker_labels",                                  # SPK-4
+            "capture_both"}                                    # SPK-5
 BOOL_SETTINGS = {"warn_silence", "preload_models", "check_updates", "shortcuts_on",
-                 "speaker_labels"}                       # on/off switches that must be true or false
+                 "speaker_labels", "capture_both"}                       # on/off switches that must be true or false
 SPEAKER_NAME_MAX = 40                                    # SPK-4: longest speaker name
 # APP-3 'nothing heard' warning: how quiet counts as silence, and how long before Dolmi says so
 HEARD_SILENCE_RMS = live_subs.SILENCE_RMS
@@ -502,6 +503,7 @@ class Api:
             "opacity": s.get("opacity", 0.88), "font": s.get("font", 22),
             "warnSilence": bool(s.get("warn_silence", True)),
             "speakerLabels": bool(s.get("speaker_labels", False)),
+            "captureBoth": bool(s.get("capture_both", False)),
             "barVisible": bool(self._overlay_visible), "barLocked": bool(s.get("bar_locked")),
             "shortcutsOn": bool(s.get("shortcuts_on", True)), "shortcuts": self._shortcut_map(),
             "shortcutStatus": dict(self._shortcut_status),
@@ -847,6 +849,13 @@ class Api:
                 self._history = []
             self._chat_id, self._ai_history = None, []
             stop, audio_q = threading.Event(), queue.Queue()
+            both = bool(self._settings.get("capture_both"))   # SPK-5: mic + speaker at once (beta)
+            source_log = None
+            if both:
+                import speakers
+                source_log = speakers.SourceLog()
+                if diarizer is not None:
+                    diarizer.source_log = source_log
             tr = live_subs.Transcript(self._data, save=self._settings["save_transcripts"])
             meeting["transcript"] = tr
             self._last_transcript = tr
@@ -860,7 +869,11 @@ class Api:
                     if stop.is_set():
                         break
                     self._push_source()
-                    if self._source() == "mic":
+                    if both:
+                        dolmi_platform.dual_stream(audio_q, cap, self._settings.get("mic_device") or None,
+                                                   self._settings["audio_device"] or None,
+                                                   on_level=self._on_level, log=source_log)
+                    elif self._source() == "mic":
                         live_subs.mic_stream(audio_q, cap, self._settings.get("mic_device") or None,
                                              on_level=self._on_level)
                     else:
@@ -961,7 +974,7 @@ class Api:
 
     @staticmethod
     def _speaker_id(v):
-        return isinstance(v, int) and not isinstance(v, bool) and v > 0
+        return isinstance(v, int) and not isinstance(v, bool) and v >= 0   # 0 = "You" (SPK-5)
 
     def speaker_list(self):
         """[{id, name, colour, lines}] for this meeting (or the last one)."""

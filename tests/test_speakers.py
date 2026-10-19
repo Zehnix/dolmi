@@ -353,3 +353,173 @@ def test_real_model_embeds_a_line():
     assert float(np.dot(v, emb(x))) > 0.999
     with pytest.raises(ValueError):
         emb(np.zeros(100, np.float32))
+
+
+# ------------------------------------------------------------------ SPK-5: "You" from the microphone
+from types import SimpleNamespace
+
+import dolmi_platform
+from dolmi_platform import _dual
+
+
+def _tone(seconds, amp, freq=220.0):
+    t = np.arange(int(seconds * speakers.SR)) / speakers.SR
+    return (amp * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+
+
+def _feed(q, audio):
+    for i in range(0, len(audio), _dual.STEP):
+        q.put(audio[i:i + _dual.STEP])
+
+
+def _mixed(mic, spk, start=1000.0):
+    """Run mix() on two synthetic sources; returns (mixed audio, SourceLog). Block k ends at start + k/10."""
+    mic_q, spk_q, out_q, stop = queue.Queue(), queue.Queue(), queue.Queue(), threading.Event()
+    _feed(mic_q, mic)
+    _feed(spk_q, spk)
+    log, ticks = speakers.SourceLog(), iter(start + 0.1 * (k + 1) for k in range(100000))
+    n = max(len(mic), len(spk)) // _dual.STEP
+    th = threading.Thread(target=_dual.mix, args=(mic_q, spk_q, out_q, stop),
+                          kwargs={"log": log, "clock": lambda: next(ticks)}, daemon=True)
+    th.start()
+    end = time.time() + 5
+    while out_q.qsize() < n and time.time() < end:
+        time.sleep(0.01)
+    stop.set()
+    th.join(2)
+    return np.concatenate([out_q.get() for _ in range(out_q.qsize())]), log
+
+
+def test_mix_adds_both_sources_and_logs_their_energy():
+    mic = np.concatenate([_tone(2, 0.3), np.zeros(2 * speakers.SR, np.float32)])     # user talks 0-2 s
+    spk = np.concatenate([np.zeros(2 * speakers.SR, np.float32), _tone(2, 0.5, 330)])  # remote 2-4 s
+    out, log = _mixed(mic, spk)
+    assert len(out) == len(mic) and np.allclose(out, mic + spk, atol=1e-6)            # worker sees one stream
+    m, s = log.window(1000.0, 1002.0)
+    assert m == pytest.approx(0.3 / np.sqrt(2), rel=0.05) and s == pytest.approx(0, abs=1e-6)
+    m, s = log.window(1002.2, 1004.0)
+    assert m == pytest.approx(0, abs=1e-6) and s == pytest.approx(0.5 / np.sqrt(2), rel=0.05)
+
+
+def test_mix_keeps_going_when_one_source_stalls():
+    out, log = _mixed(np.zeros(0, np.float32), _tone(1, 0.2))      # no mic chunks at all
+    # the speaker alone flows on, at most LAG_BLOCKS - 1 blocks (200 ms) behind
+    assert len(out) == speakers.SR - (_dual.LAG_BLOCKS - 1) * _dual.STEP and log.window(1000, 1001)[0] == 0
+
+
+def test_dual_stream_runs_both_and_reports_a_source_error():
+    got, stop = queue.Queue(), threading.Event()
+
+    def mic(q, inner, device):
+        assert device == "Headset"
+        _feed(q, _tone(1, 0.3))
+        inner.wait()
+
+    def spk(q, inner, device):
+        _feed(q, _tone(1, 0.1))
+        inner.wait()
+
+    log = speakers.SourceLog()
+    th = threading.Thread(target=_dual.dual, args=(mic, spk, got, stop, "Headset", None, None, log), daemon=True)
+    th.start()
+    end = time.time() + 5
+    while sum(len(x) for x in list(got.queue)) < speakers.SR and time.time() < end:
+        time.sleep(0.01)
+    stop.set()
+    th.join(3)
+    assert sum(len(x) for x in list(got.queue)) >= speakers.SR and not th.is_alive()   # nothing lost
+    assert log.window(0, 1e12)[0] > 0
+
+    def broken(q, inner, device):
+        raise RuntimeError("no microphone found")
+    with pytest.raises(RuntimeError, match="no microphone"):
+        _dual.dual(broken, spk, queue.Queue(), threading.Event())
+    assert "dual_stream" in dolmi_platform.API
+
+
+def _diarizer(log):
+    calls = []
+    d = speakers.Diarizer(lambda a: calls.append(1) or np.ones(DIM), source_log=log)
+    return d, calls
+
+
+def test_mic_dominant_lines_are_you_and_the_rest_are_clustered():
+    mic = np.concatenate([_tone(2, 0.3), np.zeros(2 * speakers.SR, np.float32)])
+    spk = np.concatenate([np.zeros(2 * speakers.SR, np.float32), _tone(2, 0.5, 330)])
+    _, log = _mixed(mic, spk)
+    d, calls = _diarizer(log)
+    sid, conf = d.assign(np.zeros(2 * speakers.SR), 1000.0, 1002.0)
+    assert sid == speakers.YOU and conf == 1.0 and calls == []      # not embedded, clusters stay clean
+    sid, _ = d.assign(np.zeros(2 * speakers.SR), 1002.0, 1004.0)
+    assert sid == 1 and calls == [1]
+    assert d.assign(np.zeros(speakers.SR // 2), 1000.5, 1001.0)[0] == speakers.YOU   # short "Ja." too
+    assert speakers.default_name(speakers.YOU) == "You"
+
+
+def test_echo_of_the_remote_voice_in_the_mic_is_not_you():
+    remote = _tone(3, 0.5, 330)
+    echo = 0.25 * np.roll(remote, 800)                              # laptop speakers: the remote voice leaks in
+    _, log = _mixed(echo.astype(np.float32), remote)
+    assert log.you(1000.0, 1003.0) is None
+    d, calls = _diarizer(log)
+    assert d.assign(np.zeros(3 * speakers.SR), 1000.0, 1003.0)[0] == 1 and calls == [1]
+
+
+def test_overlap_quiet_mic_and_no_log_fall_back_to_clustering():
+    _, log = _mixed(_tone(2, 0.3), _tone(2, 0.25, 330))             # both talk: mic only ~1.4x energy
+    assert log.you(1000.0, 1002.0) is None
+    _, log = _mixed(_tone(2, 0.003), np.zeros(2 * speakers.SR, np.float32))   # a muted mic
+    assert log.you(1000.0, 1002.0) is None
+    assert speakers.SourceLog().you(1000, 1002) is None             # no blocks in that window
+    d, _ = _diarizer(None)
+    assert d.assign(np.zeros(2 * speakers.SR), 1000.0, 1002.0)[0] == 1
+
+
+def test_capture_both_is_off_by_default_and_a_bool_setting(api):
+    assert config.DEFAULTS["capture_both"] is False and api.state()["captureBoth"] is False
+    assert api.set_setting("capture_both", "yes") is False
+    assert api.set_setting("capture_both", True) and api.state()["captureBoth"] is True
+
+
+def _run_begin(api, monkeypatch):
+    seen = {}
+
+    def dual(q, stop, mic_device=None, speaker_device=None, on_level=None, log=None):
+        seen.update(mic=mic_device, speaker=speaker_device, log=log)
+        stop.wait()
+    monkeypatch.setattr(dolmi_platform, "dual_stream", dual)
+    monkeypatch.setattr(live_subs, "loopback_stream", lambda q, stop, *a, **k: seen.update(loopback=True) or stop.wait())
+    monkeypatch.setattr(live_subs, "worker", lambda eng, aq, uq, tr, stop, *a, **k: seen.update(diarizer=k.get("diarizer")) or stop.wait())
+    api._engine = SimpleNamespace(language=None, device="cpu", model_name="fake")
+    token = object()
+    api._session = {"token": token}
+    api._begin(token)
+    end = time.time() + 5
+    while not ({"diarizer"} <= set(seen) and ({"log"} <= set(seen) or "loopback" in seen)) and time.time() < end:
+        time.sleep(0.01)
+    api.stop_listening()
+    return seen
+
+
+def test_begin_uses_dual_stream_and_gives_the_diarizer_its_log(api, monkeypatch):
+    assert api.set_setting("speaker_labels", True) and api.set_setting("capture_both", True)
+    assert api.set_setting("mic_device", "Headset")
+    monkeypatch.setattr(speakers, "is_installed", lambda: True)
+    monkeypatch.setattr(speakers, "load_diarizer", lambda **k: speakers.Diarizer(lambda a: np.ones(DIM)))
+    seen = _run_begin(api, monkeypatch)
+    assert "loopback" not in seen and seen["mic"] == "Headset"
+    assert isinstance(seen["log"], speakers.SourceLog) and seen["diarizer"].source_log is seen["log"]
+
+
+def test_begin_without_capture_both_is_unchanged(api, monkeypatch):
+    seen = _run_begin(api, monkeypatch)
+    assert seen.get("loopback") and "log" not in seen and seen["diarizer"] is None
+
+
+def test_you_can_be_renamed_and_lines_reassigned_to_you(api):
+    t = _meeting(api._data)
+    api._last_transcript = t
+    line = next(iter(t.lines))
+    r = api.speaker_reassign(line, speakers.YOU)
+    assert r["ok"] and any(s["id"] == 0 and s["name"] == "You" for s in r["speakers"])
+    assert api.speaker_rename(speakers.YOU, "Annas")["ok"]

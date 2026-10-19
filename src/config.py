@@ -51,6 +51,7 @@ DEFAULTS = {
     "shortcuts_on": True, "shortcuts": {},       # APP-7: global shortcuts on/off; {action: combo} (empty = defaults)
     "bar_locked": False, "bar_positions": {}, "bar_screen": "",  # APP-8: click-through lock; bar place per screen
     "speaker_labels": False,                      # SPK-4: who said each line (beta, on-device voice model)
+    "capture_both": False,                        # SPK-5: caption the microphone too (mic + speaker mixed, beta)
 }
 
 
