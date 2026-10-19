@@ -15,6 +15,7 @@ Nothing real is touched: `api` uses a temp program folder, config folder and dat
 """
 import shutil
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -96,6 +97,9 @@ def api(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CONFIG", cfg)
     monkeypatch.setattr(config, "SETTINGS", cfg / "settings.json")
     config.save_settings({**config.DEFAULTS, "data_folder": str(data)})
+    # Park the 'nothing heard' watcher thread: tests drive _heard_tick themselves, and a background tick
+    # would race them for a faked self._clock.
+    monkeypatch.setattr(app_mod.Api, "_sleep", staticmethod(lambda s: threading.Event().wait()))
 
     a = app_mod.Api()
     a._window = FakeWindow()
