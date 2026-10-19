@@ -180,11 +180,11 @@ document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) settingsBoot(); 
    turned off); a newer one is offered as "Download x.y.z", which opens the release page. Nothing installs. ---- */
 { const m=settingsMount('about.updates');
   if(m) m.innerHTML=`<div class="set" data-kw="update updates new version release download check github"><div><div class="lab">Check for updates</div><div class="ps">When Dolmi opens, asks GitHub for the latest release. Nothing is downloaded or installed by itself</div></div><button class="sw on" data-sw id="swUpdates"></button></div>
-    <div class="set" data-kw="update new version download release check now"><div><div class="lab">Latest version</div><div class="ps" id="updStatus">Not checked yet</div></div><div style="display:flex;gap:8px"><button class="btn ghost" id="setCheckUpdate">Check now</button><button class="btn ghost on" id="setDownloadUpdate" hidden>Download</button></div></div>`; wireNewSwitches(m); }
+    <div class="set" data-kw="update new version download release check now"><div><div class="lab">Latest version</div><div class="ps" id="updStatus">Not checked yet</div></div><div style="display:flex;gap:8px"><button class="btn ghost" id="setCheckUpdate">Check now</button><button class="btn ghost on" id="setDownloadUpdate" style="display:none">Download</button></div></div>`; wireNewSwitches(m); }
 wireSwitch('#swUpdates','check_updates');
 function applyUpdate(u,asked){ const st=$('#updStatus'), dl=$('#setDownloadUpdate'); if(!st||!u) return;
-  if(u.available){ st.textContent=`Dolmi ${u.version} is out (you have ${u.current})`; dl.hidden=false; dl.textContent=`Download ${u.version}`; dl.dataset.url=u.url; }
-  else { dl.hidden=true; st.textContent=u.version?`You have the latest version (${u.current})`:(asked?'Could not reach GitHub. Try again later':'Not checked yet'); } }
+  if(u.available){ st.textContent=`Dolmi ${u.version} is out (you have ${u.current})`; dl.style.display=''; dl.textContent=`Download ${u.version}`; dl.dataset.url=u.url; }
+  else { dl.style.display='none'; st.textContent=u.version?`You have the latest version (${u.current})`:(asked?'Could not reach GitHub. Try again later':'Not checked yet'); } }
 if($('#setCheckUpdate')) $('#setCheckUpdate').onclick=async()=>{ const b=bridge(); if(!b) return; $('#updStatus').textContent='Checking…'; applyUpdate(await b.check_update(true),true); };
 if($('#setDownloadUpdate')) $('#setDownloadUpdate').onclick=()=>{ const b=bridge(); if(b) b.open_release($('#setDownloadUpdate').dataset.url||''); };
 { const prev=window.dolmi.onUpdate; window.dolmi.onUpdate=u=>{ if(prev) prev(u); applyUpdate(u); toast(`Dolmi ${u.version} is available: Settings → About & updates`); }; }
