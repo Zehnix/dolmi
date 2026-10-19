@@ -31,3 +31,7 @@ installer/.cache/
 
 # design plans and UI demos — kept local, not published
 design/
+
+# test bench: audio and results stay local
+eval/data/
+eval/results/
