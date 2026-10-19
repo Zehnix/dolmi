@@ -320,6 +320,52 @@ def apply_invisible(api, on):
             _set_capture(ov_hwnd, on)
 
 
+
+# ------------------------------------------------------------------ subtitle bar click-through lock (APP-8)
+WS_EX_LAYERED = 0x00080000      # required for WS_EX_TRANSPARENT to let clicks through
+WS_EX_TRANSPARENT = 0x00000020  # hit-testing skips the window: clicks land on the window below
+LWA_ALPHA = 0x00000002
+_layered_by_us = set()          # HWNDs Dolmi made layered (only those lose WS_EX_LAYERED on unlock)
+
+def _set_click_through(hwnd, on):
+    """Clicks go through the window (on) or reach it again (off). True when the style bits are as asked."""
+    if not hwnd:
+        return False
+    try:
+        u = _user32()
+        ex = u.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        if on:
+            want = ex | WS_EX_LAYERED | WS_EX_TRANSPARENT
+            if not ex & WS_EX_LAYERED:
+                _layered_by_us.add(hwnd)
+        else:
+            want = ex & ~WS_EX_TRANSPARENT
+            if hwnd in _layered_by_us:
+                want &= ~WS_EX_LAYERED
+                _layered_by_us.discard(hwnd)
+        if want != ex:
+            u.SetWindowLongW(hwnd, GWL_EXSTYLE, want)
+            if on and not ex & WS_EX_LAYERED:
+                u.SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)   # a fresh layered window paints nothing until set
+            u.SetWindowPos(hwnd, 0, 0, 0, 0, 0, _SWP)
+        return _click_through_bits(hwnd) == bool(on)
+    except Exception as e:
+        print(f"click-through: style change failed ({e})")
+        return False
+
+def _click_through_bits(hwnd):
+    """True when the window has both WS_EX_LAYERED and WS_EX_TRANSPARENT (clicks pass through it)."""
+    ex = _user32().GetWindowLongW(hwnd, GWL_EXSTYLE)
+    return bool(ex & WS_EX_LAYERED and ex & WS_EX_TRANSPARENT)
+
+def set_click_through(win, on):
+    """Subtitle bar lock: the bar ignores the mouse, so it never takes a click from the meeting window."""
+    return _set_click_through(_native_hwnd(win, "Dolmi overlay"), on)
+
+def click_through(win):
+    hwnd = _native_hwnd(win, "Dolmi overlay")
+    return bool(hwnd) and _click_through_bits(hwnd)
+
 # ------------------------------------------------------------------ API key storage (DPAPI)
 def _dpapi(protect, data):
     from ctypes import wintypes

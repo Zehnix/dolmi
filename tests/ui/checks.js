@@ -83,6 +83,8 @@
     ['privacy','#setDataOpen','click','open_data_folder'],
     ['appearance','#theme [data-t="ink"]','click','set_setting','theme'],
     ['appearance','#theme [data-t="paper"]','click','set_setting','theme'],
+    ['bar','#swBarLock','click','set_bar_locked',true],                                       // APP-8
+    ['bar','#swBarLock','click','set_bar_locked',false],
     ['about','#swUpdates','click','set_setting','check_updates'],                          // APP-6
     ['about','#setCheckUpdate','click','check_update',true],
     ['about','#setDownloadUpdate','click','open_release','https://github.com/Zehnix/dolmi/releases/tag/v2.3.0'],

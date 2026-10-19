@@ -10,7 +10,8 @@ Both modules import on any OS (OS libraries load lazily inside functions), so te
               gpu_ready() system_info() gpu_name()
     desktop   copy_text(text) -> bool  open_path(path)  mic_privacy_url  register_app()  app_icon(root)
               WEBVIEW_GUI
-    windows   overlay_stealth(api)  apply_invisible(api, on)
+    windows   overlay_stealth(api)  apply_invisible(api, on)  set_click_through(window, on) -> bool
+              click_through(window) -> bool   (subtitle bar lock: clicks go to the window below)
     keys      protect(bytes) -> bytes  unprotect(bytes) -> bytes   (DPAPI / Keychain secret)
     folders   config_dir()  log_dir()  documents_folder()  needs_log_file()
     hotkey    start_recover_hotkey(on_press)
@@ -25,7 +26,7 @@ API = (
     "output_devices", "input_devices", "loopback_stream", "mic_stream",
     "prepare_gpu", "compute_device", "auto_speech", "gpu_ready", "system_info", "gpu_name",
     "copy_text", "open_path", "register_app", "app_icon",
-    "overlay_stealth", "apply_invisible",
+    "overlay_stealth", "apply_invisible", "set_click_through", "click_through",
     "protect", "unprotect",
     "config_dir", "log_dir", "documents_folder", "needs_log_file",
     "start_recover_hotkey",

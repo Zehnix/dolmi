@@ -272,6 +272,21 @@ def _rebuild_main(api):
         print(f"window rebuild: {e}")
 
 
+# ------------------------------------------------------------------ subtitle bar click-through lock (APP-8)
+def set_click_through(win, on):
+    """Subtitle bar lock: NSWindow.ignoresMouseEvents, so clicks go to the window below (needs a manual
+    check on a Mac)."""
+    nswindow = _native(win)
+    if nswindow is None:
+        return False
+    stealth._main(nswindow.setIgnoresMouseEvents_, bool(on))
+    return True
+
+def click_through(win):
+    nswindow = _native(win)
+    return bool(nswindow is not None and nswindow.ignoresMouseEvents())
+
+
 # ------------------------------------------------------------------ API key storage (Keychain)
 # A random 32-byte secret lives in the login Keychain (service "Dolmi"). Keys are encrypted with an
 # HMAC-SHA256 keystream (CTR) and authenticated with HMAC-SHA256, all from the standard library.

@@ -139,6 +139,8 @@ function openSettings(section,rowId){
 }
 /* an empty, hidden slot another domain fills (e.g. settingsMount('bar.time')); shown once used */
 function settingsMount(name){ const m=$(`[data-mount="${name}"]`); if(m) m.hidden=false; return m; }
+/* switches added after core.js wired the page's own (rows filled into a mount) */
+function wireNewSwitches(scope){ if(scope) scope.querySelectorAll('[data-sw]').forEach(s=>{ if(!s.onclick) s.onclick=()=>s.classList.toggle('on'); }); }
 $$('#setMenu [data-sec]').forEach(b=>b.addEventListener('click',()=>showSettingsSection(b.dataset.sec)));
 showSettingsSection(lastSettingsSection());
 
@@ -178,7 +180,7 @@ document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) settingsBoot(); 
    turned off); a newer one is offered as "Download x.y.z", which opens the release page. Nothing installs. ---- */
 { const m=settingsMount('about.updates');
   if(m) m.innerHTML=`<div class="set" data-kw="update updates new version release download check github"><div><div class="lab">Check for updates</div><div class="ps">When Dolmi opens, asks GitHub for the latest release. Nothing is downloaded or installed by itself</div></div><button class="sw on" data-sw id="swUpdates"></button></div>
-    <div class="set" data-kw="update new version download release check now"><div><div class="lab">Latest version</div><div class="ps" id="updStatus">Not checked yet</div></div><div style="display:flex;gap:8px"><button class="btn ghost" id="setCheckUpdate">Check now</button><button class="btn ghost on" id="setDownloadUpdate" hidden>Download</button></div></div>`; }
+    <div class="set" data-kw="update new version download release check now"><div><div class="lab">Latest version</div><div class="ps" id="updStatus">Not checked yet</div></div><div style="display:flex;gap:8px"><button class="btn ghost" id="setCheckUpdate">Check now</button><button class="btn ghost on" id="setDownloadUpdate" hidden>Download</button></div></div>`; wireNewSwitches(m); }
 wireSwitch('#swUpdates','check_updates');
 function applyUpdate(u,asked){ const st=$('#updStatus'), dl=$('#setDownloadUpdate'); if(!st||!u) return;
   if(u.available){ st.textContent=`Dolmi ${u.version} is out (you have ${u.current})`; dl.hidden=false; dl.textContent=`Download ${u.version}`; dl.dataset.url=u.url; }
@@ -188,3 +190,13 @@ if($('#setDownloadUpdate')) $('#setDownloadUpdate').onclick=()=>{ const b=bridge
 { const prev=window.dolmi.onUpdate; window.dolmi.onUpdate=u=>{ if(prev) prev(u); applyUpdate(u); toast(`Dolmi ${u.version} is available: Settings → About & updates`); }; }
 async function updatesBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state(); setSw('#swUpdates',s.checkUpdates!==false); if(s.update) applyUpdate(s.update); }catch(e){ console.error('updates boot',e); } }
 document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) updatesBoot(); else window.addEventListener('pywebviewready',updatesBoot); });
+
+/* ---- APP-8 subtitle bar lock: the bar ignores the mouse so it never takes a click from the meeting window.
+   It can't be clicked while locked, so it is unlocked here or with the shortcut (About & updates). ---- */
+{ const m=settingsMount('bar.clickthrough');
+  if(m) m.innerHTML=`<div class="set" data-kw="lock click through clickthrough mouse ignore pass bar overlay pin"><div><div class="lab">Lock the bar</div><div class="ps" id="barLockHint">Clicks go through it to the meeting window. Unlock here or with the shortcut</div></div><button class="sw" data-sw id="swBarLock"></button></div>`; wireNewSwitches(m); }
+if($('#swBarLock')) $('#swBarLock').addEventListener('click',async()=>{ const b=bridge(); if(!b) return; const on=$('#swBarLock').classList.contains('on');
+  const r=await b.set_bar_locked(on); setSw('#swBarLock',r.locked); toast(r.locked?'Subtitle bar locked: clicks go through it':'Subtitle bar unlocked'); });
+{ const prev=window.dolmi.onBarLock; window.dolmi.onBarLock=on=>{ if(prev) prev(on); setSw('#swBarLock',on); }; }
+async function barLockBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state(); setSw('#swBarLock',!!s.barLocked); }catch(e){ console.error('bar lock boot',e); } }
+document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) barLockBoot(); else window.addEventListener('pywebviewready',barLockBoot); });

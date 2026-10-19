@@ -53,11 +53,14 @@ class OverlayApi:
 
 
 class Overlay:
-    def __init__(self, background="#16150F", on_hide=None, on_toggle=None):
+    def __init__(self, background="#16150F", on_hide=None, on_toggle=None, place=None):
+        """place: {x, y, w, h} where the bar last was on this screen (APP-8), else top centre."""
         self.api = OverlayApi(on_hide, on_toggle)
+        p = place or {}
         self.window = webview.create_window(
             "Dolmi overlay", url=str((WEB / "overlay.html").as_uri()), js_api=self.api,
-            width=640, height=200, x=None, y=48, frameless=True, easy_drag=False,
+            width=max(int(p.get("w", 640)), MIN_W), height=max(int(p.get("h", 200)), MIN_H),
+            x=p.get("x"), y=p.get("y", 48), frameless=True, easy_drag=False,
             on_top=True, background_color=background, resizable=True,
             transparent=True)   # the glass background's opacity is a setting; the desktop shows through
         self.api._window = self.window

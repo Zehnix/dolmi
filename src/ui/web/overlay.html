@@ -28,13 +28,17 @@ html,body{height:100%;background:transparent;overflow:hidden;font-family:var(--u
 .de{font-family:var(--mono);font-size:13px;color:#aba28c;line-height:1.4}
 .en{font-family:var(--display);font-weight:500;font-size:var(--fs);line-height:1.3;color:#F6F1E7}
 .idle{color:#776f59;font-size:14px}
+/* APP-8 locked: the window ignores the mouse (clicks go to the meeting below), so its controls are hidden */
+.lockm{display:none;align-items:center;gap:4px;font-size:11px;font-family:var(--mono);color:#776f59}
+.lockm svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.locked .lockm{display:flex}.locked .x,.locked .srcb,.locked .grip{display:none}.locked .bar{cursor:default}
 .grip{position:fixed;right:3px;bottom:3px;width:16px;height:16px;cursor:nwse-resize;opacity:.5}
 .grip:before{content:"";position:absolute;right:3px;bottom:3px;width:9px;height:9px;border-right:2px solid #9a917b;border-bottom:2px solid #9a917b;border-radius:0 0 3px 0}
 </style>
 </head>
 <body>
 <div class="hud">
-  <div class="bar pywebview-drag-region" id="dragbar"><span class="dot pulse" id="dot"></span><span class="nm">Dolmi</span><span class="sp"></span><span class="srcb" id="srcb" title="Listening to the speaker — click to switch to the microphone"><svg viewBox="0 0 24 24"><path id="srcp" d="M11 5 6 9H2v6h4l5 4V5zM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg><span id="srct">Speaker</span></span><span class="x" id="close" title="Hide">✕</span></div>
+  <div class="bar pywebview-drag-region" id="dragbar"><span class="dot pulse" id="dot"></span><span class="nm">Dolmi</span><span class="sp"></span><span class="srcb" id="srcb" title="Listening to the speaker — click to switch to the microphone"><svg viewBox="0 0 24 24"><path id="srcp" d="M11 5 6 9H2v6h4l5 4V5zM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg><span id="srct">Speaker</span></span><span class="lockm" id="lockMark" title="Locked: clicks go through. Unlock in Dolmi or with the shortcut"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>Locked</span><span class="x" id="close" title="Hide">✕</span></div>
   <div class="body" id="body"><div class="idle" id="idle">Listening…</div></div>
   <div class="grip" id="grip"></div>
 </div>
@@ -53,6 +57,7 @@ function check(){ if(stuck){ if(body.scrollTop<autoTop-1&&!atEnd()) stuck=false;
 body.addEventListener('scroll',check);
 const follow=()=>{ if(stuck){ body.scrollTop=body.scrollHeight; autoTop=body.scrollTop; } };
 window.ov={
+  locked:(on)=>document.documentElement.classList.toggle('locked',!!on),
   style:(a,fs)=>{ document.documentElement.style.setProperty('--a',Math.max(.15,Math.min(1,a))); document.documentElement.style.setProperty('--fs',fs+'px'); },
   idle:(t)=>{ body.innerHTML='<div class="idle">'+esc(t||'Listening…')+'</div>'; stuck=true; autoTop=0; },
   /* 4 lines while live; while the reader is scrolled up, up to 40 so the line being re-read stays put */

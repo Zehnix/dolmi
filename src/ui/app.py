@@ -54,6 +54,54 @@ ENGINE_SETTINGS = ("model", "language", "speech_source")
 WARM_DEBOUNCE_S = 0.5            # several setting changes in a row load the models once
 
 
+BAR_SAVE_DELAY_S = 0.6           # APP-8: save the bar's place once it stops moving
+
+
+def _screen_key(s):
+    """A screen's identity for the bar position: its geometry, e.g. '0,0,1920x1080' (APP-8)."""
+    return f"{int(s.x)},{int(s.y)},{int(s.width)}x{int(s.height)}"
+
+
+def _screen_at(x, y, screens):
+    """The screen containing the point, else the nearest one, else None."""
+    best, dist = None, None
+    for s in screens or []:
+        dx = max(s.x - x, 0, x - (s.x + s.width))
+        dy = max(s.y - y, 0, y - (s.y + s.height))
+        d = dx * dx + dy * dy
+        if dist is None or d < dist:
+            best, dist = s, d
+    return best
+
+
+def _valid_place(p):
+    return (isinstance(p, dict) and all(isinstance(p.get(k), numbers.Real) and not isinstance(p.get(k), bool)
+                                        for k in ("x", "y", "w", "h")) and p["w"] > 0 and p["h"] > 0)
+
+
+def _bar_place(positions, last, screens, near=None):
+    """Where to open the subtitle bar: its saved place on the screen it was last on, else on the screen
+    `near` (the main window's centre) is on, else on any connected screen it was saved for; None = default.
+    Only screens connected now count (keys are geometries), and the place is pulled inside that screen."""
+    positions = positions if isinstance(positions, dict) else {}
+    by_key = {_screen_key(s): s for s in screens or []}
+    order = [last]
+    if near:
+        s = _screen_at(near[0], near[1], screens)
+        if s:
+            order.append(_screen_key(s))
+    order += list(positions)
+    for key in order:
+        p, s = positions.get(key), by_key.get(key)
+        if s is None or not _valid_place(p):
+            continue
+        w, h = min(int(p["w"]), s.width), min(int(p["h"]), s.height)
+        x = min(max(int(p["x"]), s.x), s.x + s.width - w)
+        y = min(max(int(p["y"]), s.y), s.y + s.height - h)
+        return {"x": x, "y": y, "w": w, "h": h, "screen": key}
+    return None
+
+
 def _js(v):
     return json.dumps(v)
 
@@ -343,7 +391,7 @@ class Api:
             "theme": s.get("theme", "paper"), "listening": bool(self._session),
             "opacity": s.get("opacity", 0.88), "font": s.get("font", 22),
             "warnSilence": bool(s.get("warn_silence", True)),
-            "barVisible": bool(self._overlay_visible),
+            "barVisible": bool(self._overlay_visible), "barLocked": bool(s.get("bar_locked")),
             "engine": self._engine_label(), "engineState": self._engine_state,
             "preloadModels": bool(s.get("preload_models", True)),
             "checkUpdates": bool(s.get("check_updates", True)), "update": self._update, "dataFolder": str(self._data), "version": VERSION,
@@ -1294,7 +1342,8 @@ class Api:
     def show_overlay(self):
         if not self._overlay:
             from ui.overlay import Overlay
-            ov = Overlay(background="#16150F", on_hide=self._on_overlay_hidden, on_toggle=self.toggle_source)
+            ov = Overlay(background="#16150F", on_hide=self._on_overlay_hidden, on_toggle=self.toggle_source,
+                         place=self._bar_start_place())
             self._overlay = ov
 
             def loaded(*_):
@@ -1303,6 +1352,7 @@ class Api:
                 self._push_overlay_style()
                 lab = self._source_label()
                 self._ov("source", lab["source"], lab["device"])
+                self._ov("locked", bool(self._settings.get("bar_locked")))
 
             def shown(*_):
                 self._stealth_overlay()
@@ -1310,6 +1360,8 @@ class Api:
             try:
                 ov.window.events.loaded += loaded
                 ov.window.events.shown += shown
+                ov.window.events.moved += lambda *a: self._bar_moved()
+                ov.window.events.resized += lambda *a: self._bar_moved()
             except Exception as e:
                 print(f"overlay events: {e}")
         else:
@@ -1334,8 +1386,81 @@ class Api:
         self._emit("onBar", False)
 
     def _stealth_overlay(self):
-        """No taskbar button (Windows) / on every Space (Mac); follows invisible mode for capture."""
+        """No taskbar button (Windows) / on every Space (Mac); follows invisible mode for capture; and the
+        click-through lock (a style change can reset it, so it is applied after the others)."""
         dolmi_platform.overlay_stealth(self)
+        if self._overlay:
+            dolmi_platform.set_click_through(self._overlay.window, bool(self._settings.get("bar_locked")))
+
+    # ------------------------------------------------------------------ bar lock and place (APP-8)
+    def set_bar_locked(self, on):
+        """Lock the subtitle bar: it ignores the mouse, so clicks go to the meeting window below. Unlocked
+        from Dolmi (Settings > Subtitle bar) or the shortcut, since the bar itself can't be clicked then."""
+        on = bool(on)
+        with self._settings_lock:
+            self._settings["bar_locked"] = on
+            config.save_settings(self._settings)
+        ok = True
+        if self._overlay:
+            ok = dolmi_platform.set_click_through(self._overlay.window, on)
+        self._ov("locked", on)
+        self._emit("onBarLock", on)
+        return {"locked": on, "applied": bool(ok)}
+
+    def toggle_bar_lock(self):
+        return self.set_bar_locked(not self._settings.get("bar_locked"))
+
+    @staticmethod
+    def _screens():
+        try:
+            import webview
+            return list(webview.screens)
+        except Exception as e:
+            print(f"screens: {e}")
+            return []
+
+    def _bar_start_place(self):
+        """The bar's saved place for a connected screen (see _bar_place), or None for the default."""
+        near = None
+        try:
+            w = self._window
+            if w and w.width:
+                near = (w.x + w.width / 2, w.y + w.height / 2)
+        except Exception:
+            pass
+        s = self._settings
+        return _bar_place(s.get("bar_positions"), s.get("bar_screen"), self._screens(), near)
+
+    def _bar_moved(self):
+        """The bar moved or was resized: save its place for that screen once it stops (debounced)."""
+        old = getattr(self, "_bar_timer", None)
+        if old:
+            old.cancel()
+        self._bar_timer = threading.Timer(BAR_SAVE_DELAY_S, self._save_bar_place)
+        self._bar_timer.daemon = True
+        self._bar_timer.start()
+
+    def _save_bar_place(self):
+        """Remember where the bar is, keyed by the screen it is on. Returns that screen's key."""
+        ov = self._overlay
+        if not ov:
+            return None
+        try:
+            w = ov.window
+            p = {"x": int(w.x), "y": int(w.y), "w": int(w.width), "h": int(w.height)}
+        except Exception as e:
+            print(f"bar place: {e}")
+            return None
+        screen = _screen_at(p["x"] + p["w"] / 2, p["y"] + p["h"] / 2, self._screens())
+        if not screen or not _valid_place(p):
+            return None
+        key = _screen_key(screen)
+        with self._settings_lock:
+            positions = dict(self._settings.get("bar_positions") or {})
+            positions[key] = p
+            self._settings["bar_positions"], self._settings["bar_screen"] = positions, key
+            config.save_settings(self._settings)
+        return key
 
     # ------------------------------------------------------------------ invisible mode
     def toggle_invisible(self, on):
