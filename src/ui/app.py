@@ -579,7 +579,8 @@ class Api:
                     return
                 watch.set()
                 self._emit("onEngine", self._engine_label())
-        diarizer = self._make_diarizer()              # SPK-3: None unless Speaker labels (beta) is on
+        meeting = {}                                  # the diarizer's merges relabel THIS meeting only
+        diarizer = self._make_diarizer(lambda: meeting.get("transcript"))  # SPK-3: None unless the beta is on
         with self._lock:
             if not self._alive(token):                # stopped while the models loaded
                 return
@@ -589,6 +590,7 @@ class Api:
             self._chat_id, self._ai_history = None, []
             stop, audio_q = threading.Event(), queue.Queue()
             tr = live_subs.Transcript(self._data, save=self._settings["save_transcripts"])
+            meeting["transcript"] = tr
             self._last_transcript = tr
             self._session.update(stop=stop, transcript=tr, diarizer=diarizer)
 
@@ -650,16 +652,18 @@ class Api:
             self._level_peak = rms
 
     # ------------------------------------------------------------------ speaker labels (SPK-3/4, beta)
-    def _make_diarizer(self):
+    def _make_diarizer(self, transcript=lambda: None):
         """The session's diarizer, or None when Speaker labels is off or its model cannot load
-        (captions still run, without labels)."""
+        (captions still run, without labels). Its merges relabel transcript() - the meeting it was
+        built for - even when they run after Stop while the next meeting is already live."""
         if not self._settings.get("speaker_labels"):
             return None
         try:
             import speakers
             if not speakers.is_installed():
                 self._emit("onEngine", f"downloading the speaker model ({speakers.MODEL_MB} MB)…")
-            return speakers.load_diarizer(mode=self._source, on_merge=self._on_speaker_merge)
+            return speakers.load_diarizer(
+                mode=self._source, on_merge=lambda old, new: self._on_speaker_merge(old, new, transcript()))
         except Exception as e:
             print(f"Speaker labels unavailable: {e!r}")
             self._emit("onError", "Speaker labels are off for this meeting: the voice model could not load.")
@@ -681,12 +685,19 @@ class Api:
         self._emit("onSpeakers", out)
         return out
 
-    def _on_speaker_merge(self, old, new):
-        """The diarizer found two ids are one voice (or the user merged them): relabel the lines."""
-        tr, _, live = self._speaker_target()
+    def _on_speaker_merge(self, old, new, tr=None):
+        """The diarizer found two ids are one voice (or the user merged them): relabel the lines of
+        `tr` (default: the meeting the speaker calls act on). The page only hears about it when `tr`
+        is the meeting it shows; a merge of an older meeting just rewrites that meeting's files."""
+        target, _, live = self._speaker_target()
+        if tr is None:
+            tr = target
         if tr is None:
             return
         tr.relabel(old, new)
+        if tr is not target:                          # an older, stopped meeting
+            self._finish_transcript(tr)
+            return
         self._emit("onSpeakerMerge", old, new)
         self._speakers_changed(tr, live)
 
@@ -705,6 +716,9 @@ class Api:
         name = re.sub(r"[\s·*<>\[\]|]+", " ", str(name or "")).strip()[:SPEAKER_NAME_MAX].strip()
         if tr is None or not self._speaker_id(speaker_id) or not name:
             return {"ok": False, "message": "Type a name for this speaker."}
+        if any(s["id"] != speaker_id and s["name"].casefold() == name.casefold() for s in tr.speaker_list()):
+            return {"ok": False, "message": f"Another speaker is already called {name}. "
+                                            "If they are the same person, use 'Same person as'."}
         tr.rename_speaker(speaker_id, name)
         return {"ok": True, "speakers": self._speakers_changed(tr, live)}
 
@@ -717,7 +731,7 @@ class Api:
             if d is not None:
                 speaker_id = d.new_speaker()
             else:
-                speaker_id = max([x["id"] for x in tr.speaker_list()] or [0]) + 1
+                speaker_id = tr.next_speaker_id()
         if not tr.update_line(line_id, speaker=speaker_id, speaker_conf=1.0):
             return {"ok": False, "message": "That line is no longer in this meeting."}
         return {"ok": True, "speaker": speaker_id, "speakers": self._speakers_changed(tr, live)}
