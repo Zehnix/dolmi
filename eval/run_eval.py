@@ -192,7 +192,9 @@ def make_engine(args, terms, text_set=None, mt_only=False):
         eng = translators.mt_engine(args.translator, args.device)
     else:
         import live_subs
-        eng = live_subs.Engine(args.model, args.device, language="de")
+        import models
+        model = str(models.candidate_dir(args.model)) if args.model in models.CANDIDATES else args.model
+        eng = live_subs.Engine(model, args.device, language="de")
         if args.translator not in ("", "default", "opus-de") and args.translator not in translators.CLOUD:
             eng.translators["opus-de"] = load_translator(args.translator, eng.device)
     if args.translator in translators.CLOUD:

@@ -63,6 +63,19 @@ python eval/ab_blind.py make <that run's .jsonl> --out <folder>     # 100 lines,
 python eval/ab_blind.py score <folder>                               # after filling in sheet.csv
 ```
 
+### Candidate models
+
+`models.CANDIDATES` lists models the bench has measured but the app does not offer (no reputable publisher ships them as CTranslate2). `--model` / `--translator` take their keys and load the local conversion from `%LOCALAPPDATA%\Dolmi-eval\models\<folder>`. Convert in a throwaway venv there, never in the app venv:
+
+```
+python -m venv %LOCALAPPDATA%\Dolmi-eval\convert\venv
+%LOCALAPPDATA%\Dolmi-eval\convert\venv\Scripts\pip install ctranslate2==4.8.2 pyyaml sentencepiece transformers<5 torch --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+REM Opus-MT (Marian zip from the "source" URL, unpacked):  then copy source.spm/target.spm into the output
+...\python -m ctranslate2.converters.opus_mt --model_dir <unzipped> --output_dir <folder> --quantization int8
+REM Whisper (Hugging Face transformers model):  then copy tokenizer.json from mobiuslabsgmbh/faster-whisper-large-v3-turbo
+...\python -m ctranslate2.converters.transformers --model primeline/whisper-large-v3-turbo-german --output_dir <folder> --quantization float16 --copy_files preprocessor_config.json
+```
+
 Adoption rule (tracker, quality domain): at least +3 COMET and +2 chrF over local, and at least 60 % wins in the blind A/B of 100 sentences. COMET needs the separate venv below; where it cannot run, decide on chrF (+2) and term accuracy and say so.
 
 ## What is measured

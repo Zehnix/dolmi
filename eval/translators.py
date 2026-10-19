@@ -31,10 +31,15 @@ def load_text_set(path):
 
 
 def resolve_model(name):
-    """Folder of a CTranslate2 Marian model: a local folder, a models.py key, or a Hugging Face repo."""
+    """Folder of a CTranslate2 Marian model: a local folder, a models.py key or candidate, or a HF repo."""
     if Path(name).expanduser().is_dir():
         return Path(name).expanduser()
     import models
+    if name in models.CANDIDATES:                     # a local conversion (eval/README.md, candidate models)
+        d = models.candidate_dir(name)
+        if not d.is_dir():
+            raise SystemExit(f"{d} is missing: convert {name} first (eval/README.md, 'Candidate models')")
+        return d
     from huggingface_hub import snapshot_download
     repo = models.BY_KEY[name].repo if name in models.BY_KEY else name
     return Path(snapshot_download(repo))

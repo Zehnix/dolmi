@@ -525,3 +525,11 @@ def test_blind_ab_sheet_and_score(tmp_path):
         csv.writer(f).writerows(sheet)
     r = ab_blind.score(tmp_path / "ab")
     assert (r["wins"], r["losses"], r["win_rate"], r["passes_60"]) == (4, 1, 80.0, True)
+
+
+def test_candidates_are_not_offered_in_the_app():
+    import models
+    assert models.CANDIDATES and not set(models.CANDIDATES) & set(models.BY_KEY)
+    for key, c in models.CANDIDATES.items():
+        assert c["job"] in (models.SPEECH, models.TRANSLATE) and c["source"].startswith("https://")
+        assert models.candidate_dir(key).name == c["folder"]
