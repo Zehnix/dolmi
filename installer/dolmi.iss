@@ -21,7 +21,7 @@ AppPublisher=Zehnix
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyRepoURL}/issues
 AppUpdatesURL={#MyRepoURL}/releases
-AppCopyright=Copyright (c) 2026 Zehnix. MIT licence.
+AppCopyright=Copyright (c) 2026 Zehnix (Annas Mustafa). AGPL-3.0 or commercial licence.
 
 ; {autopf} = %LOCALAPPDATA%\Programs for per-user installs, Program Files for all users
 DefaultDirName={autopf}\{#MyAppName}

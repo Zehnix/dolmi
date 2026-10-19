@@ -41,5 +41,5 @@ app = BUNDLE(
             "Dolmi listens to what your Mac plays (your meeting) to show live subtitles. Audio never leaves your Mac.",
         "NSMicrophoneUsageDescription":
             "Dolmi can caption a microphone you choose in Settings. Audio never leaves your Mac.",
-        "NSHumanReadableCopyright": "MIT licence",
+        "NSHumanReadableCopyright": "© 2026 Zehnix (Annas Mustafa). AGPL-3.0 or commercial licence",
     })

@@ -6,7 +6,7 @@
 
 Dolmi listens to whatever your Mac plays (Teams, Zoom, Meet, Slack, a browser, anything), transcribes the speech, and shows a live translation in a floating subtitle bar: English subtitles for German and 26 more languages (or Auto-detect), and German subtitles for English speech. Speech recognition and translation run locally and your audio never leaves your Mac; only the optional Assistant sends text to the AI provider you choose ([privacy policy](PRIVACY.md)).
 
-> macOS 14.2 Sonoma or later, Apple Silicon. MIT licence. [Download the `.dmg`](https://github.com/Zehnix/dolmi/releases/latest), or build it yourself with one command (below).
+> macOS 14.2 Sonoma or later, Apple Silicon. Open source (AGPL-3.0) with a [commercial licence](../COMMERCIAL-LICENSE.md) for closed-source use. [Download the `.dmg`](https://github.com/Zehnix/dolmi/releases/latest), or build it yourself with one command (below).
 
 ![Dolmi live view: German on the left, English on the right](assets/screenshots/live.png)
 
@@ -141,4 +141,4 @@ The helper tests cover the transcript, vocabulary and question-detection logic. 
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Dual-licensed: [GNU AGPL-3.0](LICENSE) or a [commercial licence](../COMMERCIAL-LICENSE.md) (USD 2,000 per product). See [LICENSING.md](../LICENSING.md).
