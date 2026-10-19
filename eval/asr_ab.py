@@ -103,6 +103,10 @@ def compare(folder):
 
 
 def main(argv=None):
+    # live_subs.Engine prints emoji; a cp1252 Windows console would crash the whole run on them.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")
