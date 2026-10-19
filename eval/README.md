@@ -14,6 +14,7 @@ python eval/run_eval.py              # synthetic set, component + stream mode, W
 
 `run_eval.py` prints a summary table and writes `eval/results/<run>.md` and `eval/results/<run>.jsonl`. Both folders, `eval/data/` and `eval/results/`, are git-ignored: audio and per-line output never go into git.
 
+
 Common options:
 
 | Option | Meaning |
@@ -48,16 +49,16 @@ Add `--write-baseline` only when the new numbers should become the reference. Ti
 - **Real-time factor**: ASR seconds per audio second.
 - WER by line type (tags below).
 
-**Stream mode** plays each whole session through the app's real `live_subs.worker()` with the real `Engine`, in 100 ms chunks, on a **simulated clock**: while the worker waits for audio the clock jumps ahead, while it computes the clock runs at wall speed. So latencies include ASR/MT time, but idle waiting costs nothing. If `worker()` takes a `clock=` parameter it is injected; otherwise the bench stands in for `live_subs.time` during the run. `--realtime --speed 1` feeds a real queue in real time instead.
+**Stream mode** plays each whole session through the app's real `live_subs.worker()` with the real `Engine`, in 100 ms chunks, on a **simulated clock**: while every thread of the worker waits (the segmenter for audio, the `dolmi-asr` thread for a job) the clock jumps to the next chunk, while anything computes it runs at wall speed. So latencies include ASR/MT time, idle waiting costs nothing, and the audio never runs ahead of a busy ASR thread. At the end of the audio, Stop comes only once the ASR thread has no job left (finals after Stop never reach the screen), and the bench waits for that thread before scoring. If `worker()` takes a `clock=` parameter it is injected; otherwise the bench stands in for `live_subs.time` during the run. `--realtime --speed 1` feeds a real queue in real time instead (it, too, waits for the ASR thread to finish before Stop).
 
-- **Missed-segment rate**: reference lines with no overlapping final (a final spans the audio from its first voiced chunk to the moment it was emitted).
+- **Missed-segment rate**: reference lines with no overlapping final (a final spans its meta `start`..`end`, the speech it holds; older workers without a line `id`: from its first voiced chunk to the moment it was emitted).
 - **Lines with no word recovered** and **word recall / stream WER**: the finals' text aligned against the whole reference transcript.
 - **Clipped first word**: lines that came out, but without their first word.
 - **Mid-word / mid-utterance cuts**: finals whose audio ends inside a spoken word / inside a reference line (word timings come from the TTS events).
 - **Latency per stage**: end of speech → final (p50/p95), speech start → first text on screen (draft or final), ASR call and MT call durations.
 - **Drops**: if `worker()` takes `on_drop=`, every reported drop is counted by reason.
 
-The ui_q items may be the old `("final", de, en)` tuples or carry a meta dict (`{'id', 'start', 'end', 'emitted', ...}`); a later final with the same `id` replaces the text, and `start`/`end` from the meta are used when present.
+The ui_q items may be the old `("final", de, en)` tuples or carry a meta dict (`{'id', 'start', 'end', 'emitted', ...}`); a later final with the same `id` replaces the text, and `start`/`end` from the meta are used when present. With an `id` they are contract times (stream start + sample / SR) and are used as audio times directly.
 
 Line tags: `S` status, `Q` question, `C` German/English code-switching, `E` English line, `V` verb-final long sentence, `B` backchannel (`Ja.`, `Genau.`), `M`/`ME` monologue over 12 s, `N` numbers and dates; audio conditions `soft_start` (300 ms fade-in), `quiet` (-22 dB), `long`.
 

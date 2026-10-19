@@ -1,6 +1,7 @@
 """Test bench (eval/): metrics on hand-computed examples, the manifest schema, and stream mode with a
 fake engine on a simulated clock."""
 import json
+import queue
 import re
 import sys
 import threading
@@ -257,6 +258,100 @@ def test_stream_mode_uses_an_injected_clock_and_on_drop_when_the_worker_has_them
     assert [r["missed"] for r in rows] == [False, True, True]
 
 
+def threaded_worker(asr_seconds):
+    """A worker with the wave-1 shape (live_subs on exon/integration): this thread only segments, in
+    audio time; a 'dolmi-asr' thread transcribes finished sentences from a job queue and sends what
+    it finishes after Stop to nobody. Finals carry contract times (stream start + sample / SR)."""
+    class Discard:
+        @staticmethod
+        def put(item):
+            pass
+
+    def worker(eng, audio_q, ui_q, tr, stop, detect=None, clock=time.time, on_drop=None, diarizer=None):
+        jobs = queue.Queue()
+
+        def asr_loop(ui_q):
+            n = 0
+            while True:
+                job = jobs.get()
+                if job is None:
+                    return
+                if stop.is_set():
+                    ui_q = Discard
+                audio, start, end = job
+                time.sleep(asr_seconds)                     # Whisper at work
+                de, lang = eng.transcribe(audio)
+                n += 1
+                meta = {"id": n, "start": start, "end": end, "emitted": clock()}
+                ui_q.put(("final", de, eng.translate(de, lang), meta))
+                tr.add(start, end, de, "", meta=meta)
+        threading.Thread(target=asr_loop, name="dolmi-asr", daemon=True, args=(ui_q,)).start()
+        t0, fed, parts, onset, last_voice = None, 0, [], None, None
+        try:
+            while not stop.is_set():
+                try:
+                    chunk = audio_q.get(timeout=0.2)
+                except queue.Empty:
+                    continue
+                if t0 is None:
+                    t0 = clock() - len(chunk) / SR
+                fed += len(chunk)
+                if detect(chunk) is not None:
+                    if onset is None:
+                        onset, parts = fed - len(chunk), []
+                    last_voice = fed
+                if onset is not None:
+                    parts.append(chunk)
+                    if (fed - last_voice) / SR >= 0.6:
+                        jobs.put((np.concatenate(parts), t0 + onset / SR, t0 + last_voice / SR))
+                        onset = None
+        finally:
+            jobs.put(None)
+    return worker
+
+
+def test_stream_mode_waits_for_a_threaded_asr_and_counts_its_compute():
+    summary, rows = run_eval.run_stream(ToneEngine(), tone_session(), worker=threaded_worker(0.4), detect=loud)
+    assert summary["finals"] == 3 and summary["missed_rate"] == 0.0
+    assert [r["missed"] for r in rows] == [False, False, False]
+    assert summary["word_recall"] == pytest.approx(100.0)
+    # 0.6 s pause + 0.4 s of ASR: the audio clock did not run ahead while the ASR thread worked
+    assert 0.95 <= summary["final_latency_p50"] <= 1.4
+
+
+def test_stream_mode_keeps_the_backlog_of_a_slow_asr_to_the_end():
+    # 3.5 s per sentence, sentences ~2.5 s apart: a backlog builds and the last final is ready only
+    # ~1.6 s after the audio ends. It must still reach ui_q (stop only once the job queue is empty).
+    summary, rows = run_eval.run_stream(ToneEngine(), tone_session(), worker=threaded_worker(3.5), detect=loud)
+    assert summary["finals"] == 3 and summary["missed_rate"] == 0.0
+    assert summary["final_latency_p95"] >= 4.5
+
+
+def test_asr_watch_sees_a_thread_waiting_for_jobs_as_idle():
+    watch = run_eval.AsrWatch()
+    jobs, done = queue.Queue(), threading.Event()
+
+    def asr():
+        while True:
+            job = jobs.get()
+            if job is None:
+                return
+            done.wait(5)
+    th = threading.Thread(target=asr, name="dolmi-asr", daemon=True)
+    th.start()
+    time.sleep(0.1)
+    assert watch.idle()
+    jobs.put(1)
+    time.sleep(0.1)
+    assert not watch.idle()                 # working on the job
+    done.set()
+    time.sleep(0.1)
+    assert watch.idle()
+    jobs.put(None)
+    watch.join(5)
+    assert not th.is_alive() and watch.idle()
+
+
 def test_sim_audio_clock_skips_waiting_but_counts_compute():
     stop = threading.Event()
     sim = run_eval.SimAudio(np.zeros(SR, np.float32), stop)
@@ -281,3 +376,4 @@ def test_parse_item_handles_old_and_new_formats():
 def test_baseline_numbers_hold_no_text():
     out = run_eval.numbers_only({"wer_de": 1.23456, "clips": 3, "note": "Satz", "by": {"B": 1.0}, "_rows": [1]})
     assert out == {"wer_de": 1.235, "clips": 3, "by": {"B": 1.0}}
+

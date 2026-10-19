@@ -1,6 +1,6 @@
 """Dolmi test bench: one command scores transcription, translation, lost lines and latency.
 
-    python eval/run_eval.py                                   # synthetic set, both modes, auto device
+    python eval/run_eval.py                                   # synthetic set, both modes, CPU
     python eval/run_eval.py --mode component --set fleurs --limit 200
     python eval/run_eval.py --model large-v3-turbo --device cuda --write-baseline
 
@@ -8,8 +8,9 @@ Modes
   component  ASR on each reference clip -> WER/CER; MT on the gold German -> chrF/BLEU; MT on the ASR
              output (cascade); term accuracy for the fictional term list; real-time factor.
   stream     plays whole sessions through live_subs.worker() in 100 ms chunks with the real Engine on a
-             simulated clock (the clock waits for nobody, but compute time counts), then measures
-             missed-segment rate, clipped first words, mid-word cuts and latency per stage.
+             simulated clock (idle waiting is skipped, compute time counts, audio never runs ahead of a busy
+             ASR thread), then measures missed-segment rate, clipped first words, mid-word cuts and
+             latency per stage.
 
 Sets: synthetic (eval/make_synthetic.py), fleurs (eval/fetch_public.py), private:<folder> (your own
 sessions in the same sidecar format; nothing from it is ever written to the repo).
@@ -298,40 +299,96 @@ def run_comet(python, rows):
 
 
 # ================================================================== stream mode
-class SimAudio:
-    """The worker's audio queue on a simulated clock. Hands out 100 ms chunks; while the worker waits for
-    audio the clock jumps to when that audio would arrive, and while it computes the clock runs at wall
-    speed (times `compute_scale`). So latency includes ASR/MT time, but idle waiting costs nothing."""
+class AsrWatch:
+    """Finds the worker's ASR thread ('dolmi-asr', started by worker() since wave 1) and tells whether it
+    is idle: blocked in jobs.get() with no job queued. Without such a thread (the single-threaded
+    worker before wave 1, or a fake worker) the worker itself is the only compute, so it is always idle."""
 
-    def __init__(self, audio, stop, chunk_s=CHUNK_S, compute_scale=1.0):
+    NAME = "dolmi-asr"
+
+    def __init__(self):
+        self.before = {t.ident for t in threading.enumerate()}
+        self.thread = None
+
+    def find(self):
+        if self.thread is None:
+            self.thread = next((t for t in threading.enumerate()
+                                if t.name == self.NAME and t.ident not in self.before), None)
+        return self.thread
+
+    def idle(self):
+        th = self.find()
+        if th is None or not th.is_alive():
+            return True
+        frame = sys._current_frames().get(th.ident)
+        if frame is None:
+            return True
+        # the innermost Python frame must be threading's Condition.wait under queue.get, and the
+        # queue empty: right after a pop the thread is out of wait(), and before it the queue is full
+        if frame.f_code.co_name != "wait" or not frame.f_code.co_filename.endswith("threading.py"):
+            return False
+        f, in_get = frame, False
+        while f is not None:
+            if f.f_code.co_name == "get" and f.f_code.co_filename.endswith("queue.py"):
+                in_get = True
+                q = f.f_locals.get("self")
+                if q is not None and hasattr(q, "empty") and not q.empty():
+                    return False
+            f = f.f_back
+        return in_get
+
+    def join(self, timeout=60.0):
+        th = self.find()
+        if th is not None:
+            th.join(timeout)
+
+
+class SimAudio:
+    """The worker's audio queue on a simulated clock. Hands out 100 ms chunks; while every thread of the
+    worker waits (for audio, or the ASR thread for a job) the clock jumps to when the next chunk would
+    arrive, and while anything computes it runs at wall speed (times `compute_scale`). So latency
+    includes ASR/MT time, idle waiting costs nothing, and the audio never runs ahead of a busy ASR
+    thread. At the end of the audio, stop is set only once the ASR thread has no job left, because
+    the worker discards finals that come out after Stop."""
+
+    def __init__(self, audio, stop, chunk_s=CHUNK_S, compute_scale=1.0, idle=None, poll=0.002):
         self.audio, self.stop = audio, stop
         self.chunk = int(SR * chunk_s)
         self.pos, self.t = 0, 0.0
         self.scale = compute_scale
+        self.idle = idle or (lambda: True)
+        self.poll = poll
         self.mark = _time.perf_counter()
+        self.lock = threading.Lock()   # the worker and its ASR thread both read the clock
         self.batch_start = 0   # audio position where the chunks of the latest get() began
         self.log = []          # (clock value handed out, batch_start): maps worker timestamps to audio
 
     def _tick(self):
-        now = _time.perf_counter()
-        self.t += (now - self.mark) * self.scale
-        self.mark = now
+        with self.lock:
+            now = _time.perf_counter()
+            self.t += (now - self.mark) * self.scale
+            self.mark = now
+            return self.t
 
     def clock(self):
-        self._tick()
-        self.log.append((self.t, self.batch_start))
-        return self.t
+        t = self._tick()
+        self.log.append((t, self.batch_start))
+        return t
 
     def now(self):
         """The current simulated time, for our own records (not logged as a worker timestamp)."""
-        self._tick()
-        return self.t
+        return self._tick()
 
     def audio_at(self, stamp):
         """Audio time (s) where the buffer began that the worker stamped `stamp` (a value clock() returned)."""
         import bisect
         k = bisect.bisect_right(self.log, (stamp, float("inf"))) - 1
         return self.log[k][1] / SR if k >= 0 else 0.0
+
+    def contract_time(self, stamp):
+        """Audio time (s) of a UI_Q_CONTRACT time (stream start + sample / SR). The worker anchors the
+        stream at clock() - first chunk = 0 on this clock, so it already is audio time."""
+        return stamp
 
     def audio_time(self):
         return self.pos / SR
@@ -341,15 +398,29 @@ class SimAudio:
         chunk, self.pos = self.audio[self.pos:end], end
         return chunk
 
+    def _arrival(self):
+        return min(self.pos + self.chunk, len(self.audio)) / SR
+
     def _ready(self):
-        return self.pos < len(self.audio) and min(self.pos + self.chunk, len(self.audio)) / SR <= self.t
+        return self.pos < len(self.audio) and self._arrival() <= self.t
 
     def get(self, block=True, timeout=None):
-        self._tick()
-        if self.pos >= len(self.audio):
-            self.stop.set()
-            raise queue.Empty
-        self.t = max(self.t, min(self.pos + self.chunk, len(self.audio)) / SR)
+        waited = _time.perf_counter()
+        while True:
+            self._tick()
+            if self.pos >= len(self.audio):
+                if self.idle():                 # every job done: now the session may stop
+                    self.stop.set()
+                    raise queue.Empty
+            elif self._ready():
+                break
+            elif self.idle():                   # nobody computes: skip the wait for the next chunk
+                with self.lock:
+                    self.t = max(self.t, self._arrival())
+                break
+            if timeout is not None and _time.perf_counter() - waited >= timeout:
+                raise queue.Empty
+            _time.sleep(self.poll)              # the ASR thread computes: real time passes
         self.batch_start = self.pos
         return self._take()
 
@@ -426,7 +497,8 @@ def run_stream(eng, session, worker=None, detect=None, compute_scale=1.0, realti
     audio = session["audio"] if "audio" in session else read_wav(session["path"])
     audio = np.concatenate([audio, np.zeros(2 * SR, np.float32)])
     stop = threading.Event()
-    sim = SimAudio(audio, stop, compute_scale=compute_scale)
+    watch = AsrWatch()
+    sim = SimAudio(audio, stop, compute_scale=compute_scale, idle=watch.idle)
     rec = Recorder(sim)
     drops = []
     params = inspect.signature(worker).parameters
@@ -440,14 +512,16 @@ def run_stream(eng, session, worker=None, detect=None, compute_scale=1.0, realti
     wall = _time.perf_counter()
     if realtime:
         clock_mode = f"realtime x{speed}"
-        run_realtime(worker, eng, audio, rec, sim, stop, kwargs, speed)
+        run_realtime(worker, eng, audio, rec, sim, stop, kwargs, speed, watch)
     elif "clock" in params:
         worker(eng, sim, rec, rec, stop, clock=sim.clock, **kwargs)
+        watch.join()                       # the ASR thread ends after the jobs already queued
     else:
         saved = live_subs.time
         live_subs.time = _SimTime(sim.clock)
         try:
             worker(eng, sim, rec, rec, stop, **kwargs)
+            watch.join()
         finally:
             live_subs.time = saved
     wall = _time.perf_counter() - wall
@@ -464,13 +538,17 @@ def run_stream(eng, session, worker=None, detect=None, compute_scale=1.0, realti
     return summary, rows
 
 
-def run_realtime(worker, eng, audio, rec, sim, stop, kwargs, speed):
-    """Fallback: feed audio in (scaled) real time through a real queue on a thread."""
+def run_realtime(worker, eng, audio, rec, sim, stop, kwargs, speed, watch=None, drain_timeout=120.0):
+    """Fallback: feed audio in (scaled) real time through a real queue on a thread. After the last
+    chunk it waits until the worker has taken every chunk and its ASR thread has no job left, and only
+    then sets stop (finals that come out after Stop never reach ui_q)."""
+    watch = watch or AsrWatch()
     q = queue.Queue()
     t0 = _time.time()
     sim.clock = sim.now = lambda: (_time.time() - t0) * speed
     sim.audio_time = lambda: fed[0] / SR
     sim.audio_at = lambda stamp: (stamp - t0) * speed   # the worker stamps with the real time.time()
+    sim.contract_time = lambda stamp: stamp - t0        # contract times: stream start + sample / SR
     fed = [0]
     th = threading.Thread(target=worker, args=(eng, q, rec, rec, stop), kwargs=kwargs, daemon=True)
     th.start()
@@ -479,9 +557,15 @@ def run_realtime(worker, eng, audio, rec, sim, stop, kwargs, speed):
         q.put(audio[i:i + step])
         fed[0] = min(i + step, len(audio))
         _time.sleep(CHUNK_S / speed)
-    _time.sleep(1.0)
+    deadline = _time.time() + drain_timeout
+    while _time.time() < deadline and not q.empty():
+        _time.sleep(0.05)
+    _time.sleep(0.5)                       # the worker cuts the last sentence on the trailing silence
+    while _time.time() < deadline and not watch.idle():
+        _time.sleep(0.05)
     stop.set()
     th.join(timeout=30)
+    watch.join(timeout=30)
 
 
 def score_stream(session, rec, drops):
@@ -492,13 +576,24 @@ def score_stream(session, rec, drops):
         kind, de, en, meta = parse_item(item)
         if kind == "final":
             add = next(add_iter, None)
-            start = meta.get("start")
-            end = meta.get("end")
-            if start is None and add and len(add[2]) >= 2 and isinstance(add[2][0], (int, float)):
-                start, end = add[2][0], add[2][1]
-            start = min(rec.sim.audio_at(start) if start is not None else apos, apos)
-            cut = meta.get("end", apos) if meta else apos
-            finals.append({"t": t_emit, "start": start, "end": apos, "cut": cut, "de": de, "en": en,
+            start, end = meta.get("start"), meta.get("end")
+            if "id" in meta:
+                # UI_Q_CONTRACT: start/end are stream start + sample / SR, i.e. audio time already.
+                # The span ends at the speech end, not where the audio was at emission: under a
+                # backlog a final comes out long after its sentence and must not cover the next one.
+                start = apos if start is None else rec.sim.contract_time(start)
+                cut = apos if end is None else rec.sim.contract_time(end)
+                span_end = min(cut, apos)
+            else:
+                # older workers: tr.add(start, end, ...) or meta times stamped with the clock when
+                # the buffer was taken; the line spans up to where the audio was at emission
+                if start is None and add and len(add[2]) >= 2 and isinstance(add[2][0], (int, float)):
+                    start, end = add[2][0], add[2][1]
+                start = apos if start is None else rec.sim.audio_at(start)
+                cut = apos if end is None or not meta else end
+                span_end = apos
+            start = min(start, span_end)
+            finals.append({"t": t_emit, "start": start, "end": span_end, "cut": cut, "de": de, "en": en,
                            "id": meta.get("id")})
         elif kind == "draft" and de:
             drafts.append({"t": t_emit, "apos": apos})
