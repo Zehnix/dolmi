@@ -104,6 +104,8 @@
     ['captions','#setTranslator','change:local','translator_set','local'],
     ['privacy','#swSpeakers','click','set_setting','speaker_labels'],                      // SPK-4
     ['audio','#swCaptureBoth','click','set_setting','capture_both'],                    // SPK-5
+    ['appearance','#swTextSize','click','set_setting','ui_text_size'],                  // APP-14 (large)
+    ['appearance','#swTextSize','click','set_setting','ui_text_size'],                  // and back
   ];
   window.__uiControls=CONTROLS;   // other checks (new features) push rows here before run() starts
   async function use(el,how){
@@ -285,6 +287,73 @@
     ok(!qa('#brows .pair').length,`${label}: resetFeed leaves the not-understood row`);
   });
 
+
+  /* APP-14: the whole app works from the keyboard and tells a screen reader what each control is */
+  window.__uiExtra.push(async(label,{ok,tick,q,qa,nav,visible,mark,since,noOverflow})=>{
+    const key=(el,k,o={})=>el.dispatchEvent(new KeyboardEvent('keydown',{key:k,bubbles:true,cancelable:true,...o}));
+    const name=e=>(e.getAttribute('aria-label')||e.textContent||'').trim();
+    /* every control in every view and Settings section can take the focus and has a name */
+    const sections=qa('#setMenu [data-sec]').map(b=>b.dataset.sec);
+    const scopes=[...['live','meetings','assistant','vocab'].map(v=>['view',v]),...sections.map(s=>['settings',s])];
+    const unreach=[], unnamed=[];
+    for(const [kind,v] of scopes){
+      if(kind==='view') nav(v); else openSettings(v);
+      await tick(80);
+      const scope=kind==='view'?q('#v-'+v):q('.set-page.a');
+      for(const el of [...scope.querySelectorAll('button,select,input,textarea,[role="button"],[role="checkbox"]'),...qa('.top button')]){
+        if(!visible(el)||el.disabled||el.closest('[aria-hidden="true"]')) continue;
+        const roving=el.getAttribute('role')==='radio'&&[...el.parentElement.children].some(x=>x.tabIndex===0);
+        el.focus();
+        if(!(roving||(el.tabIndex>=0&&document.activeElement===el))) unreach.push(`${v} ${el.id?'#'+el.id:el.tagName.toLowerCase()+'.'+el.className}`);
+        if(el.matches('button,[role="button"]')&&!name(el)) unnamed.push(`${v} ${el.id?'#'+el.id:el.outerHTML.slice(0,60)}`);
+      } }
+    ok(!unreach.length,`${label}: controls the keyboard cannot reach: ${unreach.slice(0,6).join('; ')}`);
+    ok(!unnamed.length,`${label}: buttons without a name for screen readers: ${unnamed.slice(0,6).join('; ')}`);
+    /* arrow keys walk the Settings menu and open each section */
+    openSettings('audio'); await tick();
+    let b=q('#setMenu [data-sec="audio"]'); b.focus(); key(b,'ArrowDown'); await tick();
+    ok(q('.set-page.a').dataset.sec==='captions'&&document.activeElement===q('#setMenu [data-sec="captions"]'),`${label}: ArrowDown in the Settings menu does not open the next section`);
+    key(document.activeElement,'ArrowUp'); await tick();
+    ok(q('.set-page.a').dataset.sec==='audio',`${label}: ArrowUp in the Settings menu does not go back`);
+    ok(q('#setMenu [data-sec="audio"]').getAttribute('aria-current')==='page',`${label}: the open Settings section is not marked aria-current`);
+    /* arrow keys pick in a segmented control, and its roles follow */
+    openSettings('privacy'); await tick();
+    const cur=q('#setKeep .a'); cur.focus(); let m=mark(); key(cur,'ArrowRight'); await tick(80);
+    const now=q('#setKeep .a');
+    ok(now!==cur&&document.activeElement===now&&since(m,'set_setting').some(c=>c.args[0]==='keep_days'),`${label}: ArrowRight in 'Delete after' does not pick the next choice`);
+    ok(q('#setKeep').getAttribute('role')==='radiogroup'&&now.getAttribute('aria-checked')==='true'&&now.tabIndex===0&&cur.getAttribute('aria-checked')==='false',`${label}: segmented control roles do not follow the choice`);
+    key(now,'ArrowLeft'); await tick(80);
+    /* switches are switches, and say whether they are on */
+    const sw=q('#swSave'); sw.click(); await tick();
+    ok(sw.getAttribute('role')==='switch'&&sw.getAttribute('aria-checked')===String(sw.classList.contains('on'))&&name(sw)==='Save transcripts',`${label}: a switch has no switch role, state or name`);
+    sw.click(); await tick();
+    /* dialogs: focus moves in, Esc closes them */
+    nav('settings'); await tick(); q('#openOnb').focus(); q('#openOnb').click(); await tick(60);
+    ok(q('#onb').contains(document.activeElement),`${label}: the setup dialog does not take the focus`);
+    key(document,'Escape'); await tick(60);
+    ok(q('#onb').hidden&&document.activeElement===q('#openOnb'),`${label}: closing the setup dialog does not give the focus back`);
+    sumOpen(); await tick(60);
+    key(document,'Escape'); await tick();
+    ok(q('#sumModal').hidden,`${label}: Esc does not close the summary`);
+    /* the live feed reads out finals only */
+    nav('live'); await tick();
+    ok(q('#brows').getAttribute('aria-live')==='off'&&q('#a11yLive').getAttribute('aria-live')==='polite',`${label}: the live feed is not set up for screen readers`);
+    window.dolmi.onDraft('Ähm also','Um so',{start:Date.now()/1000-1,end:Date.now()/1000}); await tick();
+    ok(!/Um so/.test(q('#a11yLive').textContent),`${label}: a draft is read out`);
+    window.dolmi.onLine('10:02','Alles klar.','All right.',{start:Date.now()/1000,end:Date.now()/1000}); await tick();
+    ok(q('#a11yLive').textContent==='All right.',`${label}: a final is not read out (${q('#a11yLive').textContent})`);
+    resetFeed(); await tick();
+    /* Larger UI text: bigger, and still inside the window */
+    const before=q('.nav button').getBoundingClientRect().height;
+    applyTextSize('large'); await tick(80);
+    ok(q('.nav button').getBoundingClientRect().height>before*1.05,`${label}: Larger UI text does not make the text bigger`);
+    for(const v of ['live','settings']){ nav(v); await tick(80);
+      ok(q('.app').getBoundingClientRect().bottom<=innerHeight+1,`${label}: with Larger UI text the ${v} view is taller than the window`);
+      noOverflow(q('#v-'+v),`${label} larger text ${v}`); }
+    applyTextSize('normal'); await tick();
+    nav('live'); await tick();
+  });
+
   async function run(){
     const vp={w:innerWidth,h:innerHeight,dpr:devicePixelRatio};
     const label=`${vp.w}x${vp.h}@${vp.dpr}`;
@@ -305,6 +374,7 @@
   async function shot(spec){
     const [view,section]=spec.split(':');
     await tick(300);
+    const theme=new URLSearchParams(location.search).get('theme'); if(theme) setTheme(theme);   // APP-15: dark shots
     if(view==='onboarding'){ nav('settings'); await tick(); q('#openOnb').click(); }
     else if(view==='settings'&&section){ openSettings(section); }
     else nav(view);

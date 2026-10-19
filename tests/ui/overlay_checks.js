@@ -18,6 +18,9 @@
       ok(document.querySelectorAll('#body .tm').length===1,'bar: a line without a time shows one');
       q('#srcb').click(); await tick();
       ok(n('toggle_source')===1,'bar: the source button does not call toggle_source');
+      q('#srcb').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); await tick();
+      ok(n('toggle_source')===2,'bar: Enter on the source button does not switch the source');          // APP-14
+      ok(q('#close').getAttribute('aria-label')&&q('#body').getAttribute('role')==='log','bar: the controls or the lines have no screen-reader names');
       q('#close').click(); await tick();
       ok(n('hide')===1,'bar: the close button does not call hide');
       if(window.ov.locked){

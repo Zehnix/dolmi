@@ -4,6 +4,7 @@ Edge (or Chrome) that is already installed, nothing is downloaded.
 
     python tests/ui/run_ui_tests.py                  # all sizes; exit code 1 on a failure
     python tests/ui/run_ui_tests.py --shots DIR      # also save a screenshot of every screen per size
+    python tests/ui/run_ui_tests.py --shots DIR --dark   # ... in the Paper and the Ink (dark) theme
 
 How it works: the real src/ui/web/index.html is copied with tests/ui/mock_bridge.js (a fake
 window.pywebview.api that records every call) in front of the page's scripts and tests/ui/checks.js after
@@ -90,12 +91,13 @@ def run_page(exe, page, size, tmp):
     return json.loads(html_lib.unescape(found[-1]))
 
 
-def screenshot(exe, page, size, spec, path, tmp):
-    _run(_edge(exe, Path(tmp) / "profile", size, [f"--screenshot={path}", page.as_uri() + "?shot=" + spec]))
+def screenshot(exe, page, size, spec, path, tmp, theme=""):
+    url = page.as_uri() + "?shot=" + spec + (f"&theme={theme}" if theme else "")
+    _run(_edge(exe, Path(tmp) / "profile", size, [f"--screenshot={path}", url]))
     return Path(path).exists()
 
 
-def run_all(exe=None, sizes=SIZES, extra_css="", shots=None, overlay=True):
+def run_all(exe=None, sizes=SIZES, extra_css="", shots=None, overlay=True, themes=("",)):
     """Every size: {label: report}. With shots, also a PNG per screen and size in that folder."""
     exe = exe or find_browser()
     if not exe:
@@ -109,8 +111,10 @@ def run_all(exe=None, sizes=SIZES, extra_css="", shots=None, overlay=True):
             results[label] = run_page(exe, page, size, tmp)
             if shots:
                 Path(shots).mkdir(parents=True, exist_ok=True)
-                for spec in SCREENS:
-                    screenshot(exe, page, size, spec, Path(shots) / f"{label}-{spec.replace(':', '-')}.png", tmp)
+                for theme in themes:
+                    for spec in SCREENS:
+                        name = f"{label}-{theme + '-' if theme else ''}{spec.replace(':', '-')}.png"
+                        screenshot(exe, page, size, spec, Path(shots) / name, tmp, theme)
         if bar:
             results["subtitle bar"] = run_page(exe, bar, (640, 200, 1), tmp)
     return results
@@ -119,10 +123,12 @@ def run_all(exe=None, sizes=SIZES, extra_css="", shots=None, overlay=True):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--shots", help="folder for a screenshot of every screen at every size")
+    ap.add_argument("--dark", action="store_true", help="with --shots: every screen in the Paper and the Ink theme")
     ap.add_argument("--extra-css", default="", help="CSS added after the page's own (to prove a check catches a regression)")
     args = ap.parse_args(argv)
     try:
-        results = run_all(extra_css=args.extra_css, shots=args.shots)
+        results = run_all(extra_css=args.extra_css, shots=args.shots,
+                          themes=("paper", "ink") if args.dark else ("",))
     except RuntimeError as e:
         print(f"SKIP: {e}")
         return 0

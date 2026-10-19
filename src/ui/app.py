@@ -62,7 +62,9 @@ SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_tran
             "clarify_queue",                                   # VOC-9
             "bar_time",                                        # LIVE-5
             "capture_both",                                    # SPK-5
-            "voice_readout"}                                   # VOICE-1
+            "voice_readout",                                   # VOICE-1
+            "ui_text_size"}                                    # APP-14
+UI_TEXT_SIZES = ("normal", "large")                      # APP-14: Appearance > Larger UI text
 BOOL_SETTINGS = {"warn_silence", "preload_models", "check_updates", "shortcuts_on",
                  "speaker_labels", "clarify_queue", "bar_time",
                  "capture_both", "voice_readout"}        # on/off switches that must be true or false
@@ -569,6 +571,7 @@ class Api:
             "voiceReadout": bool(s.get("voice_readout", False)),
             "barVisible": bool(self._overlay_visible), "barLocked": bool(s.get("bar_locked")),
             "barTime": bool(s.get("bar_time", False)),
+            "uiTextSize": s.get("ui_text_size") if s.get("ui_text_size") in UI_TEXT_SIZES else "normal",
             "shortcutsOn": bool(s.get("shortcuts_on", True)), "shortcuts": self._shortcut_map(),
             "shortcutStatus": dict(self._shortcut_status),
             "engine": self._engine_label(), "engineState": self._engine_state,
@@ -585,6 +588,8 @@ class Api:
         if key == "speech_source" and value not in SPEECH_SOURCES:
             return False
         if key in BOOL_SETTINGS and not isinstance(value, bool):
+            return False
+        if key == "ui_text_size" and value not in UI_TEXT_SIZES:
             return False
         with self._settings_lock:
             self._settings[key] = value
