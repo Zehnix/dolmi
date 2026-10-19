@@ -38,6 +38,8 @@ python eval/run_eval.py --model small --device cpu
 python eval/run_eval.py --model large-v3-turbo --device cuda
 ```
 
+How the Foundation entries were made: a scratch worktree at `d50e5ad` with the `eval/` folder copied on top (the bench is not in that commit), then `--write-baseline`. `git_rev()` records the HEAD of the checkout it runs in, so the `git` field of those entries was set to `d50e5ad` by hand afterwards. Do the same for any later entry that should stand for an older commit. The CPU `small` Foundation entry is still to be measured this way (about 1.5 to 2 hours): `python eval/run_eval.py --model small --device cpu --write-baseline`.
+
 Add `--write-baseline` only when the new numbers should become the reference. Timing numbers (latency, real-time factor) depend on what else the PC is doing; compare them on an idle machine, or look at the quality numbers only.
 
 ## What is measured
