@@ -237,8 +237,17 @@ def live_page(tmp_path_factory):
     return _run_page(exe, cmd)
 
 
-def _run_page(exe, cmd):
-    out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120).stdout
+def _run_page(exe, cmd, tries=3):
+    # A page run takes ~2 s, but headless Edge with --dump-dom sometimes never exits: retry instead of
+    # waiting minutes for one hung browser.
+    for attempt in range(tries):
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                 timeout=40).stdout
+            break
+        except subprocess.TimeoutExpired:
+            if attempt == tries - 1:
+                raise
     found = re.findall(r'<pre id="result">(.*?)</pre>', out, re.S)
     assert found, f"harness did not report: {out[-800:]}"
     return json.loads(html_lib.unescape(found[-1]))
