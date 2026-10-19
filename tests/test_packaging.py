@@ -2,6 +2,7 @@
 Mac/ holds nothing but Mac-only files (no second copy of the core)."""
 import ast
 import re
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -68,11 +69,21 @@ def test_installer_ships_and_checks_the_platform_layer():
     assert re.search(r"import live_subs, models, assistant, inbox, dolmi_platform", ps)
 
 
+def _mac_files():
+    """The files git tracks under Mac/; without git, what is on disk minus build output. Untracked local
+    leftovers (an old .env, Finder's .DS_Store files) are not part of the repo, so they don't count."""
+    try:
+        out = subprocess.run(["git", "-C", str(ROOT), "ls-files", "--", "Mac"], capture_output=True,
+                             text=True, check=True, timeout=30).stdout
+        return sorted(line[len("Mac/"):] for line in out.splitlines() if line)
+    except (OSError, subprocess.SubprocessError):
+        return sorted(p.relative_to(MAC).as_posix() for p in MAC.rglob("*")
+                      if p.is_file() and not p.relative_to(MAC).as_posix().startswith(MAC_BUILD_OUTPUT)
+                      and "__pycache__" not in p.parts and p.name != ".DS_Store")
+
+
 def test_mac_folder_holds_only_mac_files():
-    tracked = sorted(p.relative_to(MAC).as_posix() for p in MAC.rglob("*")
-                     if p.is_file() and not p.relative_to(MAC).as_posix().startswith(MAC_BUILD_OUTPUT)
-                     and "__pycache__" not in p.parts)
-    assert [p for p in tracked if p not in MAC_ONLY] == []
+    assert [p for p in _mac_files() if p not in MAC_ONLY] == []
 
 
 def test_one_version_file():
