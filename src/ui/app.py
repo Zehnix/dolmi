@@ -26,6 +26,7 @@ import config
 import assistant
 import inbox
 import live_subs
+import streaming
 import cloud_speech
 import cloud_translate
 import dolmi_platform
@@ -320,6 +321,8 @@ class Api:
         self._model_lists = {}               # (provider, key) -> model IDs
         self._dl = set()                     # model keys downloading right now
         self._ui_q = queue.Queue()
+        self._guard = streaming.CaptionGuard()   # STR-3: stale drafts and old sessions never reach the page
+        self._tracer = None                  # STR-4: (session token, TraceWriter) while DOLMI_TRACE=1
         self._ask_q = queue.Queue()
         self._ov_q = queue.Queue()
         self._vocab_lock = threading.Lock()  # a save and the watcher's look at the files never interleave
@@ -364,12 +367,18 @@ class Api:
             kind, a, b, *rest = self._ui_q.get()
             meta = rest[0] if rest and isinstance(rest[0], dict) else {}
             try:
-                if kind in ("final", "draft") and not self._session:
+                if kind in ("final", "draft", "overload") and not self._session:
                     continue                          # late result after Stop
-                if kind == "error":
+                if kind in ("final", "draft", "overload") and not self._guard.accept(kind, a, b, meta, self._session_id()):
+                    continue                          # STR-3: older session, or a draft overtaken by newer work
+                if kind == "overload":
+                    self._emit("onError", f"Captions are {a} s behind the speaker. Live drafts pause until "
+                                          "Dolmi catches up; no speech is lost.")
+                elif kind == "error":
                     self._emit("onError", a)
                 elif kind == "final":
                     meta = self._caption_meta(meta, final=True)
+                    self._write_trace(meta, a, b)
                     ts = _clock(meta["start"])
                     with self._hist_lock:
                         self._history.append((ts, a, b, meta))
@@ -385,7 +394,8 @@ class Api:
                     if a or b:
                         self._mark_caption()
                     self._emit("onDraft", a, b, meta)
-                    self._ov("draft", a, b)
+                    self._ov("draft", a, b, {k: meta.get(k) for k in
+                                             ("committed", "tentative", "en_committed", "en_tentative")})
                 elif kind == "ask_start":
                     self._emit("onAsk", a)
                 elif kind == "ask_chunk":
@@ -398,6 +408,21 @@ class Api:
                     self._emit("onSummaryDone", a)
             except Exception as e:
                 print(f"pump {kind} failed: {e}")
+
+    def _session_id(self):
+        """The id every caption of the running session carries in meta["session"] (None when stopped)."""
+        s = self._session
+        return id(s["token"]) if s else None
+
+    def _write_trace(self, meta, de, en):
+        """STR-4: DOLMI_TRACE=1 appends the final's latency trace to this session's jsonl."""
+        if not streaming.TraceWriter.enabled() or not isinstance(meta.get("trace"), dict):
+            return
+        s = self._session
+        if not self._tracer or self._tracer[0] is not (s and s["token"]):
+            t0 = meta["trace"].get("speech_start", meta.get("start"))
+            self._tracer = (s and s["token"], streaming.TraceWriter(t0))
+        self._tracer[1].write(meta, de, en)
 
     def _caption_meta(self, meta, final):
         """Complete a caption's timing meta: 'shown' (now), 'lag' (shown - end of speech, only when the
@@ -421,6 +446,9 @@ class Api:
         t0 = getattr(tr, "t0", None)
         if t0 and isinstance(meta.get("start"), (int, float)):
             meta["offset"] = max(0.0, meta["start"] - t0)
+        if isinstance(meta.get("trace"), dict):       # STR-4: one trace; the lag display reads its split
+            meta["trace"] = {**_plain(meta["trace"]), "shown": now}
+            meta["lag_policy"], meta["lag_compute"] = streaming.split_lag(meta["trace"])
         if final:
             if meta["lag"] is not None:
                 self._lags.append(meta["lag"])
@@ -846,7 +874,10 @@ class Api:
             with self._hist_lock:
                 self._history = []
             self._chat_id, self._ai_history = None, []
-            stop, audio_q = threading.Event(), queue.Queue()
+            sid = id(token)
+            # STR-3: captured audio is counted; a backlog over ~30 s is shown and logged, never dropped
+            stop, audio_q = threading.Event(), streaming.SampleQueue(
+                on_overload=lambda sec: self._ui_q.put(("overload", round(sec), "", {"session": sid})))
             tr = live_subs.Transcript(self._data, save=self._settings["save_transcripts"])
             meeting["transcript"] = tr
             self._last_transcript = tr
@@ -876,7 +907,7 @@ class Api:
 
         threading.Thread(target=capture, daemon=True).start()
         threading.Thread(target=live_subs.worker, args=(self._engine, audio_q, self._ui_q, tr, stop),
-                         kwargs={"diarizer": diarizer}, daemon=True).start()
+                         kwargs={"diarizer": diarizer, "session": sid}, daemon=True).start()
         self._emit("onListening", True, self._engine_label())
         if self._settings.get("overlay"):             # subtitles are the point of pressing Start
             self.show_overlay()
