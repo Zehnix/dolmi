@@ -34,6 +34,7 @@ html,body{height:100%;background:transparent;overflow:hidden;font-family:var(--u
 .locked .lockm{display:flex}.locked .x,.locked .srcb,.locked .grip{display:none}.locked .bar{cursor:default}
 .grip{position:fixed;right:3px;bottom:3px;width:16px;height:16px;cursor:nwse-resize;opacity:.5}
 .grip:before{content:"";position:absolute;right:3px;bottom:3px;width:9px;height:9px;border-right:2px solid #9a917b;border-bottom:2px solid #9a917b;border-radius:0 0 3px 0}
+#draft .tent{opacity:.6;font-style:italic}
 </style>
 </head>
 <body>
@@ -64,7 +65,12 @@ window.ov={
   line:(de,en)=>{ check(); clearIdle(); const d=document.createElement('div'); d.innerHTML='<div class="de">'+esc(de)+'</div><div class="en">'+esc(en)+'</div>';
     const dr=document.getElementById('draft'); if(dr) body.insertBefore(d,dr); else body.append(d);
     while(body.children.length>(stuck?4:40)) body.firstChild.remove(); follow(); },
-  draft:(de,en)=>{ check(); clearIdle(); let dr=document.getElementById('draft'); if(!de&&!en){ if(dr)dr.remove(); return; } if(!dr){ dr=document.createElement('div'); dr.id='draft'; dr.style.opacity='.65'; body.append(dr); } dr.innerHTML='<div class="de">'+esc(de)+'</div><div class="en">'+esc(en)+'</div>'; follow(); },
+  /* STR-2: committed words solid, tentative tail dim and italic (no split sent: all of it is the tail) */
+  draft:(de,en,p)=>{ check(); clearIdle(); let dr=document.getElementById('draft'); if(!de&&!en){ if(dr)dr.remove(); return; }
+    if(!dr){ dr=document.createElement('div'); dr.id='draft'; dr.innerHTML='<div class="de"><span class="cm"></span><span class="tent"></span></div><div class="en"><span class="cm"></span><span class="tent"></span></div>'; body.append(dr); }
+    p=p||{}; const part=(sel,text,c,t)=>{ const has=typeof c==='string'||typeof t==='string'; c=has?(c||''):''; t=has?(t||''):(text||'');
+      const el=dr.querySelector(sel); el.querySelector('.cm').textContent=c+(c&&t?' ':''); el.querySelector('.tent').textContent=t; };
+    part('.de',de,p.committed,p.tentative); part('.en',en,p.en_committed,p.en_tentative); follow(); },
 };
 const ICONS={speaker:'M11 5 6 9H2v6h4l5 4V5zM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14',
   mic:'M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2M12 19v3'};
