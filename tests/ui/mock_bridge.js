@@ -41,6 +41,7 @@
   const canned={
     state:()=>JSON.parse(JSON.stringify(state)),
     set_setting:()=>true,
+    voice_state:()=>({on:false,available:true,backend:'windows',spoken:0,skipped:0}),   // VOICE-1
     pc_info:()=>({ram_gb:32,cores:16,gpu:true,gpu_name:'NVIDIA GeForce RTX 4060',model_dir:'C:\\Users\\Test\\.cache\\huggingface\\hub',data_dir:state.dataFolder}),
     devices:()=>['Speakers (Realtek Audio)','Headset (USB)'],
     mic_devices:()=>['Microphone (USB)','Microphone Array'],
