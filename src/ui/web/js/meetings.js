@@ -48,14 +48,16 @@ const mTargets=()=>mSel.size?[...mSel]:(currentMeeting?[currentMeeting]:[]);
 async function openMeeting(name){
   const b=bridge(); if(!b) return; currentMeeting=name;
   const pairs=await b.read_meeting(name); currentPairs=pairs;
-  $('#mDetail').innerHTML=pairs.length?pairs.map(p=>{ const t=esc(lineTime(p)); return `<div class="pair2"><div class="de"><span class="t">DE · ${t}</span>${esc(p.de)}</div><div class="en"><span class="feed-t">EN · ${t}</span>${esc(p.en)}</div></div>`; }).join(''):'<div style="margin:auto;color:var(--faint)">Empty transcript.</div>';
+  $('#mDetail').innerHTML=pairs.length?pairs.map(p=>{ const t=esc(lineTime(p)); return `<div class="pair2"><div class="de"><span class="t">DE · ${t}</span>${esc(p.de)}</div><div class="en"><span class="feed-t">EN · ${t}${savedChip(p)}</span>${esc(p.en)}</div></div>`; }).join(''):'<div style="margin:auto;color:var(--faint)">Empty transcript.</div>';
 }
+/* SPK-4: a saved line's speaker label (beta) as a read-only chip in its speaker's colour */
+function savedChip(p){ return p.speaker?`<span class="spk ro" style="--spk:${esc(p.colour||'')}"><i></i>${esc(p.speaker)}</span>`:''; }
 /* when a saved line was said: speech start and "+mm:ss" into the meeting (old files: write time only) */
 function lineTime(p){ return (p.ts||'')+(p.offset?' · '+p.offset:''); }
 $$('.ph .btn.ghost').forEach(btn=>{ if(btn.textContent.includes('Summarize')) btn.onclick=()=>{ if(!currentMeeting){ toast('Open a meeting first.'); return; } runSummary(currentMeeting); }; });
 
 /* ---- copy / archive / delete ---- */
-function meetingText(){ return currentPairs.map(p=>{ const t=`[${lineTime(p)}]`; return `${t} EN  ${p.en}\n${t} DE  ${p.de}`; }).join('\n\n'); }
+function meetingText(){ return currentPairs.map(p=>{ const t=`[${lineTime(p)}]`+(p.speaker?` ${p.speaker}:`:''); return `${t} EN  ${p.en}\n${t} DE  ${p.de}`; }).join('\n\n'); }
 $('#mArchView').onclick=()=>{ mArch=!mArch; mSel.clear(); $('#mArchView').classList.toggle('on',mArch); archLabel($('#mArchive'),mArch); currentMeeting=null; loadMeetings(); };
 $('#mCopy').onclick=()=>{ if(!currentPairs.length){ toast('Open a meeting first.'); return; } copyText(meetingText()); };
 $('#mExport').onclick=async()=>{ const b=bridge(); if(!b||!currentMeeting){ toast('Open a meeting first.'); return; } const r=await b.export_meeting(currentMeeting); if(r.ok) toast('Exported: '+r.path); else if(!r.cancelled) toast(r.message||'Could not export'); };

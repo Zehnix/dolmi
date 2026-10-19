@@ -47,10 +47,11 @@ function showLag(){ const el=$('#sLag'); if(!el) return; el.textContent=lagLine=
   el.parentElement.title='Lag: from the end of speech to the line on screen (median of the last 5 lines)'+(lagDraft==null?'':` · live draft ${secs(lagDraft)}`); }
 
 function resetFeed(){ brows.innerHTML=''; lines=0;words=0; draftEl=null; $('#sLines').textContent=0; $('#sWords').textContent=0;
-  stuck=true; unseen=0; autoTop=0; setPill(); lagLine=lagDraft=null; showLag(); }
+  stuck=true; unseen=0; autoTop=0; setPill(); lagLine=lagDraft=null; showLag(); spkReset(); }
 function appendPair(ts,de,en,meta){ unstickIfScrolled(); clearIdle(); $$('.pair.cur').forEach(p=>p.classList.remove('cur'));
   const p=document.createElement('div'), t=esc(stamp(ts,meta)); p.className='pair cur pop';
   p.innerHTML=`<div class="c de"><span class="ts">${t}</span>${esc(de)}</div><div class="c en"><span class="ts">${t}</span>${esc(en)}</div>`;
+  spkAttach(p,meta);
   brows.append(p); follow(); }
 function addFinal(ts,de,en,meta){ if(draftEl){draftEl.remove();draftEl=null;} appendPair(ts,de,en,meta);
   lines++; words+=en.split(/\s+/).filter(Boolean).length; $('#sLines').textContent=lines; $('#sWords').textContent=words;
@@ -84,3 +85,66 @@ $('#go').onclick=()=>{
 async function startLive(download){ const b=bridge(); resetFeed(); setLive(true,download?'downloading models…':'loading…');
   const r=await b.start_listening(!!download);
   if(r&&r.missing){ setLive(false); if(!lines) showIdle(); askDownload(r.missing); } }
+
+/* ---- speaker labels (SPK-4, beta): a coloured chip per line; click it to rename, reassign or merge ----
+   Lines keep the speaker id (data-spk), so a rename or merge re-renders every past chip of this meeting.
+   Names/colours come from Python (onSpeakers / speaker_list); a low-confidence label is dimmed with "?". */
+const SPK_LOW=0.7; let SPK={},SPK_MERGED={},spkMenuEl=null;
+(()=>{ const s=document.createElement('style'); s.textContent=`
+.spk{display:inline-flex;align-items:center;gap:5px;margin-left:8px;padding:1px 8px 1px 6px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--ink);font:500 10.5px/1.6 var(--mono);cursor:pointer;vertical-align:1px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.spk:hover{border-color:var(--ac)}.spk i{flex:none;width:7px;height:7px;border-radius:50%;background:var(--spk,var(--faint))}
+.spk.low{opacity:.55}.spk.ro{cursor:default}.spk.ro:hover{border-color:var(--line)}
+.spkmenu{position:fixed;z-index:70;width:250px;background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:var(--sh);padding:12px;font-size:13px;color:var(--ink)}
+.spkmenu h4{margin:0 0 8px;font:600 11px var(--mono);color:var(--faint);letter-spacing:.04em;text-transform:uppercase}
+.spkmenu .r{display:flex;gap:6px;margin-bottom:10px}.spkmenu .r .field{flex:1;min-width:0;padding:6px 10px}
+.spkmenu .opts{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}.spkmenu .opts:last-child{margin-bottom:0}
+.spkmenu .opts .spk{margin:0;cursor:pointer}.spkmenu .opts .spk:hover{border-color:var(--ac)}`; document.head.append(s); })();
+function spkReset(){ SPK={}; SPK_MERGED={}; spkClose(); }
+function spkInfo(id){ return SPK[id]||{id,name:'Speaker '+id,colour:''}; }
+/* one chip; attrs adds data-* attributes (menu options), ro = a plain label (Meetings view) */
+function spkChip(id,conf,{ro=false,attrs=''}={}){ const s=spkInfo(id), low=typeof conf==='number'&&conf<SPK_LOW;
+  return `<button class="spk${low?' low':''}${ro?' ro':''}" data-spk="${esc(id)}" ${attrs} style="--spk:${esc(s.colour||'')}" title="${ro?esc(s.name):'Who said this? Click to rename, reassign or merge'}${low?' (not sure)':''}"><i></i>${esc(s.name)}${low?' ?':''}</button>`; }
+function spkAttach(p,meta){ const m=meta||{}; if(m.speaker==null) return; let id=m.speaker;
+  while(SPK_MERGED[id]!=null) id=SPK_MERGED[id];   /* a line cut just before a merge */
+  p.dataset.spk=id; p.dataset.conf=m.speaker_conf==null?'':m.speaker_conf; if(m.id!=null) p.dataset.line=m.id;
+  spkPaint(p); if(!SPK[id]) spkRefresh(); }
+function spkPaint(p){ const ts=p.querySelector('.c.en .ts'); if(!ts) return; const old=ts.querySelector('.spk'); if(old) old.remove();
+  ts.insertAdjacentHTML('beforeend',spkChip(+p.dataset.spk,p.dataset.conf===''?null:+p.dataset.conf));
+  ts.querySelector('.spk').onclick=e=>{ e.stopPropagation(); spkMenu(p,e.currentTarget); }; }
+function spkRepaint(){ brows.querySelectorAll('.pair[data-spk]').forEach(spkPaint); }
+function spkSet(list){ if(!Array.isArray(list)) return; list.forEach(s=>{ SPK[s.id]=s; }); spkRepaint(); }
+async function spkRefresh(){ const b=bridge(); if(!b||!b.speaker_list) return; try{ spkSet(await b.speaker_list()); }catch(e){ console.error('speakers',e); } }
+function spkClose(){ if(spkMenuEl){ spkMenuEl.remove(); spkMenuEl=null; } }
+document.addEventListener('click',e=>{ if(spkMenuEl&&!spkMenuEl.contains(e.target)) spkClose(); });
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') spkClose(); });
+function spkMenu(p,chip){ spkClose(); const b=bridge(), id=+p.dataset.spk, me=spkInfo(id);
+  const others=Object.values(SPK).filter(s=>s.id!==id);
+  const opts=a=>others.map(s=>spkChip(s.id,null,{attrs:`data-a="${a}"`})).join('');
+  const m=document.createElement('div'); m.className='spkmenu'; m.setAttribute('role','dialog'); m.setAttribute('aria-label','Speaker');
+  m.innerHTML=`<h4>Name (all their lines)</h4><div class="r"><input class="field" maxlength="40" value="${esc(me.name)}" aria-label="Speaker name"><button class="btn ghost" data-a="ren">Save</button></div>`
+    +`<h4>This line is someone else</h4><div class="opts">${opts('re')}<button class="spk" data-a="new"><i></i>New speaker</button></div>`
+    +(others.length?`<h4>Same person as</h4><div class="opts">${opts('mrg')}</div>`:'');
+  document.body.append(m); spkMenuEl=m;
+  const r=chip.getBoundingClientRect(); m.style.left=Math.max(8,Math.min(innerWidth-258,r.left))+'px';
+  m.style.top=(r.bottom+m.offsetHeight+8<innerHeight?r.bottom+6:Math.max(8,r.top-m.offsetHeight-6))+'px';
+  const inp=m.querySelector('input'); inp.focus(); inp.select();
+  const done=res=>{ if(res&&res.ok){ if(res.speakers) spkSet(res.speakers); spkClose(); } else toast((res&&res.message)||'Speaker labels work in the app.'); };
+  const rename=async()=>{ if(!b) return done(); done(await b.speaker_rename(id,inp.value)); };
+  inp.onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); rename(); } };
+  m.querySelector('[data-a="ren"]').onclick=rename;
+  m.querySelectorAll('[data-a="re"],[data-a="new"]').forEach(x=>x.onclick=async()=>{ if(!b||p.dataset.line==null) return done();
+    const res=await b.speaker_reassign(+p.dataset.line,x.dataset.a==='new'?null:+x.dataset.spk);
+    if(res&&res.ok){ p.dataset.spk=res.speaker; p.dataset.conf=''; } done(res); });
+  m.querySelectorAll('[data-a="mrg"]').forEach(x=>x.onclick=async()=>{ if(!b) return done(); done(await b.speaker_merge(id,+x.dataset.spk)); }); }
+{ const d=window.dolmi;
+  d.onSpeakers=list=>spkSet(list);
+  d.onSpeakerMerge=(from,to)=>{ brows.querySelectorAll(`.pair[data-spk="${+from}"]`).forEach(p=>{ p.dataset.spk=to; }); SPK_MERGED[+from]=+to; delete SPK[from]; spkRepaint(); }; }
+/* Settings → Privacy & data: the on/off switch (beta, off by default; used from the next Start) */
+document.addEventListener('DOMContentLoaded',()=>{ const slot=typeof settingsMount==='function'&&settingsMount('privacy.speakers'); if(!slot) return;
+  slot.innerHTML=`<div class="set" data-kw="speaker labels who said speakers names voices diarization beta"><div><div class="lab">Speaker labels <span class="mtag">beta</span></div><div class="ps" data-wt="Marks who said each line (Speaker 1, 2 …); click a label to name it. A 30 MB voice model runs on this {computer}; voices are compared in memory only, never saved. From the next Start.">Marks who said each line (Speaker 1, 2 …); click a label to name it. A 30 MB voice model runs on this computer; voices are compared in memory only, never saved. From the next Start.</div></div><button class="sw" id="swSpeakers" aria-label="Speaker labels"></button></div>`;
+  const sw=$('#swSpeakers');
+  sw.onclick=async()=>{ const on=!sw.classList.contains('on'), b=bridge(); sw.classList.toggle('on',on);
+    if(b&&!await b.set_setting('speaker_labels',on)){ sw.classList.toggle('on',!on); return; }
+    toast(on?(listening?'Speaker labels: from the next Start':'Speaker labels on (beta)'):'Speaker labels off'); };
+  const load=async()=>{ const b=bridge(); if(!b) return; try{ const s=await b.state(); sw.classList.toggle('on',!!s.speakerLabels); }catch(e){ console.error('speaker labels',e); } };
+  if(bridge()) load(); else window.addEventListener('pywebviewready',load); });
