@@ -124,6 +124,20 @@ def test_wildcard_needs_three_letters_before_the_star():
     assert only_problem("[keep]\n*\n")["line"] == 2
 
 
+def test_leading_wildcard_is_reported_not_applied():
+    assert "end of a word" in only_problem("[german]\n*kalib = great\n")["message"]
+    assert "end of a word" in only_problem("[english]\nbig *thing = big deal\n")["message"]
+    assert problems("[german]\nkalib* zone* = great\n") == []
+
+
+def test_example_escaped_hash_rule_works():
+    root = Path(live_subs.__file__).parent
+    line = next(l for l in (root / "vocabulary.example.txt").read_text(encoding="utf-8").splitlines() if "\\#" in l)
+    rule = line[line.index("(") + 1:line.rindex(")")]
+    v = Vocabulary(text=f"[german]\n{rule}\n")
+    assert v.problems == [] and v.finish(*v.protect("Kanal #1 bitte")).startswith("channel #1")
+
+
 def test_english_rules_apply_longest_first():
     v = Vocabulary(text="[english]\ngame = match\nan game changer = a game changer\n")
     assert v.finish("This is an game changer") == "This is a game changer"
@@ -224,3 +238,58 @@ def test_validate_vocab_returns_line_numbers_and_writes_nothing(api):
 def test_validate_vocab_checks_saved_files_when_nothing_sent(api):
     res = api.validate_vocab(None, None)
     assert res["ok"] is True                     # the seeded example files are clean
+
+
+def test_save_vocab_retries_while_the_file_is_held_open(api, monkeypatch):
+    import config
+    real, calls = os.replace, []
+    def flaky(src, dst):
+        calls.append(dst)
+        if len(calls) < 3:
+            raise PermissionError(5, "Access is denied")
+        real(src, dst)
+    monkeypatch.setattr(os, "replace", flaky)
+    api.save_vocab("[keep]\nNordlicht\n", None)
+    assert len(calls) == 3
+    assert (config.CONFIG / "vocabulary.txt").read_text(encoding="utf-8") == "[keep]\nNordlicht\n"
+    assert not (config.CONFIG / "vocabulary.tmp").exists()
+
+
+def test_save_vocab_removes_the_temp_file_when_it_cannot_replace(api, monkeypatch):
+    import config
+    before = (config.CONFIG / "vocabulary.txt").read_text(encoding="utf-8")
+    def locked(src, dst):
+        raise PermissionError(5, "Access is denied")
+    monkeypatch.setattr(os, "replace", locked)
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    with pytest.raises(PermissionError):
+        api.save_vocab("[keep]\nNordlicht\n", None)
+    assert not (config.CONFIG / "vocabulary.tmp").exists()
+    assert (config.CONFIG / "vocabulary.txt").read_text(encoding="utf-8") == before
+
+
+def test_translate_uses_one_set_of_rules_per_line(monkeypatch):
+    eng = live_subs.Engine.__new__(live_subs.Engine)
+    eng.language = "de"
+    eng.vocab = Vocabulary(text="[keep]\nNordlicht\n")
+    new = Vocabulary(text="[english]\nNordlicht = Southlight\n")
+
+    class Sp:
+        def encode(self, text, out_type=str):
+            eng.vocab = new                     # a reload lands while the line is being translated
+            return text.split()
+
+        def decode(self, toks):
+            return " ".join(toks)
+
+    class Hyp:
+        def __init__(self, toks):
+            self.hypotheses = [toks]
+
+    class Mt:
+        def translate_batch(self, batch, **kw):
+            return [Hyp(batch[0])]
+
+    monkeypatch.setattr(eng, "_translator", lambda key, download=False: (Mt(), Sp(), Sp()), raising=False)
+    assert eng.translate("Nordlicht kommt", "de") == "Nordlicht kommt"
+

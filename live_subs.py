@@ -93,6 +93,8 @@ def parse_vocabulary(text: str):
         elif eq and not dst:
             message = ("Nothing after '='. Remove the '=' to keep the term as written." if section == "keep"
                        else "Nothing after '=': write the English it must become (a rule never deletes words).")
+        elif any(w.startswith("*") for w in src.split()):
+            message = "A '*' only goes at the end of a word (toll* = great); a rule never matches inside a word."
         elif len(re.sub(r"[\s*]", "", src)) < MIN_TERM and not marked:
             message = (f"'{src}' is shorter than {MIN_TERM} letters and may match ordinary words. "
                        f"Write '{src}!' to use it anyway.")
@@ -245,11 +247,12 @@ class Engine:
         if t is None:
             return f"[{lang}] {text}"   # no translator for this language installed yet
         mt, sp_src, sp_tgt = t
-        text, slots = self.vocab.protect(text)
+        vocab = self.vocab   # one set of rules per line, even if reload_terms swaps them meanwhile
+        text, slots = vocab.protect(text)
         toks = sp_src.encode(text, out_type=str)[:400] + ["</s>"]
         res = mt.translate_batch([toks], beam_size=2, max_decoding_length=256)
         out = [tok for tok in res[0].hypotheses[0] if tok not in ("</s>", "<pad>")]
-        return self.vocab.finish(sp_tgt.decode(out), slots)
+        return vocab.finish(sp_tgt.decode(out), slots)
 
 def collapse_repeats(text: str) -> str:
     """Whisper sometimes loops: 'He's a good man. He's a good man.' -> said once."""

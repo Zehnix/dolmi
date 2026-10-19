@@ -8,7 +8,7 @@
 # [german]   German term = English it must become
 # [english]  wrong English = correct English (fixes on the translator's output)
 #
-# '#' starts a comment, also after a rule; write \# for a real '#' (C\# = C#).
+# '#' starts a comment, also after a rule; write \# for a real '#' (Kanal \#1 = channel \#1).
 # '*' matches any ending: toll* = great catches toll, tolle, tollen.
 # Longer rules win over shorter ones ("an game changer" before "game").
 # Terms under 3 letters can hit ordinary words; Dolmi skips them unless you add '!' (KI! = AI).
