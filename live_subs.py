@@ -32,6 +32,7 @@ MAX_UTTERANCE = 12.0       # s, long monologues are cut here (at the last pause 
 MIN_CUT = 2.0              # s, a cut at the cap keeps at least this much in the first part
 OVERLAP = 1.0              # s carried over (and de-duplicated) when a cut at the cap finds no pause
 MIN_SENTENCE = 3.0         # s, a draft ending in . ? ! this long may finalize after PUNCT_PAUSE
+MIN_FLUSH = 0.5            # s of speech a sentence cut off by Stop needs to still be transcribed
 PREROLL = 0.3              # s of audio from before the speech onset kept at the start of a sentence
 SILENCE_RMS = 0.006        # energy threshold (raise if noisy)
 LOW_ENERGY_RMS = 0.015     # loudest 100 ms below this: a lone "Thank you." there is Whisper's ghost
@@ -312,7 +313,10 @@ worker(eng, audio_q, ui_q, tr, stop, detect=speech_gap, clock=time.time, on_drop
             anchors the stream: epoch of sample n = stream start + n / SR. The quality bench injects one.
   on_drop   on_drop(reason, start, end, text) for every utterance that does not become a final.
             Reasons: empty, echo, no_words, url, hallucination, non_latin, silence_ghost, too_short,
-            stopped, error. Every drop is also logged with its reason.
+            no_speech (an utterance with no voiced audio: never sent to Whisper), stopped, error.
+            Every drop is also logged with its reason.
+  stop      when set: nothing more goes on ui_q, but finals already cut (and the sentence still being
+            spoken, if it holds ≥ MIN_FLUSH s of speech) are still transcribed into tr.
   diarizer  optional: diarizer.assign(audio, start, end) -> (speaker_id | None, confidence), called for
             every final before it is emitted (local path) and before eng.submit (cloud path).
 
@@ -356,7 +360,7 @@ class Utterance:
         self.onset = onset       # sample where its speech starts
         self.end = end           # sample where its speech ends
         self.overlap = overlap   # s at the start that repeat the end of the previous utterance
-        self.reason = reason     # pause | sentence | breath | cap_pause | cap_hard
+        self.reason = reason     # pause | sentence | breath | cap_pause | cap_hard | stop
 
 
 class Segmenter:
@@ -465,12 +469,16 @@ class Segmenter:
         carry = cut if keep_from is None else keep_from
         u = Utterance(self.uid, self.audio()[:cut], self.first, self.onset,
                       min(speech_end, self.last_voice), self.overlap, reason)
+        voiced = [offs[i] for i, s in enumerate(self.silent) if not s and offs[i] >= cut]
+        if keep_from is None and not voiced:     # the speech ended in this pause: nothing to carry
+            self.used = self.first + cut         # (the pause after the cut can still be pre-roll)
+            self._clear()
+            return u
         parts, silent = [], []                   # the carried audio keeps its pieces for a later cut
         for i, p in enumerate(self.parts):
             if offs[i + 1] > carry:
                 parts.append(p[max(0, carry - offs[i]):])
                 silent.append(self.silent[i])
-        voiced = [offs[i] for i, s in enumerate(self.silent) if not s and offs[i] >= cut]
         onset = self.first + (max(cut, voiced[0]) if voiced and keep_from is None else cut)
         first, last_voice = self.first + carry, self.last_voice
         self._clear()
@@ -515,56 +523,73 @@ def worker(eng, audio_q, ui_q, tr, stop, detect=speech_gap, clock=time.time, on_
         threading.Thread(target=_asr_loop, name="dolmi-asr", daemon=True,
                          args=(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker)).start()
     draft_uid, last_draft = None, None
-    while not stop.is_set():
-        try:
-            chunk = audio_q.get(timeout=0.2)
-        except queue.Empty:
-            continue
-        if t0 is None:
-            t0 = clock() - len(chunk) / SR
-        for u in seg.feed(chunk):
-            start, end = epoch(u.onset), epoch(u.end)
-            if not cloud:
-                jobs.put(("final", u, start, end))
-            elif len(u.audio) / SR > 0.8:
-                spk, conf = speaker(u.audio, start, end)
-                eng.submit(u.audio, start, end, ui_q, tr, meta={"speaker": spk, "speaker_conf": conf})
+    try:
+        while not stop.is_set():
+            try:
+                chunk = audio_q.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if t0 is None:
+                t0 = clock() - len(chunk) / SR
+            for u in seg.feed(chunk):
+                start, end = epoch(u.onset), epoch(u.end)
+                if u.end <= u.onset:                 # silence only: no decode, no ghost from the no-VAD retry
+                    drop("no_speech", start, end)
+                elif not cloud:
+                    jobs.put(("final", u, start, end))
+                elif len(u.audio) / SR > 0.8:
+                    spk, conf = speaker(u.audio, start, end)
+                    eng.submit(u.audio, start, end, ui_q, tr, meta={"speaker": spk, "speaker_conf": conf})
+                else:
+                    drop("too_short", start, end)
+            if not seg.active:
+                continue
+            if draft_uid != seg.uid:
+                draft_uid, last_draft = seg.uid, None
+            dur = seg.duration()
+            if (last_draft is not None and (seg.samples - last_draft) / SR < every) or \
+                    dur < 0.8 or (not cloud and dur <= 0.8):
+                continue                             # not time for a draft yet
+            meta = {"start": epoch(seg.onset), "end": epoch(seg.samples)}
+            if cloud:                                # live line ~1 s after the words, not after the sentence
+                eng.draft(seg.audio(), ui_q, meta=meta)
+            elif jobs.empty() and not busy.is_set():   # drafts only when Whisper looks idle (a draft may
+                # slip in just as it picks up a job; _asr_loop then skips it as stale)
+                jobs.put(("draft", seg.uid, seg.audio(), seg.samples, meta))
             else:
-                drop("too_short", start, end)
-        if not seg.active:
-            continue
-        if draft_uid != seg.uid:
-            draft_uid, last_draft = seg.uid, None
-        dur = seg.duration()
-        if (last_draft is not None and (seg.samples - last_draft) / SR < every) or \
-                dur < 0.8 or (not cloud and dur <= 0.8):
-            continue                             # not time for a draft yet
-        meta = {"start": epoch(seg.onset), "end": epoch(seg.samples)}
-        if cloud:                                # live line ~1 s after the words, not after the sentence
-            eng.draft(seg.audio(), ui_q, meta=meta)
-        elif jobs.empty() and not busy.is_set():   # drafts only when Whisper has nothing else to do
-            jobs.put(("draft", seg.uid, seg.audio(), seg.samples, meta))
-        else:
-            continue
-        last_draft = seg.samples
-    if seg.active and t0 is not None:
-        drop("stopped", epoch(seg.onset), epoch(seg.samples))
+                continue
+            last_draft = seg.samples
+        if seg.active and t0 is not None:
+            start, end = epoch(seg.onset), epoch(seg.last_voice)
+            if not cloud and (seg.last_voice - seg.onset) / SR >= MIN_FLUSH:   # mid-sentence Stop: keep it
+                jobs.put(("final", Utterance(seg.uid, seg.audio(), seg.first, seg.onset, seg.last_voice,
+                                             seg.overlap, "stop"), start, end))
+            else:
+                drop("stopped", start, epoch(seg.samples))
+    finally:
+        jobs.put(None)                           # the ASR thread ends after the jobs already queued
+
+
+class _Discard:
+    """ui_q stand-in after Stop."""
+    @staticmethod
+    def put(item):
+        pass
 
 
 def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker):
-    """Whisper side of worker(): finals in the order spoken; a draft only while nothing else waits."""
+    """Whisper side of worker(): finals in the order spoken; a draft only while nothing else waits.
+    After Stop it still transcribes the finals already queued, into the transcript file only: that
+    speech was captured, so it must not be lost because the CPU was behind."""
     ids, previous, draft_shown = itertools.count(1), "", None
     while True:
-        try:
-            job = jobs.get(timeout=0.2)
-        except queue.Empty:
-            if stop.is_set():
-                return
-            continue
-        if stop.is_set():                        # Stop pressed: nobody shows these any more
-            if job[0] == "final":
-                drop("stopped", job[2], job[3])
-            continue
+        job = jobs.get()
+        if job is None:                          # worker() has stopped and queued everything it had
+            return
+        if stop.is_set():
+            ui_q = _Discard                      # nobody shows captions any more
+            if job[0] == "draft":
+                continue
         busy.set()
         try:
             if job[0] == "draft":
@@ -598,7 +623,9 @@ def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker):
                         "speaker": spk, "speaker_conf": conf}
                 ui_q.put(("final", de, en, meta))
                 tr.add(start, end, de, en, meta=meta)
-                eng.context = previous = de
+                previous = de
+                if not stop.is_set():                # a new session may already use eng.context
+                    eng.context = de
                 ui_q.put(("draft", "", "", {}))
             draft_shown = None
         except Exception as e:                   # one bad buffer must not end the captions

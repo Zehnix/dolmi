@@ -152,6 +152,23 @@ def test_no_pause_at_the_cap_carries_an_overlap_that_is_deduplicated():
     assert m.dedupe_overlap("Das ist gut.", "Morgen wieder.") == "Morgen wieder."
 
 
+def test_speech_ending_just_before_the_cap_leaves_no_silent_follow_up():
+    for words in (11.3, 11.5, 11.6):                          # the cap lands in the pause after the words
+        _, utts = segment(np.concatenate([silence(1), speech(words), silence(2)]))
+        assert len(utts) == 1, words                          # before: + a 0.5 s 'pause' of silence only
+        assert abs((utts[0].end - utts[0].onset) / SR - words) < 0.11, words
+
+
+def test_an_utterance_without_new_speech_is_dropped_before_whisper(fake_engine):
+    # 11.7 s: the hard cut lands on the last word, so only the 1 s overlap is carried (nothing new)
+    _, utts = segment(np.concatenate([silence(1), speech(11.7), silence(2)]))
+    assert [u.reason for u in utts] == ["cap_hard", "pause"] and utts[1].end <= utts[1].onset
+    drops, eng = [], fake_engine()
+    _, tr = run_worker(eng, np.concatenate([silence(1), speech(11.7), silence(2)]), wait=2, finals=1,
+                       on_drop=lambda *a: drops.append(a))
+    assert [d[0] for d in drops] == ["no_speech"] and len(tr.rows) == 1   # no second final, no decode
+
+
 # ---------------------------------------------------------------- SEG-4: punctuation + pause
 def test_punctuated_draft_needs_a_real_pause_to_finalize():
     seg = m.Segmenter(energy_gap)
@@ -191,6 +208,45 @@ def test_long_verb_final_sentence_with_commas_reaches_mt_whole():
     assert len(finals) == 1                               # before SEG-4: cut into 2 at ~3 s
     meta = finals[0][3]
     assert meta["end"] - meta["start"] >= 5.5
+
+
+# ---------------------------------------------------------------- SEG-1: Stop keeps what was captured
+class Slow:
+    cloud, language, context = False, "de", ""
+
+    def __init__(self, delay):
+        self.delay, self.n = delay, 0
+
+    def transcribe(self, audio):
+        time.sleep(self.delay)
+        self.n += 1
+        return f"Satz {self.n}.", "de"
+
+    def translate(self, text, lang):
+        return text
+
+
+def wait_rows(tr, n, timeout):
+    deadline = time.time() + timeout
+    while len(tr.rows) < n and time.time() < deadline:
+        time.sleep(0.05)
+    return tr.rows
+
+
+def test_stop_with_a_backlog_still_writes_the_queued_finals_to_the_transcript():
+    sentence = np.concatenate([speech(1), silence(1)])
+    eng = Slow(0.6)
+    items, tr = run_worker(eng, np.concatenate([sentence] * 4), wait=0.3)   # Stop long before Whisper is done
+    assert len(wait_rows(tr, 4, 6)) == 4                       # before: 'stopped', 1-2 rows
+    assert not [i for i in items if i[0] == "final" and i[3]["id"] > len(tr.rows)]
+
+
+def test_stop_mid_sentence_transcribes_what_was_said():
+    drops = []
+    items, tr = run_worker(Slow(0.0), np.concatenate([silence(0.5), speech(2)]), wait=0.5,
+                           on_drop=lambda *a: drops.append(a))
+    assert len(wait_rows(tr, 1, 3)) == 1 and not drops
+    assert abs(tr.rows[0][1] - tr.rows[0][0] - 2.0) < 0.21
 
 
 # ---------------------------------------------------------------- ui_q contract
