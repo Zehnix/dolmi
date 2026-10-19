@@ -9,7 +9,7 @@ VERSION = (ROOT / "VERSION").read_text().strip()
 
 # the program itself, as source, in Contents/Resources/app (see launcher.py): the shared files from
 # the repo root, plus the Mac-only audio helper from Mac/audio (into app/audio)
-APP_FILES = ["assistant.py", "cloud_speech.py", "inbox.py", "live_subs.py", "models.py", "VERSION",
+APP_FILES = ["assistant.py", "cloud_speech.py", "inbox.py", "live_subs.py", "models.py", "speakers.py", "VERSION",
              "vocabulary.example.txt", "glossary.example.txt", "LICENSE", "THIRD-PARTY-NOTICES.md",
              "PRIVACY.md", "assets/dolmi.png"]
 APP_DIRS = ["src", "dolmi_platform"]          # copied whole (web UI: src/ui/web incl. css/ and js/)
@@ -23,7 +23,7 @@ for d in APP_DIRS:
 
 binaries, hiddenimports = [], []
 for pkg in ("faster_whisper", "ctranslate2", "webview", "sounddevice", "onnxruntime", "av",
-            "sentencepiece", "tokenizers", "keyring"):
+            "sentencepiece", "tokenizers", "keyring", "kaldi_native_fbank"):
     d, b, h = collect_all(pkg)
     datas += d; binaries += b; hiddenimports += h
 
