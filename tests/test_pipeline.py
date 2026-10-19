@@ -89,7 +89,7 @@ class SlowWhisper:
     def transcribe(self, audio):
         time.sleep(2.5)
         self.heard.append(len(audio) / SR)
-        return f"Satz mit {len(audio)} Samples", "de"
+        return f"Satz mit {len(audio)} Samples.", "de"
 
     def translate(self, text, lang):
         return "Sentence"
@@ -390,7 +390,7 @@ def test_dedupe_keeps_a_short_word_said_again():
 def test_overlap_is_not_deduplicated_against_a_dropped_part():
     class Eng:
         cloud, language, context = False, "de", ""
-        texts = iter(["Bis heute Abend", "Untertitel im Auftrag des ZDF", "heute Abend gehen wir"])
+        texts = iter(["Bis heute Abend.", "Untertitel im Auftrag des ZDF", "heute Abend gehen wir."])
 
         def transcribe(self, audio):
             return next(self.texts), "de"
@@ -403,7 +403,7 @@ def test_overlap_is_not_deduplicated_against_a_dropped_part():
 
     audio = np.concatenate([speech(2), silence(1), speech(13), silence(1)])
     items, _ = run_worker(Eng(), audio, wait=3, finals=2)
-    assert [i[1] for i in items if i[0] == "final"] == ["Bis heute Abend", "heute Abend gehen wir"]
+    assert [i[1] for i in items if i[0] == "final"] == ["Bis heute Abend.", "heute Abend gehen wir."]
 
 
 def test_mark_sentence_end_and_a_cut_do_not_interleave():
@@ -474,13 +474,13 @@ def test_empty_decode_is_retried_once_without_whispers_vad():
 def test_a_draft_is_not_retried_without_vad():
     calls = []
 
-    def fake_asr(audio, language, retry=False):
+    def fake_asr(audio, language, retry=False, **kw):
         calls.append(retry)
         return [], NS(language="de")
 
     e = object.__new__(m.Engine)
     e.language, e.terms, e._asr = "de", set(), fake_asr
-    assert e.transcribe_draft(None) == ("", "de") and calls == [False]
+    assert e.transcribe_draft(np.zeros(SR, np.float32)) == ("", "de") and calls == [False]
 
 
 def test_whisper_vad_runs_at_the_lower_threshold_and_not_on_the_retry():
@@ -502,3 +502,331 @@ def test_whisper_vad_runs_at_the_lower_threshold_and_not_on_the_retry():
 def test_speech_gap_early_out_looks_only_at_the_last_300_ms():
     loud_then_quiet = np.concatenate([speech(0.7), silence(0.3)])
     assert m.speech_gap(loud_then_quiet) is None         # no VAD call needed: the end is silent
+
+
+# ---------------------------------------------------------------- SEG-5: cheaper drafts
+def test_a_draft_decodes_only_the_last_seconds_greedily():
+    seen = []
+
+    def fake_asr(audio, language, retry=False, beam=m.FINAL_BEAM):
+        seen.append((len(audio) / SR, beam))
+        return [NS(text="Wir sind")], NS(language="de")
+
+    e = object.__new__(m.Engine)
+    e.language, e.terms, e._asr = "de", set(), fake_asr
+    e.transcribe_draft(np.zeros(11 * SR, np.float32))
+    e.transcribe(np.zeros(11 * SR, np.float32))
+    assert seen == [(m.DRAFT_WINDOW, m.DRAFT_BEAM), (11.0, m.FINAL_BEAM)]
+
+
+class SlowDrafts:
+    """Drafts take longer than the speaker needs for the next words (a busy CPU)."""
+    cloud, language, context = False, "de", ""
+
+    def __init__(self):
+        self.translated = []
+
+    def transcribe_draft(self, audio):
+        time.sleep(2.3)
+        return "Wir sind noch", "de"
+
+    def transcribe(self, audio):
+        return "Wir sind noch nicht fertig.", "de"
+
+    def translate(self, text, lang):
+        self.translated.append(text)
+        return "We are not done yet."
+
+
+def test_a_draft_far_behind_the_speaker_skips_its_translation():
+    eng = SlowDrafts()
+    items, _ = run_worker(eng, np.concatenate([speech(4), silence(1)]), realtime=True, wait=4, finals=1)
+    drafts = [i for i in items if i[0] == "draft" and i[1]]
+    assert drafts and all(d[2] == "" for d in drafts)          # German only: it would be stale anyway
+    assert eng.translated == ["Wir sind noch nicht fertig."]   # only the final went to the translator
+
+
+# ---------------------------------------------------------------- SEG-9 / SEG-16: context
+class Scripted:
+    """Finals hear the given texts in order; drafts hear nothing."""
+    cloud, language, context = False, "de", ""
+
+    def __init__(self, *texts):
+        self.texts = iter(texts)
+
+    def transcribe(self, audio):
+        return next(self.texts), "de"
+
+    def transcribe_draft(self, audio):
+        return "", "de"
+
+    def translate(self, text, lang):
+        return f"EN({text})"
+
+
+def finals_of(items):
+    return [i for i in items if i[0] == "final"]
+
+
+def test_a_final_without_full_stop_joins_the_next_one():
+    audio = np.concatenate([silence(0.5), speech(1), silence(1), speech(1), silence(1)])
+    eng = Scripted("Wir haben das Projekt", "verschoben, weil der Kunde abgesagt hat.")
+    items, tr = run_worker(eng, audio, wait=2, finals=1, clock=lambda: 1000.0)
+    [f] = finals_of(items)
+    assert f[1] == "Wir haben das Projekt verschoben, weil der Kunde abgesagt hat."
+    assert f[2] == "EN(Wir haben das Projekt verschoben, weil der Kunde abgesagt hat.)"   # translated whole
+    t0 = 1000.0 - 0.1
+    assert abs(f[3]["start"] - (t0 + 0.5)) < 0.11 and abs(f[3]["end"] - (t0 + 3.5)) < 0.11
+    assert f[3]["id"] == 1 and len(tr.rows) == 1
+    held = [i for i in items if i[0] == "draft" and i[1] == "Wir haben das Projekt"]
+    assert held and held[0][2] == "EN(Wir haben das Projekt)"   # the held words stay on the live line
+
+
+def test_a_held_final_is_shown_alone_after_the_hold_time():
+    audio = np.concatenate([speech(1), silence(m.HOLD_MAX + 1.5)])
+    items, tr = run_worker(Scripted("Wir haben das Projekt"), audio, wait=3, finals=1, clock=lambda: 1000.0)
+    assert [f[1] for f in finals_of(items)] == ["Wir haben das Projekt"] and len(tr.rows) == 1
+
+
+def test_a_final_far_after_the_held_one_is_its_own_line():
+    audio = np.concatenate([speech(1), silence(m.HOLD_MAX + 1), speech(1), silence(1)])
+    items, _ = run_worker(Scripted("Also gut", "Wir fangen an."), audio, wait=3, finals=2, clock=lambda: 1000.0)
+    assert [f[1] for f in finals_of(items)] == ["Also gut", "Wir fangen an."]
+
+
+def test_a_held_final_is_not_joined_with_another_speaker():
+    class Two:
+        def __init__(self):
+            self.n = 0
+
+        def assign(self, audio, start, end):
+            self.n += 1
+            return f"S{self.n}", 0.9
+
+    audio = np.concatenate([speech(1), silence(1), speech(1), silence(1)])
+    items, _ = run_worker(Scripted("Und du", "Ich komme mit."), audio, wait=3, finals=2, diarizer=Two())
+    assert [(f[1], f[3]["speaker"]) for f in finals_of(items)] == [("Und du", "S1"), ("Ich komme mit.", "S2")]
+
+
+def test_stop_flushes_a_held_final_into_the_transcript():
+    _, tr = run_worker(Scripted("Wir haben das Projekt"), np.concatenate([speech(1), silence(1)]), wait=0.5,
+                       clock=lambda: 1000.0)
+    assert [r[2] for r in wait_rows(tr, 1, 2)] == ["Wir haben das Projekt"]
+
+
+def test_a_leading_copy_of_the_previous_sentence_is_removed():
+    assert m.strip_repeat("Wir starten am Montag.", "Wir starten am Montag. Und dann testen wir.") == \
+        "Und dann testen wir."
+    assert m.strip_repeat("Kannst du mich hören?", "Kannst du mich hören?") == "Kannst du mich hören?"  # said again
+    assert m.strip_repeat("Ja, genau.", "Ja, genau. Gut.") == "Ja, genau. Gut."   # too short to tell
+    audio = np.concatenate([speech(1), silence(1), speech(1), silence(1)])
+    eng = Scripted("Wir starten am Montag.", "Wir starten am Montag. Und dann testen wir.")
+    items, _ = run_worker(eng, audio, wait=3, finals=2)
+    assert [f[1] for f in finals_of(items)] == ["Wir starten am Montag.", "Und dann testen wir."]
+
+
+def test_context_translation_keeps_only_the_new_part():
+    e = object.__new__(m.Engine)
+    out = {"Er kommt.": "He is coming.", "Peter ist krank. Er kommt.": "Peter is sick. He's coming."}
+    e.translate = lambda text, lang: out[text]
+    assert e.translate_context("Er kommt.", "de", "Peter ist krank.", "Peter is sick.") == "He's coming."
+    assert e.translate_context("Er kommt.", "de", "Peter ist krank.", "Peter is ill.") == "He is coming."
+    assert e.translate_context("Er kommt.", "de", "", "") == "He is coming."
+
+
+class Fragmenting(Scripted):
+    """Opus-MT's habit: a German piece that starts with words left over from the previous one
+    comes out without them. The table holds what the real model gives for each input."""
+
+    def translate(self, text, lang):
+        return EN.get(text, "")
+
+
+# Monologue syn-s1-u070 of the bench (fictional company), cut by the 12 s cap at a pause mid-sentence.
+MONO_A = "Kurz zum Stand bei Brandtwerk: Wir haben letzte Woche die Schnittstelle zum Nimbus Gateway"
+MONO_B = "fertiggestellt, die ersten Tests auf Staging sind gut gelaufen."
+EN = {MONO_A: "Briefly on the status at Brandtwerk: last week we had the interface to the Nimbus Gateway",
+      MONO_B: "the first tests on staging went well.",
+      f"{MONO_A} {MONO_B}": "Briefly on the status at Brandtwerk: last week we completed the interface to the "
+                            "Nimbus Gateway, the first tests on staging went well."}
+
+
+def test_a_monologue_cut_mid_sentence_keeps_the_carried_words_in_the_english():
+    pieces = []
+    for _ in range(16):                                    # ~12.8 s of words with short pauses
+        pieces += [speech(0.6), silence(0.2)]
+    audio = np.concatenate(pieces + [silence(1)])
+    _, utts = segment(audio)
+    assert [u.reason for u in utts] == ["cap_pause", "pause"]   # the cap cut lands in a pause
+    items, _ = run_worker(Fragmenting(MONO_A, MONO_B), audio, wait=3, finals=1, clock=lambda: 1000.0)
+    [f] = finals_of(items)                                 # before: two lines, 'fertiggestellt' lost
+    assert f[1] == f"{MONO_A} {MONO_B}" and "completed" in f[2]
+
+
+# ---------------------------------------------------------------- SEG-14: loops in the translation
+class FakeMarian:
+    """Stands in for (ctranslate2 translator, source spm, target spm); decodes to `out`."""
+
+    def __init__(self, out):
+        self.out = out
+
+    def translate_batch(self, batch, **kw):
+        return [NS(hypotheses=[["x"]])] * len(batch)
+
+    def encode(self, text, out_type=str):
+        return text.split()
+
+    def decode(self, toks):
+        return self.out
+
+
+def engine_with_mt(out, language="de"):
+    e = object.__new__(m.Engine)
+    e.language, e.vocab = language, m.Vocabulary(text="")
+    fake = FakeMarian(out)
+    e._translator = lambda key, download=False: (fake, fake, fake)
+    return e
+
+
+def test_a_translation_loop_shows_once():
+    looped = " ".join(["We will move the release to Thursday."] * 20)
+    assert engine_with_mt(looped).translate("Wir verschieben das Release auf Donnerstag.", "de") == \
+        "We will move the release to Thursday."
+    assert engine_with_mt("Yes. Yes. Yes.").translate("Ja. Ja. Ja.", "de") == "Yes."
+    assert engine_with_mt("I'm going to do that, I'm going to do that, I'm going to").translate(
+        "Das mache ich, das mache ich.", "de") == "I'm going to do that"
+
+
+def test_short_loops_collapse_but_a_double_word_stays():
+    assert m.collapse_repeats("Ja. Ja. Ja.") == "Ja."
+    assert m.collapse_repeats("Ja, ja, ja, genau.") == "Ja, genau."
+    assert m.collapse_repeats("Yes. Yes. Yes. Yes. We start Monday.") == "Yes. We start Monday."
+    assert m.collapse_repeats("Das ist sehr sehr gut.") == "Das ist sehr sehr gut."
+    assert m.collapse_repeats("Ja, ja.") == "Ja, ja."
+    assert m.collapse_repeats("Wir sind auf Version 1.1.1 und 10.10.10.") == "Wir sind auf Version 1.1.1 und 10.10.10."
+
+
+# ---------------------------------------------------------------- SEG-15: German called English
+def test_a_german_line_detected_as_english_is_translated():
+    e = engine_with_mt("I don't think that's right.")
+    assert e.translate("Ich glaube, das ist nicht richtig.", "en") == "I don't think that's right."
+    assert e.translate("Okay, genau.", "en") == "I don't think that's right."     # a short German reply
+    assert e.translate("Let's start with the Kanban board.", "en") == "Let's start with the Kanban board."
+    assert e.translate("We need the Vertrieb und the marketing team today.", "en") == \
+        "We need the Vertrieb und the marketing team today."                       # one German word: English
+
+
+def test_transcribe_reports_german_when_whisper_detected_english_on_german_words():
+    e = object.__new__(m.Engine)
+    e.language, e.terms = "de", set()
+    e._asr = lambda audio, language, **kw: ([NS(text="Ich habe das nicht gesehen.")], NS(language="en"))
+    assert e.transcribe(None) == ("Ich habe das nicht gesehen.", "de")
+    e._asr = lambda audio, language, **kw: ([NS(text="I have not seen it.")], NS(language="en"))
+    assert e.transcribe(None) == ("I have not seen it.", "en")
+
+
+# ---------------------------------------------------------------- SEG-11: cloud path
+class FakeCloud:
+    cloud, DRAFT_EVERY, language = True, 0.5, "de"
+
+    def __init__(self):
+        self.sent = []
+
+    def submit(self, audio, start, end, ui_q, tr, meta=None):
+        self.sent.append((len(audio) / SR, end - start, meta))
+
+    def draft(self, audio, ui_q, meta=None):
+        pass
+
+
+def test_a_short_cloud_utterance_is_kept():
+    drops, eng = [], FakeCloud()
+    run_worker(eng, np.concatenate([silence(1), speech(0.4), silence(1.5)]), wait=0.5,
+               on_drop=lambda *a: drops.append(a))
+    assert len(eng.sent) == 1 and not drops                # before SEG-11: 'too_short' (0.8 s minimum)
+    assert abs(eng.sent[0][1] - 0.4) < 0.11 and eng.sent[0][2]["overlap"] == 0
+    run_worker(eng, np.concatenate([silence(1), speech(0.2), silence(1.5)]), wait=0.5,
+               on_drop=lambda *a: drops.append(a))
+    assert [d[0] for d in drops] == ["too_short"]
+
+
+def test_a_cloud_cut_without_a_pause_carries_a_short_overlap():
+    _, utts = segment(np.concatenate([speech(7), silence(1)]), cloud=True)
+    assert utts[0].reason == "cap_hard" and utts[1].overlap == m.CLOUD_OVERLAP
+
+
+def cloud_engine(provider="openai"):
+    import cloud_speech
+    eng = cloud_speech.CloudEngine.__new__(cloud_speech.CloudEngine)
+    eng._jobs, eng._lock, eng._requests = queue.Queue(), threading.Lock(), 0
+    eng._utterance = eng._shown = 0
+    eng._pending, eng._drafting, eng._last_error = {}, 0, 0.0
+    eng.context, eng.provider, eng.language = "", provider, "de"
+    eng.line_ids = iter(range(1, 100))
+    eng.translate = lambda text, lang: f"EN({text})"
+    return eng
+
+
+def submit_now(eng, audio, ui_q, tr, meta=None, start=0.0, end=1.0):
+    """CloudEngine.submit, run on this thread (no request threads in tests)."""
+    eng.submit(audio, start, end, ui_q, tr, meta)
+    fn, args = eng._jobs.get_nowait()
+    fn(*args)
+
+
+def test_a_failed_cloud_request_is_retried_once(monkeypatch):
+    import cloud_speech
+    monkeypatch.setattr(cloud_speech, "RETRY_DELAY", 0.0)
+    eng, calls, drops = cloud_engine(), [], []
+    eng.on_drop = lambda *a: drops.append(a)
+
+    def flaky(audio):
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError("connection reset")
+        return "Ja, genau.", "Yes, exactly."
+
+    eng.recognize = flaky
+    ui_q, tr = queue.Queue(), Collect()
+    submit_now(eng, speech(0.4), ui_q, tr, meta={"speaker": "S1", "speaker_conf": 0.8, "overlap": 0.0})
+    items = list(ui_q.queue)
+    assert len(calls) == 2 and not drops and not [i for i in items if i[0] == "error"]
+    [f] = [i for i in items if i[0] == "final"]
+    assert f[1:3] == ("Ja, genau.", "Yes, exactly.") and len(tr.rows) == 1
+    assert {k: f[3][k] for k in ("id", "start", "end", "speaker", "speaker_conf", "lang")} == \
+        {"id": 1, "start": 0.0, "end": 1.0, "speaker": "S1", "speaker_conf": 0.8, "lang": "de"}
+    assert "overlap" not in f[3]
+
+
+def test_a_cloud_request_failing_twice_is_dropped_and_reported(monkeypatch):
+    import cloud_speech
+    monkeypatch.setattr(cloud_speech, "RETRY_DELAY", 0.0)
+    eng, calls, drops = cloud_engine(), [], []
+    eng.on_drop = lambda *a: drops.append(a)
+
+    def down(audio):
+        calls.append(1)
+        raise RuntimeError("HTTP 503: busy")
+
+    eng.recognize = down
+    ui_q, tr = queue.Queue(), Collect()
+    submit_now(eng, speech(1), ui_q, tr, start=5.0, end=6.0)
+    assert len(calls) == 2 and [d[:3] for d in drops] == [("error", 5.0, 6.0)] and not tr.rows
+    assert [i[0] for i in ui_q.queue] == ["error", "draft"]
+
+
+def test_cloud_overlap_words_are_not_shown_twice():
+    eng = cloud_engine()
+    texts = iter([("Wir gehen heute zusammen", ""), ("zusammen nach Hause.", "")])
+    eng.recognize = lambda audio: next(texts)
+    ui_q, tr = queue.Queue(), Collect()
+    submit_now(eng, speech(1), ui_q, tr, meta={"overlap": 0.0})
+    submit_now(eng, speech(1), ui_q, tr, meta={"overlap": m.CLOUD_OVERLAP})
+    assert [r[2:4] for r in tr.rows] == [("Wir gehen heute zusammen", ""), ("nach Hause.", "EN(nach Hause.)")]
+    gem = cloud_engine("gemini")
+    texts = iter([("Wir gehen heute zusammen", "Today we go together"), ("zusammen nach Hause.", "together home.")])
+    gem.recognize = lambda audio: next(texts)
+    tr = Collect()
+    submit_now(gem, speech(1), ui_q, tr, meta={"overlap": 0.0})
+    submit_now(gem, speech(1), ui_q, tr, meta={"overlap": m.CLOUD_OVERLAP})
+    assert tr.rows[1][2:4] == ("nach Hause.", "home.")
