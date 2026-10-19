@@ -102,7 +102,7 @@ def test_a_line_queued_past_its_deadline_is_not_sent():
 
 
 def test_errors_keep_the_local_line_and_the_thread_alive():
-    post, q = FakePost(fail=RuntimeError("HTTP 429: quota")), queue.Queue()
+    post, q = FakePost(fail=RuntimeError("HTTP 400: bad request")), queue.Queue()   # no cooldown (STR-6)
     tr = _translator(post)
     tr.submit(1, "Eins.", "One.", "de", "de", [], q)
     time.sleep(0.3)

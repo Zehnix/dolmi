@@ -24,6 +24,8 @@ import dolmi_platform
 import models
 import speakers as speaker_ids   # names and colours only: no model is loaded on import
 import streaming
+import translation_router
+import uncertainty
 
 # ---------------------------------------------------------------- settings
 SR = 16000                 # Whisper sample rate
@@ -461,7 +463,7 @@ class Engine:
         self.language = language   # spoken language code, or "auto"
         self.translators = {}      # model key -> (translator, source spm, target spm)
         # Load (and on first use download) the translator up front
-        self._translator(models.translator_key(language), download=True)
+        self._translator(translation_router.pair_default(language), download=True)
         self.context = ""   # previous sentence -> better names/terms
         # STR-1/STR-5: LocalAgreement drafts on the GPU by default; on the CPU only with DOLMI_STABLE_DRAFTS=1
         # until STR-10 measured the word-timestamp cost there (DOLMI_STABLE_DRAFTS=0 turns it off anywhere)
@@ -546,7 +548,8 @@ class Engine:
             segs, info = self._asr(audio, language, retry=True)
         raw = " ".join(t for t in (s.text.strip() for s in segs) if t)
         text = drop_echoes(segs, self.terms)
-        self.last_info = {"retried": retried, "echo": text != raw}
+        self.last_info = {"retried": retried, "echo": text != raw,
+                          "uncertainty": uncertainty.line_uncertainty(segs) if beam == FINAL_BEAM else None}   # STR-8
         q = getattr(self, "clarify", None)   # VOC-9: unsure words of finals, for "Did they say ...?" after Stop
         if q is not None and beam == FINAL_BEAM and text:
             q.add([(w.word, w.probability) for s in segs for w in (getattr(s, "words", None) or [])], text)
@@ -609,7 +612,7 @@ class Engine:
         """STR-5: translate `text` with the English already shown forced as the start of the output
         (CTranslate2 target_prefix). Without a prefix, for English speech or with protected terms
         (their X0X placeholders would not match the shown English) this is translate()."""
-        key = models.translator_key(lang if lang in models.LANGUAGES else self.language)
+        key = translation_router.pair_default(lang if lang in models.LANGUAGES else self.language)
         t = self.translators.get(key) or self.translators.get("opus-mul")
         if not prefix or lang == "en" or t is None:
             return self.translate(text, lang)
@@ -631,7 +634,7 @@ class Engine:
             lang = "de"                          # Whisper called a German line English: translate it
         if lang not in models.LANGUAGES:
             lang = self.language
-        key = models.translator_key(lang)
+        key = translation_router.pair_default(lang)   # STR-6 pair table
         t = self._translator(key)
         if t is None and key != "opus-en":
             t = self._translator("opus-mul")   # any language -> English
@@ -644,6 +647,20 @@ class Engine:
         res = mt.translate_batch([toks], beam_size=2, max_decoding_length=256)
         out = [tok for tok in res[0].hypotheses[0] if tok not in ("</s>", "<pad>")]
         return collapse_repeats(vocab.finish(sp_tgt.decode(out), slots))   # Opus-MT loops too
+
+UNSURE_MARKS = os.environ.get("DOLMI_UNSURE_MARKS") == "1"   # STR-8: off until calibrated (QA-2/QA-9)
+
+
+def _unsure(eng):
+    """STR-8: the unsure words of the final just transcribed ([] = sure, None = marks off / no stats).
+    A line with no single low word but low line stats is marked with ['?']."""
+    if not (UNSURE_MARKS or getattr(eng, "unsure_marks", False)):
+        return None
+    u = (getattr(eng, "last_info", None) or {}).get("uncertainty")
+    if not u or not u["unsure"]:
+        return None
+    return u["words"] or ["?"]
+
 
 # German function words that are not English words: one of them in a line Whisper called English
 # means the line is (mostly) German. Left out on purpose: die, was, also, will, war, am, an, so, da.
@@ -1053,9 +1070,12 @@ class Segmenter:
     is skipped however late it runs. Only the worker thread feeds it; the ASR thread may call
     mark_sentence_end() and read uid / active."""
 
-    def __init__(self, detect=None, cloud=False):
+    def __init__(self, detect=None, cloud=False, adaptive=None):
         self.detect = detect or speech_gap
         self.cloud = cloud
+        if adaptive is None:   # STR-12: off by default until QA-1 shows it helps (DOLMI_ADAPTIVE_PAUSE=1)
+            adaptive = os.environ.get("DOLMI_ADAPTIVE_PAUSE") == "1"
+        self.adaptive = streaming.AdaptivePause(PAUSE_TO_FINALIZE) if adaptive and not cloud else None
         self.samples = 0                         # samples fed so far: the audio clock
         self.recent = np.zeros(0, np.float32)    # last 1 s: VAD context and pre-roll source
         self.used = 0                            # samples before this belong to an earlier utterance
@@ -1065,6 +1085,7 @@ class Segmenter:
 
     def _clear(self):
         self.parts, self.silent = [], []         # audio pieces and their "no speech in it" flags
+        self.levels = []                         # STR-12: loudness of each piece (valley cut)
         self.first = self.onset = self.last_voice = None
         self.overlap, self.sentence_end = 0.0, None
 
@@ -1110,16 +1131,23 @@ class Segmenter:
                 if len(pre):
                     self.parts, self.silent = [pre.copy()], [True]
                 self.first, self.onset = start - len(pre), start
+                if self.adaptive is not None:
+                    self.levels = [0.0] * len(self.parts)
+            elif self.adaptive is not None:
+                self.adaptive.observe((voice - self.last_voice) / SR)   # a pause inside speech
             self.last_voice = voice
         if not self.active:
             return []
         self.parts.append(piece)
         self.silent.append(gap is None or gap >= n / SR)
+        if self.adaptive is not None:
+            self.levels.append(0.0 if self.silent[-1] else float(np.sqrt(np.mean(piece ** 2))))
         return self._decide()
 
     def _decide(self):
         pause, dur = (self.samples - self.last_voice) / SR, self.duration()
-        if pause >= PAUSE_TO_FINALIZE:
+        limit = self.adaptive.limit(dur, MAX_UTTERANCE) if self.adaptive is not None else PAUSE_TO_FINALIZE
+        if pause >= limit:
             return [self._finish("pause")]
         if self.cloud:   # cloud captions: requests are ~1 s each, so long speech is cut at a breath
             if dur >= CLOUD_SPLIT and pause >= CLOUD_BREATH:
@@ -1137,6 +1165,14 @@ class Segmenter:
         self._clear()
         return u
 
+    def _valley(self, offs, low):
+        """STR-12: piece index (at least MIN_CUT in, not the last) at the deepest loudness valley, or None."""
+        if self.adaptive is None or len(self.levels) != len(self.parts):
+            return None
+        first = next((k for k, o in enumerate(offs[:-1]) if o >= low), len(self.parts))
+        i = streaming.deepest_valley(self.levels, first)
+        return i if i is not None and i < len(self.parts) - 1 else None
+
     def _cut(self):
         """At the length cap: cut in the middle of the last pause (at least MIN_CUT in) and carry
         the rest into the next utterance. With no pause, cut here and also carry the last OVERLAP s
@@ -1153,6 +1189,10 @@ class Segmenter:
                 begin -= 1
             cut, keep_from, reason = (offs[begin] + offs[last + 1]) // 2, None, "cap_pause"
             speech_end = self.first + offs[begin]
+        elif (valley := self._valley(offs, low)) is not None:
+            # STR-12: no pause at all: cut at the quietest moment, carry the overlap as for a hard cut
+            cut, speech_end, reason = offs[valley + 1], self.first + offs[valley + 1], "cap_valley"
+            keep_from = max(0, cut - int(OVERLAP * SR))
         else:
             cut, speech_end, reason = total, self.first + total, "cap_hard"
             keep_from = max(0, total - int((CLOUD_OVERLAP if self.cloud else OVERLAP) * SR))
@@ -1164,16 +1204,19 @@ class Segmenter:
             self.used = self.first + cut         # (the pause after the cut can still be pre-roll)
             self._clear()
             return u
-        parts, silent = [], []                   # the carried audio keeps its pieces for a later cut
+        parts, silent, levels = [], [], []       # the carried audio keeps its pieces for a later cut
         for i, p in enumerate(self.parts):
             if offs[i + 1] > carry:
                 parts.append(p[max(0, carry - offs[i]):])
                 silent.append(self.silent[i])
+                if i < len(self.levels):
+                    levels.append(self.levels[i])
         onset = self.first + (max(cut, voiced[0]) if voiced and keep_from is None else cut)
         first, last_voice = self.first + carry, self.last_voice
         self._clear()
         self.uid += 1
         self.parts, self.silent = parts, silent
+        self.levels = levels if len(levels) == len(parts) else []
         self.first, self.onset, self.last_voice = first, onset, last_voice
         self.overlap = (cut - carry) / SR
         self.used = first
@@ -1400,6 +1443,8 @@ def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker, tag=No
         meta = {"id": next(ids), "start": line["start"], "end": line["end"], "emitted": clock(),
                 "lang": line["lang"], "speaker": line["speaker"], "speaker_conf": line["speaker_conf"],
                 **tag(line.get("utt")), "trace": trace}
+        if line.get("unsure"):
+            meta["unsure"] = line["unsure"]                  # STR-8: '?' on the line
         trace["emitted"] = meta["emitted"]
         ui_q.put(("final", line["de"], en, meta))
         tr.add(line["start"], line["end"], line["de"], en, meta=meta)
@@ -1491,7 +1536,8 @@ def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker, tag=No
                 else:
                     spk, conf = speaker(u.audio, start, end)
                     line = {"de": de, "lang": lang, "start": start, "end": end, "upto": u.end,
-                            "speaker": spk, "speaker_conf": conf, "utt": u.uid, "trace": trace}
+                            "speaker": spk, "speaker_conf": conf, "utt": u.uid, "trace": trace,
+                            "unsure": _unsure(eng)}
                     if held:
                         same = None in (spk, held["speaker"]) or spk == held["speaker"]
                         if same and held["lang"] == lang and start - held["end"] <= HOLD_MAX:

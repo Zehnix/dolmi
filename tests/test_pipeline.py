@@ -470,7 +470,7 @@ def test_empty_decode_is_retried_once_without_whispers_vad():
     e = object.__new__(m.Engine)
     e.language, e.terms, e._asr = "de", set(), fake_asr
     assert e.transcribe(None) == ("Ja, genau.", "de") and calls == [False, True]
-    assert e.last_info == {"retried": True, "echo": False}
+    assert {k: e.last_info[k] for k in ("retried", "echo")} == {"retried": True, "echo": False}
 
 
 def test_a_draft_is_not_retried_without_vad():

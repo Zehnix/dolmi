@@ -118,7 +118,9 @@ function onLineUpdate(id,en,meta){ const p=brows.querySelector(`.pair[data-line=
   c.classList.add('cloudfix'); return true; }
 { const d=window.dolmi, onLine=d.onLine;
   d.onLine=(ts,de,en,meta)=>{ onLine(ts,de,en,meta); const p=brows.lastElementChild;
-    if(p&&p.classList.contains('pair')&&meta&&meta.id!=null) p.dataset.line=meta.id; };
+    if(p&&p.classList.contains('pair')&&meta&&meta.id!=null) p.dataset.line=meta.id;
+    if(p&&p.classList.contains('pair')&&meta&&meta.unsure&&meta.unsure.length){ p.classList.add('unsure');   /* STR-8 */
+      const w=meta.unsure.filter(x=>x!=='?'); p.title=w.length?'Not sure about: '+w.join(', '):'Dolmi is not sure it heard this line right'; } };
   d.onLineUpdate=(id,en,meta)=>onLineUpdate(id,en,meta); }
 /* ---- speaker labels (SPK-4, beta): a coloured chip per line; click it to rename, reassign or merge ----
    Lines keep the speaker id (data-spk), so a rename or merge re-renders every past chip of this meeting.
