@@ -262,3 +262,14 @@ if($('#setReport')) $('#setReport').onclick=async()=>{ const b=bridge(); if(!b){
   try{ const r=await b.report_problem(on('#swRepTranscripts'),on('#swRepVocab'));
     if(r.ok){ $('#repStatus').textContent='Saved: '+r.path; toast('Report saved'); } else if(!r.cancelled) toast(r.message||'Could not save the report'); }
   catch(e){ console.error('report_problem',e); toast('Could not save the report'); } };
+/* ---- VOICE-1 prototype: read the English subtitles aloud with the system voice (off by default). It does
+   not mute or turn down the meeting audio yet, so both are heard; subtitles keep showing every line. ---- */
+{ const m=settingsMount('audio.voice');
+  if(m) m.innerHTML=`<div class="set" data-kw="voice read aloud speak translation tts text to speech headset experimental"><div><div class="lab">Read translations aloud <span class="mtag">experimental</span></div><div class="ps" id="voiceHint">Speaks each English line with the system voice. The meeting audio is not muted or turned down yet, so you hear both. Lines that fall behind are skipped; subtitles show everything</div></div><button class="sw" id="swVoice" aria-label="Read translations aloud"></button></div>`; }
+async function voiceHint(){ const b=bridge(), h=$('#voiceHint'); if(!b||!h||!b.voice_state) return;
+  try{ const v=await b.voice_state(); if(!v.available) h.textContent='No system voice was found on this computer, so nothing can be read aloud'; }catch(e){ console.error('voice state',e); } }
+if($('#swVoice')) $('#swVoice').onclick=async()=>{ const sw=$('#swVoice'), on=!sw.classList.contains('on'), b=bridge(); sw.classList.toggle('on',on);
+  if(b&&!await b.set_setting('voice_readout',on)){ sw.classList.toggle('on',!on); return; }
+  toast(on?'Reading translations aloud (experimental)':'Reading aloud off'); voiceHint(); };
+async function voiceBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state(); setSw('#swVoice',!!s.voiceReadout); voiceHint(); }catch(e){ console.error('voice boot',e); } }
+document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) voiceBoot(); else window.addEventListener('pywebviewready',voiceBoot); });

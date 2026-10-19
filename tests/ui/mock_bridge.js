@@ -18,7 +18,7 @@
     audioDevice:'',audioSource:'speaker',micDevice:'',sourceLabel:{source:'speaker',device:'Default speaker'},
     speechModel:'auto',overlay:true,theme:'paper',listening:false,opacity:.88,font:22,warnSilence:true,barVisible:false,
     engine:'not loaded',engineState:'idle',dataFolder:'C:\\Users\\Test\\Documents\\Dolmi',version:'2.2.0',
-    checkUpdates:true,barLocked:false,shortcutsOn:true,speakerLabels:false,
+    checkUpdates:true,barLocked:false,shortcutsOn:true,speakerLabels:false,voiceReadout:false,
     shortcuts:{toggle_live:'ctrl+alt+shift+s',toggle_bar:'ctrl+alt+shift+b',toggle_source:'ctrl+alt+shift+m',toggle_lock:'ctrl+alt+shift+l'},
     shortcutStatus:{toggle_live:true,toggle_bar:true,toggle_source:true,toggle_lock:false},
     platform:{os:'win',words:WORDS}};
@@ -41,6 +41,7 @@
   const canned={
     state:()=>JSON.parse(JSON.stringify(state)),
     set_setting:()=>true,
+    voice_state:()=>({on:false,available:true,backend:'windows',spoken:0,skipped:0}),   // VOICE-1
     pc_info:()=>({ram_gb:32,cores:16,gpu:true,gpu_name:'NVIDIA GeForce RTX 4060',model_dir:'C:\\Users\\Test\\.cache\\huggingface\\hub',data_dir:state.dataFolder}),
     devices:()=>['Speakers (Realtek Audio)','Headset (USB)'],
     mic_devices:()=>['Microphone (USB)','Microphone Array'],
