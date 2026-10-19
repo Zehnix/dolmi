@@ -559,17 +559,33 @@ _LOOP_LONG = re.compile(r"(\b.{8,}?)(?:[\s,.!?;]+\1\b)+", re.I)
 # a short loop starts with a letter and its repeats are spaced ('Version 1.1.1' is not a loop)
 _LOOP_SHORT = re.compile(r"(?<!\w)([^\W\d_](?:[\w' -]{0,5}\w)?)(?:[,.!?;]*\s+\1(?!\w)){2,}", re.I)
 
+def _is_loop(text: str, m) -> bool:
+    """A long phrase said twice is often real speech ('Das ist gut. Das ist gut so'): only 3+ copies,
+    or a whole sentence/segment said again (both copies end the sentence), count as a loop."""
+    if len(re.findall(re.escape(m.group(1)), m.group(0), re.I)) >= 3:
+        return True
+    before, after = text[:m.start()].rstrip(), text[m.end():]
+    whole_start = not before or before[-1] in ".!?"
+    whole_end = re.match(r"\s*(?:[.!?]|$)", after) is not None
+    first_ends_sentence = re.search(r"[.!?]", m.group(0)[len(m.group(1)):]) is not None
+    return whole_start and whole_end and (first_ends_sentence or not after.strip())
+
 def collapse_repeats(text: str) -> str:
     """Whisper and Opus-MT sometimes loop: 'He's a good man. He's a good man.' -> said once, and a short
-    one said three or more times ('Ja. Ja. Ja.') -> once ('sehr sehr gut' stays). A loop the model cut
-    off mid-repeat at the end ('..., I'm going to do that, I'm going to') loses that tail too."""
+    one said three or more times ('Ja. Ja. Ja.') -> once ('sehr sehr gut' stays). A longer phrase said
+    only twice stays unless the whole sentence repeats ('Das ist gut. Das ist gut so' is real speech).
+    A loop the model cut off mid-repeat at the end ('..., I'm going to do that, I'm going to') loses
+    that tail too."""
     text = _LOOP_SHORT.sub(r"\1", text)
     out, pos = [], 0
     for m in _LOOP_LONG.finditer(text):
+        tail = text[m.end():].strip(" ,;.!?")
+        unfinished = len(tail.split()) >= 2 and m.group(1).lower().startswith(tail.lower())
+        if not (unfinished or _is_loop(text, m)):
+            continue
         out.append(text[pos:m.start()] + m.group(1))
         pos = m.end()
-        tail = text[pos:].strip(" ,;.!?")
-        if len(tail.split()) >= 2 and m.group(1).lower().startswith(tail.lower()):
+        if unfinished:
             pos = len(text)                       # the rest of the line is an unfinished repeat
             break
     return "".join(out) + text[pos:]
