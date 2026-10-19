@@ -175,18 +175,17 @@ def make_engine(args, terms, text_set=None, mt_only=False):
     A text set may bring its own vocabulary/glossary (private: written next to the set, never here).
     mt_only: no Whisper (translation half only). --translator gemini|deepl wraps the local engine in
     translators.CloudMT (the local Opus-MT stays for the side-by-side numbers)."""
-    cfg = paths.data_dir() / "config"
+    # A fresh folder per run: a shared one let a parallel bench (or a --no-terms run) swap or delete the
+    # term files under this run, which silently changed the hotwords (the first smoke baseline ran so).
     if text_set is not None and ("vocabulary" in text_set or "glossary" in text_set):
         cfg = Path(text_set["_path"]).parent / "_engine_config"
         cfg.mkdir(parents=True, exist_ok=True)
         for name in ("glossary", "vocabulary"):
             (cfg / f"{name}.txt").write_text(text_set.get(name) or "", encoding="utf-8")
-    elif args.no_terms:
-        cfg.mkdir(parents=True, exist_ok=True)
-        for name in ("glossary.txt", "vocabulary.txt"):
-            (cfg / name).unlink(missing_ok=True)
     else:
-        term_files(cfg, terms)
+        cfg = Path(tempfile.mkdtemp(prefix="dolmi-eval-config-"))
+        if not args.no_terms:
+            term_files(cfg, terms)
     os.environ["DOLMI_CONFIG"] = str(cfg)
     if mt_only:
         eng = translators.mt_engine(args.translator, args.device)
