@@ -13,6 +13,7 @@ import os
 import threading
 import time
 import urllib.request
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,7 +29,7 @@ MODEL_MB = 30
 
 MAX_SPEAKERS = 8
 MIN_SECONDS = 1.0          # shorter lines ("Ja.", "Genau.") carry too little voice: they keep the last speaker
-MAX_EMBED_SECONDS = 10.0   # longer lines are embedded from their middle 10 s (bounds the CPU time)
+MAX_EMBED_SECONDS = 6.0    # longer lines are embedded from their middle 6 s (bounds the CPU time)
 MERGE_EVERY = 4            # a merge pass after every 4 assigned lines
 LOW_CONF = 0.7             # below this the UI shows the label dimmed with a "?"
 # Colours of Speaker 1..8 (readable on the Paper and the Ink theme).
@@ -243,8 +244,10 @@ class Clusterer:
 
     def merge(self, old, new):
         """Fold speaker `old` into `new` (the user's "same person", or the merge pass)."""
-        old, new = self.resolve(old), self.resolve(new)
+        asked, old, new = old, self.resolve(old), self.resolve(new)
         if old == new:
+            if asked != new and self.on_merge:     # a stale page: its lines may still carry `asked`
+                self.on_merge(asked, new)
             return new
         if old in self.sums:
             if new in self.sums:
@@ -278,7 +281,7 @@ class Diarizer:
         self.embed = embed
         self.mode = mode
         self.clusters = clusterer or Clusterer(on_merge=on_merge)
-        self.ms = []                       # embedding times (ms), for the bench and the log
+        self.ms = deque(maxlen=500)        # recent embedding times (ms), for the bench and the log
         self._lock = threading.Lock()
 
     def thresholds(self):

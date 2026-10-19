@@ -732,6 +732,8 @@ class Transcript:
             if x is None:
                 return False
             x.update({k: v for k, v in fields.items() if k != "id"})
+            while x.get("speaker") in self._merged:   # a stale page may still offer a merged-away id
+                x["speaker"] = self._merged[x["speaker"]]
             if self._known(x.get("speaker")):
                 self._write_speakers()
             return True
@@ -746,6 +748,14 @@ class Transcript:
             return [{"id": sid, "name": self.speaker_name(sid), "colour": self.speakers.get(sid, {}).get(
                         "colour") or speaker_ids.colour(sid), "lines": n}
                     for sid, n in sorted(counts.items(), key=_by_id)]
+
+    def next_speaker_id(self):
+        """An id no speaker of this meeting has used: not a current one, not a renamed one whose
+        lines all moved away, not one merged into another."""
+        with self._lock:
+            used = set(self.speakers) | set(self._merged)
+            used |= {x["speaker"] for x in self.lines.values() if x.get("speaker") is not None}
+            return max(used, default=0) + 1
 
     def rename_speaker(self, sid, name):
         """Name speaker `sid` on every line of the meeting (speakers.json at once, .md/.srt on finish())."""
