@@ -76,6 +76,62 @@ LATIN_LANGUAGES = {
 }
 
 # --------------------------------------------------------------- capture
+class Resampler:
+    """Streaming anti-aliased resampler to SR (numpy only): a Kaiser-windowed sinc low-pass applied as a
+    polyphase filter for the ratio rate_in -> SR (48000 -> 16000 is 1:3, 44100 -> 16000 is 160:441).
+    Speech above ~7 kHz would otherwise fold back into the band Whisper hears. The last input samples are
+    kept between calls, so feeding 100 ms chunks gives the same samples as one call on the whole audio."""
+
+    HALF = 32          # filter taps on each side, in output-rate samples
+    BETA = 8.0         # Kaiser window: about 80 dB stop-band
+
+    def __init__(self, rate_in: int, rate_out: int = SR):
+        g = np.gcd(int(rate_in), int(rate_out))
+        self.up, self.down = int(rate_out) // g, int(rate_in) // g
+        self.rate_in = int(rate_in)
+        if self.up == self.down:
+            return
+        # the half-width counts samples of the slower side, so it scales with the stronger decimation
+        half = int(np.ceil(self.HALF * max(1.0, self.down / self.up)))
+        L, c = self.up, half * self.up
+        t = np.arange(-c, c + 1) / L                                 # time in input samples
+        cutoff = 0.45 * min(1.0, self.up / self.down)                 # cycles per input sample (0.5 = Nyquist)
+        h = 2 * cutoff * np.sinc(2 * cutoff * t) * np.kaiser(2 * c + 1, self.BETA)
+        h *= L / h.sum()
+        # taps[phase, j]: weight of input sample k0 + j - half for an output at upsampled time k0 * L + phase
+        j = np.arange(-half, half + 1)
+        idx = c + np.arange(L)[:, None] - j[None, :] * L
+        self.taps = np.where((idx >= 0) & (idx <= 2 * c), h[np.clip(idx, 0, 2 * c)], 0.0).astype(np.float32)
+        self.half = half
+        self.buf = np.zeros(half, np.float32)    # history; buf[0] is input sample number self.offset
+        self.offset = -half
+        self.n = 0                               # next output sample number
+
+    def __call__(self, audio) -> np.ndarray:
+        a = np.asarray(audio, np.float32).reshape(-1)
+        if self.up == self.down:
+            return a
+        self.buf = np.concatenate([self.buf, a])
+        have = self.offset + len(self.buf)          # input samples 0 .. have-1 are known
+        # output n needs input up to (n * down) // up + half
+        last = ((have - self.half) * self.up - 1) // self.down
+        if last < self.n:
+            return np.zeros(0, np.float32)
+        n = np.arange(self.n, last + 1)
+        q = n * self.down
+        k0, phase = q // self.up, q % self.up
+        cols = k0[:, None] - self.half + np.arange(2 * self.half + 1)[None, :] - self.offset
+        out = np.einsum("ij,ij->i", self.buf[cols], self.taps[phase]).astype(np.float32)
+        self.n = last + 1
+        keep = (self.n * self.down) // self.up - self.half     # first input sample the next output needs
+        drop = max(0, keep - self.offset)
+        self.buf, self.offset = self.buf[drop:], self.offset + drop
+        return out
+
+def resample(audio, rate: int) -> np.ndarray:
+    """One-shot anti-aliased resampling of `audio` at `rate` Hz to SR (see Resampler)."""
+    return Resampler(rate)(audio)
+
 # Capture is platform code; re-exported here so callers keep using live_subs.loopback_stream etc.
 from dolmi_platform import output_devices, input_devices, loopback_stream, mic_stream  # noqa: E402,F401
 

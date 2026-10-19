@@ -92,11 +92,11 @@ def _sd_capture(device, out_q, stop, feed):
 def mic_stream(out_q: queue.Queue, stop: threading.Event, device=None, on_level=None):
     """Capture a microphone (people in the room); the Mac's default input if device is None."""
     import numpy as np
-    from live_subs import SR
+    from live_subs import Resampler
+    resamplers = {}
 
     def feed(a, rate):
-        idx = np.linspace(0, len(a) - 1, int(len(a) * SR / rate)).astype(np.int64)
-        out_q.put(a[idx])
+        out_q.put(resamplers.setdefault(rate, Resampler(rate))(a))   # anti-aliased, keeps state
         if on_level:
             on_level(float(np.sqrt(np.mean(a * a))) if len(a) else 0.0)
     _sd_capture(device or None, out_q, stop, feed)
@@ -105,12 +105,11 @@ def loopback_stream(out_q: queue.Queue, stop: threading.Event, device=None, on_l
     """Capture everything the Mac plays (device None) or one input device by name.
     on_level(rms) is called about 10x a second so the UI can show that audio is arriving."""
     import numpy as np
-    from live_subs import SR
+    from live_subs import Resampler
+    resamplers = {}
 
     def feed(a, rate):
-        # cheap resample to 16 kHz (fine for speech)
-        idx = np.linspace(0, len(a) - 1, int(len(a) * SR / rate)).astype(np.int64)
-        out_q.put(a[idx])
+        out_q.put(resamplers.setdefault(rate, Resampler(rate))(a))   # anti-aliased, keeps state
         if on_level:
             on_level(float(np.sqrt(np.mean(a * a))) if len(a) else 0.0)
 

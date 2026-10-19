@@ -71,15 +71,15 @@ def _capture(pa, dev, out_q, stop, on_level):
     """Stream one PyAudio input device as 16 kHz mono into out_q until stop is set."""
     import numpy as np
     import pyaudiowpatch as pyaudio
-    from live_subs import SR
+    from live_subs import Resampler
     rate, ch = int(dev["defaultSampleRate"]), max(1, min(int(dev["maxInputChannels"]), 2))
     print(f"🎧 Capturing: {dev['name']}  ({rate} Hz, {ch} ch)")
 
+    resample = Resampler(rate)
+
     def cb(data, frames, t, status):
         a = np.frombuffer(data, dtype=np.float32).reshape(-1, ch).mean(axis=1)
-        # cheap resample to 16 kHz (fine for speech)
-        idx = np.linspace(0, len(a) - 1, int(len(a) * SR / rate)).astype(np.int64)
-        out_q.put(a[idx])
+        out_q.put(resample(a))          # anti-aliased, state kept across chunks
         if on_level:
             on_level(float(np.sqrt(np.mean(a * a))) if len(a) else 0.0)
         return (None, pyaudio.paContinue)
