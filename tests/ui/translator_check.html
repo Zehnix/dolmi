@@ -1,0 +1,35 @@
+<!-- Headless check of QA-7 on the page (tests/test_cloud_translate.py appends this to src/ui/web/index.html):
+     a final replaced in place by onLineUpdate, and the "Subtitles by" row in Settings with a stub bridge. -->
+<script>
+const TRX_STUB={translator:'gemini',status:'experimental - not benchmarked yet',timeout:1.5,stats:{sent:3,replaced:2,same:1,late:0,errors:0,skipped:0,latency_p50:0.8},
+  providers:{gemini:{label:'Gemini Flash-Lite',cost:'about 3-8 cents per meeting hour (paid tier)',privacy:'Free tier warning.',hasKey:true},
+             deepl:{label:'DeepL',cost:'about 1 euro',privacy:'DeepL Free warning.',hasKey:false}}};
+window.pywebview={api:new Proxy({
+  state:async()=>({theme:'paper',showGerman:true,language:'de',engine:'not loaded'}),
+  translator_state:async()=>TRX_STUB,
+  translator_set:async(p)=>({ok:true,...TRX_STUB,translator:p}),
+},{get:(t,k)=>k in t?t[k]:(async()=>({}))})};
+(async()=>{
+  const out={}, tick=(ms=80)=>new Promise(r=>setTimeout(r,ms));
+  try{
+    await tick(250);
+    resetFeed();
+    const t0=Date.now()/1000-60;
+    window.dolmi.onLine('10:00','Eins.','One.',{id:1,start:t0,end:t0+2,offset:0});
+    window.dolmi.onLine('10:00','Wir liefern am Freitag.','We deliver at Friday.',{id:2,start:t0+3,end:t0+5,offset:3});
+    out.wordsBefore=document.getElementById('sWords').textContent;
+    out.updated=window.dolmi.onLineUpdate(2,'We ship on Friday.',{source:'gemini'});
+    out.missing=window.dolmi.onLineUpdate(99,'Nope.',{source:'gemini'});
+    const p=document.querySelector('.pair[data-line="2"]');
+    out.en=p.querySelector('.c.en').textContent; out.ts=p.querySelector('.c.en .ts').textContent;
+    out.de=p.querySelector('.c.de').textContent; out.first=document.querySelector('.pair[data-line="1"] .c.en').textContent;
+    out.mark=p.querySelector('.c.en').classList.contains('cloudfix'); out.title=p.querySelector('.c.en').title;
+    out.wordsAfter=document.getElementById('sWords').textContent;
+    const slot=document.querySelector('[data-mount="captions.translator"]');
+    out.slotShown=!slot.hidden; out.select=document.getElementById('setTranslator').value;
+    out.options=[...document.querySelectorAll('#setTranslator option')].map(o=>o.value);
+    out.slotText=slot.textContent;
+  }catch(e){ out.error=String(e&&e.stack||e); }
+  const pre=document.createElement('pre'); pre.id='result'; pre.textContent=JSON.stringify(out).replace(/[\u007f-\uffff]/g,c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0')); document.body.append(pre);
+})();
+</script>

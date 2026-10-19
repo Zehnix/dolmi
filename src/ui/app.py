@@ -25,6 +25,7 @@ import assistant
 import inbox
 import live_subs
 import cloud_speech
+import cloud_translate
 import dolmi_platform
 
 VERSION = config.version()
@@ -167,6 +168,7 @@ class Api:
         self._ask_q = queue.Queue()
         self._ov_q = queue.Queue()
         self._vocab_lock = threading.Lock()  # a save and the watcher's look at the files never interleave
+        self._cloud_tr = None                # QA-7: CloudTranslator for the chosen provider and key (lazy)
         os.environ["DOLMI_VOCAB_PROFILE"] = self._settings.get("vocab_profile", "")   # VOC-11: read by reload_terms
         for loop in (self._pump, self._answer_loop, self._level_loop, self._overlay_loop, self._vocab_watch_loop):
             threading.Thread(target=loop, daemon=True).start()
@@ -219,6 +221,9 @@ class Api:
                         self._mark_caption()
                     self._emit("onLine", ts[:5], a, b, meta)
                     self._ov("line", a, b)
+                    self._cloud_submit(a, b, meta)
+                elif kind == "final_update":
+                    self._apply_line_update(a, b, meta)
                 elif kind == "draft":
                     meta = self._caption_meta(meta, final=False)
                     if a or b:
@@ -483,6 +488,99 @@ class Api:
             return {"ok": False, "message": str(e)}
         except Exception as e:
             return {"ok": False, "message": f"Unexpected error: {e}"}
+
+    # ------------------------------------------------------------------ cloud translator (QA-7, experimental)
+    def _translator_key(self, provider):
+        """The saved key for a cloud translator: Gemini shares the Assistant's Gemini key; DeepL has its own."""
+        if provider == "gemini":
+            return self._key_for("gemini")
+        return assistant.decrypt_key(self._settings["api_keys"].get(provider, ""))
+
+    def _translator(self):
+        """The CloudTranslator for the chosen provider and its key, or None (local only / no key)."""
+        provider = self._settings.get("translator", "local")
+        key = self._translator_key(provider) if provider in cloud_translate.PROVIDERS else ""
+        tr = self._cloud_tr
+        if not key:
+            return None
+        timeout = self._settings.get("translator_timeout", cloud_translate.TIMEOUT)
+        if tr is None or (tr.provider, tr.key, tr.timeout) != (provider, key, timeout):
+            if tr is not None:
+                tr.close()
+            tr = self._cloud_tr = cloud_translate.CloudTranslator(provider, key, terms=self._terms,
+                                                                  timeout=timeout)
+        return tr
+
+    def _terms(self):
+        """The running engine's glossary and Vocabulary rules (the same the local translator uses)."""
+        e = self._engine
+        return getattr(e, "glossary", ""), getattr(e, "vocab", None)
+
+    def _cloud_submit(self, de, en, meta):
+        """Send a final (never a draft) to the cloud translator, with the previous lines as context."""
+        if meta.get("id") is None or not de:
+            return
+        try:
+            tr = self._translator()
+            if tr is None:
+                return
+            with self._hist_lock:
+                context = [(d, e) for _, d, e, m in self._history[-1 - cloud_translate.CONTEXT_LINES:]
+                           if m.get("id") != meta["id"]][-cloud_translate.CONTEXT_LINES:]
+            tr.submit(meta["id"], de, en, meta.get("lang") or self._settings["language"],
+                      self._settings["language"], context, self._ui_q, session=id(self._session))
+        except Exception as e:
+            print(f"cloud translator: line {meta.get('id')} not sent ({e})")
+
+    def _apply_line_update(self, line_id, en, meta):
+        """('final_update', id, subtitle, meta): a better subtitle for a line already shown. Replaces it in
+        this session's history (Assistant, summary), the transcript and the page; nothing if it is gone."""
+        session = self._session
+        if not session or not en or meta.get("session", id(session)) != id(session):
+            return                                    # stopped, or an answer for an earlier meeting
+        meta = _plain({k: v for k, v in meta.items() if k != "session"})
+        with self._hist_lock:
+            for i in range(len(self._history) - 1, -1, -1):
+                ts, de, old, m = self._history[i]
+                if m.get("id") == line_id:
+                    self._history[i] = (ts, de, en, {**m, "en_source": meta.get("source"), "en_local": old})
+                    break
+            else:
+                return
+        tr = session.get("transcript")
+        if tr is not None:
+            tr.update_line(line_id, en=en, en_source=meta.get("source"))
+        self._emit("onLineUpdate", line_id, en, meta)
+
+    def translator_state(self):
+        """Settings → Captions → Subtitles by: choice, key state, cost, privacy note and this session's counts."""
+        provider = self._settings.get("translator", "local")
+        tr = self._cloud_tr
+        return {"translator": provider, "status": cloud_translate.STATUS,
+                "providers": {k: {"label": v["label"], "cost": v["cost"], "privacy": v["privacy"],
+                                  "hasKey": bool(self._translator_key(k))}
+                              for k, v in cloud_translate.PROVIDERS.items()},
+                "timeout": self._settings.get("translator_timeout", cloud_translate.TIMEOUT),
+                "stats": tr.summary() if tr is not None and tr.provider == provider else None}
+
+    def translator_set(self, provider):
+        """'local' (Opus-MT only, the default), 'gemini' or 'deepl'. Takes effect from the next line."""
+        if provider != "local" and provider not in cloud_translate.PROVIDERS:
+            return {"ok": False, "message": "Unknown translator"}
+        with self._settings_lock:
+            self._settings["translator"] = provider
+            config.save_settings(self._settings)
+        return {"ok": True, **self.translator_state()}
+
+    def translator_set_key(self, provider, key):
+        """Save a translator key, encrypted like the Assistant keys. Gemini's is the same key as the Assistant's."""
+        if provider not in cloud_translate.PROVIDERS:
+            return {"ok": False, "message": "Unknown translator"}
+        key = (key or "").strip()
+        with self._settings_lock:
+            self._settings["api_keys"][provider] = assistant.encrypt_key(key)
+            config.save_settings(self._settings)
+        return {"ok": True, **self.translator_state()}
 
     # ------------------------------------------------------------------ audio source
     def _source(self):
