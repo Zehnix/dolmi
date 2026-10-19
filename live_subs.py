@@ -53,7 +53,6 @@ HALLUCINATIONS = [
     "sous-titrage", "sous-titres",
 ]
 BROADCASTERS = ["zdf", "swr", "wdr", "ndr", "mdr", "ard", "rbb", "funk", "orf", "srf", "radio-canada"]
-GHOST_STARTS = ("untertitel", "sous-titr", "amara.org")   # a line opening with these is a credit, not speech
 SILENCE_GHOSTS = {         # kept when someone says them; dropped alone on near-silent audio
     "thank you", "thank you very much", "thanks", "vielen dank", "tschüss",
 }
@@ -259,6 +258,11 @@ _DOMAIN = re.compile(rf"(?<![{_W}.-])[{_W}-]+(?:\.[{_W}-]+)*\.(?:com|org|net|de|
 _HALLUCINATION = re.compile("|".join(
     rf"(?<![{_W}])" + r"[\s,.!?;:-]+".join(map(re.escape, h.split())) + rf"(?![{_W}])"
     for h in sorted(HALLUCINATIONS + BROADCASTERS, key=len, reverse=True)) + r"|(?<!\d)(?:19|20)\d\d(?!\d)", re.I)
+# A subtitle credit ("Untertitel von ...", "Sous-titres réalisés par ...") is a ghost at any length, but
+# people in a subtitle app also say "Untertitel bitte auf Englisch": only the credit shape counts.
+_CREDIT = re.compile(
+    r"^(?:amara\.org|(?:untertitel\w*|sous-titr\w*)[\s,]*(?::|(?:von|vom|by|par)\b|im\s+auftrag|réalis|société"
+    r"|(?:des|der|de\s+la|du)\s+(?:amara|" + "|".join(map(re.escape, BROADCASTERS)) + r")\b))", re.I)
 
 def _letters(t: str) -> int:
     return sum(c.isalnum() for c in t)
@@ -276,7 +280,7 @@ def junk_reason(t: str, energy=None, lang=None):
     domains = [m.group() for m in _DOMAIN.finditer(t) if not any(a <= m.start() < b for a, b in links)]
     if sum(_letters(t[a:b]) for a, b in links) + sum(map(_letters, domains)) >= 0.5 * letters:
         return "url"
-    if t.lstrip(" \"'([-–—.,:").lower().startswith(GHOST_STARTS):
+    if _CREDIT.match(t.lstrip(" \"'([-–—.,:")):
         return "hallucination"
     covered = sum(_letters(m.group()) for m in _HALLUCINATION.finditer(t))
     if covered >= 0.6 * letters:

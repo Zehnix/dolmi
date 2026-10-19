@@ -341,6 +341,17 @@ def test_credit_lines_and_broadcaster_ghosts_are_junk():
         assert m.junk_reason(line, lang="de") is None, line
 
 
+def test_real_sentences_about_subtitles_are_kept():
+    for line in ("Untertitel sind heute wieder sehr verzögert.", "Untertitel bitte auf Englisch.",
+                 "Untertitelung kostet extra, sagt Anna.", "Sous-titres en anglais, s'il vous plaît.",
+                 "Untertitel funktionieren jetzt.", "Untertitel sind im Meeting an, oder?",
+                 "Untertitelung bitte einschalten.", "Untertitel der Präsentation fehlen noch."):
+        assert m.junk_reason(line, energy=0.1, lang="de") is None, line
+        assert m.junk_reason(line, energy=0.001, lang="de") is None, line
+    for line in ("Untertitel der Amara.org-Community", "Untertitel: Max Muster", "Sous-titres par Jean Dupont"):
+        assert m.junk_reason(line, lang="de") == "hallucination", line
+
+
 def test_other_scripts_are_kept_when_auto_detect_hears_them():
     for line, lang in (("שלום לכולם, נתחיל את הפגישה", "he"), ("Добар дан свима", "sr"),
                        ("สวัสดีทุกคน", "th"), ("Բարեւ բոլորին", "hy")):
