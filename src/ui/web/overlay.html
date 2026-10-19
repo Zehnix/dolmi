@@ -42,11 +42,15 @@ const api=()=>window.pywebview&&window.pywebview.api;
 const esc=s=>(''+s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const body=$('#body');
 function clearIdle(){ const i=$('#idle'); if(i) i.remove(); }
+/* follow new lines only while the bar is scrolled to the bottom (scrolling up to re-read stays put) */
+let stuck=true;
+body.addEventListener('scroll',()=>{ stuck=body.scrollHeight-body.scrollTop-body.clientHeight<=48; });
+const follow=()=>{ if(stuck) body.scrollTop=body.scrollHeight; };
 window.ov={
   style:(a,fs)=>{ document.documentElement.style.setProperty('--a',Math.max(.15,Math.min(1,a))); document.documentElement.style.setProperty('--fs',fs+'px'); },
-  idle:(t)=>{ body.innerHTML='<div class="idle">'+esc(t||'Listening…')+'</div>'; },
-  line:(de,en)=>{ clearIdle(); const d=document.createElement('div'); d.innerHTML='<div class="de">'+esc(de)+'</div><div class="en">'+esc(en)+'</div>'; body.append(d); while(body.children.length>4) body.firstChild.remove(); body.scrollTop=body.scrollHeight; },
-  draft:(de,en)=>{ clearIdle(); let dr=document.getElementById('draft'); if(!de&&!en){ if(dr)dr.remove(); return; } if(!dr){ dr=document.createElement('div'); dr.id='draft'; dr.style.opacity='.65'; body.append(dr); } dr.innerHTML='<div class="de">'+esc(de)+'</div><div class="en">'+esc(en)+'</div>'; body.scrollTop=body.scrollHeight; },
+  idle:(t)=>{ body.innerHTML='<div class="idle">'+esc(t||'Listening…')+'</div>'; stuck=true; },
+  line:(de,en)=>{ clearIdle(); const d=document.createElement('div'); d.innerHTML='<div class="de">'+esc(de)+'</div><div class="en">'+esc(en)+'</div>'; body.append(d); while(body.children.length>4) body.firstChild.remove(); follow(); },
+  draft:(de,en)=>{ clearIdle(); let dr=document.getElementById('draft'); if(!de&&!en){ if(dr)dr.remove(); return; } if(!dr){ dr=document.createElement('div'); dr.id='draft'; dr.style.opacity='.65'; body.append(dr); } dr.innerHTML='<div class="de">'+esc(de)+'</div><div class="en">'+esc(en)+'</div>'; follow(); },
 };
 const ICONS={speaker:'M11 5 6 9H2v6h4l5 4V5zM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14',
   mic:'M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2M12 19v3'};

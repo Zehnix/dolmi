@@ -36,7 +36,7 @@
       <div class="sess">
         <div>Lines<b id="sLines">0</b></div>
         <div>Words<b id="sWords">0</b></div>
-        <div>Lag<b class="ac" id="sLag">0.3s</b></div>
+        <div title="Lag: from the end of speech to the line on screen (median of the last 5 lines)">Lag<b class="ac" id="sLag">–</b></div>
       </div>
     </div>
 
@@ -46,12 +46,15 @@
         <div class="h en-h"><i data-lucide="captions" style="width:15px;height:15px"></i><span id="headTo">ENGLISH</span><span class="live-dot"></span></div>
         <span class="knob"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 7l6 5-6 5"/></svg></span>
       </div>
-      <div class="brows" id="brows">
-        <div class="idle" id="idle">
-          <div class="ring"><i data-lucide="languages"></i></div>
-          <div class="big">Ready when your meeting is</div>
-          <div id="idleHint">Press start — German on the left, English on the right.</div>
+      <div class="live-feed">
+        <div class="brows" id="brows">
+          <div class="idle" id="idle">
+            <div class="ring"><i data-lucide="languages"></i></div>
+            <div class="big">Ready when your meeting is</div>
+            <div id="idleHint">Press start — German on the left, English on the right.</div>
+          </div>
         </div>
+        <button class="live-pill" id="livePill" hidden>Jump to latest ↓<span id="livePillN"></span></button>
       </div>
     </div>
 
