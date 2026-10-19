@@ -116,14 +116,40 @@
   <!-- VOCAB -->
   <section class="view" id="v-vocab"><div class="wrap">
     <div class="ph"><div><h2>Vocabulary</h2><p>Teach Dolmi your team's names and terms — applied from the next line on.</p></div><span class="ok"><i data-lucide="check" style="width:15px;height:15px"></i>Saved</span></div>
-    <div class="grid2">
-      <div class="card"><div class="cardh"><span class="ic"><i data-lucide="book-a"></i></span>Spelling hints (names &amp; terms)</div>
-        <textarea class="field" id="vocabBox" rows="9" placeholder="Loading…" disabled></textarea>
-        <div style="display:flex;align-items:center;gap:12px;margin-top:12px"><button class="btn pri" id="vocabSave">Save</button><span class="ok" id="vocabStatus" style="visibility:hidden"><i data-lucide="check" style="width:14px;height:14px"></i>Saved — used from the next line</span></div></div>
-      <div class="card"><div class="cardh"><span class="ic"><i data-lucide="sparkles"></i></span>Active fixes</div>
-        <div class="chips"><span class="chipt on">geil → awesome</span><span class="chipt on">Clara = person</span><span class="chipt on">Cloud ≠ Clara</span><span class="chipt on">Lenna → Lena</span><span class="chipt on">Tobi → Tobias</span></div>
-        <div class="pair2" style="margin-top:18px;border:0;padding-bottom:0"><div class="de"><span class="t">DE</span>Das war wirklich geil mit den Knowledge Base.</div><div class="en">That was really awesome with the Knowledge Base.</div></div>
-      </div>
+    <div class="voc-bar">
+      <div class="seg" id="vocMode" title="Edit as rows, or as the two text files"><button data-m="rows" class="a">Rows</button><button data-m="raw">Raw text</button></div>
+      <span class="voc-status" id="vocabStatus" aria-live="polite"></span>
+      <button class="btn ghost" id="vocabCheck" disabled><span class="ic"><i data-lucide="list-checks" style="width:15px;height:15px"></i></span>Check</button>
+      <button class="btn pri" id="vocabSave" disabled>Save</button>
+    </div>
+    <div class="card voc-problems" id="vocProblems" hidden></div>
+    <div class="grid2 voc-groups" id="vocRows">
+      <div class="card voc-g" data-g="gloss"><div class="cardh"><span class="ic"><i data-lucide="book-a"></i></span>Spelling hints<span class="voc-n"></span></div>
+        <p class="voc-hint">Names and terms Whisper should spell right. Keep the list short.</p>
+        <div class="voc-list"><p class="voc-empty">Loading…</p></div>
+        <button class="voc-add"><i data-lucide="plus"></i>Add term</button></div>
+      <div class="card voc-g" data-g="keep"><div class="cardh"><span class="ic"><i data-lucide="lock"></i></span>Keep as is<span class="voc-n"></span></div>
+        <p class="voc-hint">Copied into the English unchanged: names, products, places.</p>
+        <div class="voc-list"></div>
+        <button class="voc-add"><i data-lucide="plus"></i>Add term</button></div>
+      <div class="card voc-g" data-g="german"><div class="cardh"><span class="ic"><i data-lucide="languages"></i></span>German → English<span class="voc-n"></span></div>
+        <p class="voc-hint">A German term and the English it must become. <code>*</code> matches any ending.</p>
+        <div class="voc-list"></div>
+        <button class="voc-add"><i data-lucide="plus"></i>Add rule</button></div>
+      <div class="card voc-g" data-g="english"><div class="cardh"><span class="ic"><i data-lucide="spell-check"></i></span>Fix English<span class="voc-n"></span></div>
+        <p class="voc-hint">Wrong English from the translator and the correct English. Longer rules win.</p>
+        <div class="voc-list"></div>
+        <button class="voc-add"><i data-lucide="plus"></i>Add fix</button></div>
+    </div>
+    <div class="grid2 voc-groups" id="vocRaw" hidden>
+      <div class="card"><div class="cardh"><span class="ic"><i data-lucide="file-text"></i></span>vocabulary.txt</div>
+        <textarea class="field voc-raw" id="vocabRaw" rows="16" spellcheck="false" placeholder="[keep]&#10;Nordlicht GmbH&#10;&#10;[german]&#10;Kalibra = Calibra"></textarea></div>
+      <div class="card"><div class="cardh"><span class="ic"><i data-lucide="file-text"></i></span>glossary.txt</div>
+        <textarea class="field voc-raw" id="vocabBox" rows="16" spellcheck="false" placeholder="One term per line…"></textarea></div>
+    </div>
+    <div class="card voc-fixes"><div class="cardh"><span class="ic"><i data-lucide="sparkles"></i></span>Active fixes</div>
+      <div class="chips"><span class="chipt on">geil → awesome</span><span class="chipt on">Clara = person</span><span class="chipt on">Cloud ≠ Clara</span><span class="chipt on">Lenna → Lena</span><span class="chipt on">Tobi → Tobias</span></div>
+      <div class="pair2" style="margin-top:18px;border:0;padding-bottom:0"><div class="de"><span class="t">DE</span>Das war wirklich geil mit den Knowledge Base.</div><div class="en">That was really awesome with the Knowledge Base.</div></div>
     </div>
   </div></section>
 

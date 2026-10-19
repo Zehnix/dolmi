@@ -16,6 +16,7 @@ or the installed app.
 import itertools, os, queue, re, threading, time, unicodedata
 from datetime import datetime
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 
@@ -70,32 +71,108 @@ LATIN_LANGUAGES = {
 from dolmi_platform import output_devices, input_devices, loopback_stream, mic_stream  # noqa: E402,F401
 
 # ---------------------------------------------------------------- engines
+VOCAB_SECTIONS = ("keep", "german", "english")
+MIN_TERM = 3   # shorter terms ("KI") match ordinary words too, so they need a trailing "!" to be used
+
+class VocabRule(NamedTuple):
+    section: str   # keep | german | english
+    src: str       # term as written; "*" stands for any letters ("geil*" = geil, geile, geilen…)
+    dst: str       # "" for [keep] without "=" (the term stays as written)
+    line: int      # 1-based line in vocabulary.txt
+
+def strip_comment(line: str) -> str:
+    """Drop everything from the first unescaped '#'; '\\#' is a literal '#' (for terms like C#)."""
+    m = re.search(r"(?<!\\)#", line)
+    return (line[:m.start()] if m else line).replace("\\#", "#").strip()
+
+def _problem(n, raw, message):
+    return {"line": n, "text": raw.strip(), "message": message}
+
+def parse_vocabulary(text: str):
+    """vocabulary.txt -> (rules, problems). A problem ({line, text, message}) is never applied."""
+    rules, problems, section = [], [], None
+    for n, raw in enumerate(text.splitlines(), 1):
+        line = strip_comment(raw)
+        if not line:
+            continue
+        if line.startswith("["):
+            name = line[1:-1].strip().lower() if line.endswith("]") else ""
+            section = name if name in VOCAB_SECTIONS else ""
+            if not section:
+                problems.append(_problem(n, raw, f"Unknown section {line}: use [keep], [german] or [english]. "
+                                                 "Lines below it are skipped until the next section."))
+            continue
+        if section is None:
+            problems.append(_problem(n, raw, "This rule is not in a section: put [keep], [german] or [english] above it."))
+            continue
+        if not section:
+            continue   # under an unknown section (reported once, at its header)
+        src, eq, dst = (s.strip() for s in line.partition("="))
+        marked = src.endswith("!")
+        src = src.rstrip("!").rstrip()
+        message = None
+        if not re.sub(r"[\s*]", "", src):
+            message = "There is no term before '='." if eq else "A rule needs a word, not just '*'."
+        elif section == "german" and not eq:
+            message = "Write it as 'German = English'. To keep a word unchanged, put it under [keep]."
+        elif section == "english" and not eq:
+            message = "Write it as 'wrong English = correct English'."
+        elif eq and not dst:
+            message = ("Nothing after '='. Remove the '=' to keep the term as written." if section == "keep"
+                       else "Nothing after '=': write the English it must become (a rule never deletes words).")
+        elif any(w.startswith("*") for w in src.split()):
+            message = "A '*' only goes at the end of a word (toll* = great); a rule never matches inside a word."
+        elif len(re.sub(r"[\s*]", "", src)) < MIN_TERM and not marked:
+            message = (f"'{src}' is shorter than {MIN_TERM} letters and may match ordinary words. "
+                       f"Write '{src}!' to use it anyway.")
+        if message:
+            problems.append(_problem(n, raw, message))
+            continue
+        rules.append(VocabRule(section, src, dst, n))
+    return rules, problems
+
+def parse_glossary(text: str):
+    """glossary.txt -> (terms, problems): one spelling hint per line, '#' starts a comment."""
+    terms, problems = [], []
+    for n, raw in enumerate(text.splitlines(), 1):
+        line = strip_comment(raw)
+        if not line:
+            continue
+        if line.startswith("["):
+            problems.append(_problem(n, raw, "Sections belong in the translation rules, not the spelling hints."))
+        elif "=" in line:
+            problems.append(_problem(n, raw, "Spelling hints are single terms. Put 'X = Y' rules under "
+                                             "German → English or Fix English."))
+        else:
+            terms.append(line)
+    return terms, problems
+
+def term_pattern(src: str):
+    """Whole-word, case-insensitive pattern; '*' matches any letters, spaces match any whitespace."""
+    body = r"\s+".join(re.escape(w).replace(r"\*", r"\w*") for w in src.split())
+    return re.compile(rf"(?<!\w){body}(?!\w)", re.I)
+
 class Vocabulary:
     """Applies vocabulary.txt. Locked terms travel through the translator as X0X-style
-    placeholders (Opus-MT copies those unchanged), then become the wanted English."""
-    def __init__(self, path):
-        self.lock, self.fix = [], []   # (pattern, english)
-        section = None
-        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-        for line in (l.strip() for l in lines):
-            if not line or line.startswith("#"):
-                continue
-            if line.startswith("["):
-                section = line.strip("[]").lower()
-                continue
-            src, _, dst = (s.strip() for s in line.partition("="))
-            pat = re.compile(rf"(?<!\w){re.escape(src)}(?!\w)", re.I)
-            if section in ("keep", "german"):
-                self.lock.append((pat, dst or src))
-            elif section == "english":
-                self.fix.append((pat, dst))
-        self.lock.sort(key=lambda p: -len(p[0].pattern))   # "New York" before "New"
+    placeholders (Opus-MT copies those unchanged), then become the wanted English.
+    Rules apply longest first, so "New York" wins over "New"; lines with problems are skipped."""
+    def __init__(self, path=None, text=None):
+        if text is None:
+            text = path.read_text(encoding="utf-8") if path and path.exists() else ""
+        rules, self.problems = parse_vocabulary(text)
+        self.lock, self.fix = [], []   # (pattern, english); english None = keep the words as spoken
+        for r in sorted(rules, key=lambda r: -len(r.src)):
+            if r.section == "english":
+                self.fix.append((term_pattern(r.src), r.dst))
+            else:
+                self.lock.append((term_pattern(r.src), r.dst or (None if "*" in r.src else r.src)))
+        self._fix_re = re.compile("|".join(f"(?P<f{i}>{pat.pattern})" for i, (pat, _) in enumerate(self.fix)), re.I)
 
     def protect(self, de):
         slots = []
         for pat, en in self.lock:
-            def slot(_, en=en):
-                slots.append(en)
+            def slot(m, en=en):
+                slots.append(m.group(0) if en is None else en)
                 return f"X{len(slots) - 1}X"
             de = pat.sub(slot, de)
         return de, slots
@@ -103,8 +180,8 @@ class Vocabulary:
     def finish(self, en, slots=()):
         for i, term in enumerate(slots):
             en = re.sub(rf"X\s*{i}\s*X", lambda _: term, en)
-        for pat, good in self.fix:
-            en = pat.sub(lambda _: good, en)
+        if self.fix:   # one pass: at each spot the longest rule wins and its output is not matched again
+            en = self._fix_re.sub(lambda m: self.fix[int(m.lastgroup[1:])][1], en)
         return en
 
 class Engine:
@@ -125,13 +202,25 @@ class Engine:
         self.reload_terms()
 
     def reload_terms(self):
-        """Re-read glossary.txt (Whisper spelling hints) and vocabulary.txt (translation rules)."""
+        """Re-read glossary.txt (Whisper spelling hints) and vocabulary.txt (translation rules).
+
+        Safe while the ASR thread runs: everything is built first, then each attribute is swapped in one
+        assignment, so a line being translated finishes with the objects it already holds. If a file
+        can't be read (e.g. half-written by an editor), the previous rules stay."""
         cfg = Path(os.environ.get("DOLMI_CONFIG") or Path(__file__).parent)
         g = cfg / "glossary.txt"
-        lines = g.read_text(encoding="utf-8").splitlines() if g.exists() else []
-        self.glossary = ", ".join(l.strip() for l in lines if l.strip() and not l.startswith("#"))
-        self.terms = {w.lower() for w in re.findall(r"\w+", self.glossary) if len(w) > 2}
-        self.vocab = Vocabulary(cfg / "vocabulary.txt")
+        try:
+            terms, _ = parse_glossary(g.read_text(encoding="utf-8") if g.exists() else "")
+            vocab = Vocabulary(cfg / "vocabulary.txt")
+        except (OSError, UnicodeDecodeError) as e:
+            print(f"Vocabulary not reloaded from {cfg} ({e}); keeping the previous rules")
+            if hasattr(self, "vocab"):
+                return
+            terms, vocab = [], Vocabulary()
+        glossary = ", ".join(terms)
+        self.vocab = vocab
+        self.terms = {w.lower() for w in re.findall(r"\w+", glossary) if len(w) > 2}
+        self.glossary = glossary
 
     def _translator(self, key, download=False):
         """Loaded translator for a model key; never downloads mid-meeting unless asked."""
@@ -201,11 +290,12 @@ class Engine:
         if t is None:
             return f"[{lang}] {text}"   # no translator for this language installed yet
         mt, sp_src, sp_tgt = t
-        text, slots = self.vocab.protect(text)
+        vocab = self.vocab   # one set of rules per line, even if reload_terms swaps them meanwhile
+        text, slots = vocab.protect(text)
         toks = sp_src.encode(text, out_type=str)[:400] + ["</s>"]
         res = mt.translate_batch([toks], beam_size=2, max_decoding_length=256)
         out = [tok for tok in res[0].hypotheses[0] if tok not in ("</s>", "<pad>")]
-        return self.vocab.finish(sp_tgt.decode(out), slots)
+        return vocab.finish(sp_tgt.decode(out), slots)
 
 def collapse_repeats(text: str) -> str:
     """Whisper sometimes loops: 'He's a good man. He's a good man.' -> said once."""

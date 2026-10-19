@@ -80,10 +80,10 @@ function askConfirm({title,body,ok='Delete',items=[]}){
   });
 }
 
-/* load each tab's data the first time it opens */
+/* load each tab's data the first time it opens (Vocabulary also re-reads its files on every reopen) */
 $$('.nav button').forEach(btn=>btn.addEventListener('click',()=>{ const v=btn.dataset.v;
   if(v==='meetings'&&!mLoaded){ mLoaded=true; loadMeetings(); }
-  if(v==='vocab'&&!vLoaded){ vLoaded=true; loadVocab(); }
+  if(v==='vocab'){ if(!vLoaded){ vLoaded=true; loadVocab(); } else vocRefresh(); }   // reopen: pick up hand edits
   if(v==='assistant'&&!aLoaded){ aLoaded=true; loadChats(); }
   if(v==='settings') loadModels();
 }));
