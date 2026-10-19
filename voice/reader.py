@@ -56,18 +56,39 @@ class Reader:
                     return None              # timed out with nothing to say
 
     def _loop(self):
-        while True:
-            text = self.next_line()
-            if text is None:
-                return
-            try:
-                self.backend.speak(text)
-                self.spoken += 1
-            except Exception as e:
-                print(f"voice: speaking a line failed ({getattr(self.backend, 'name', '?')}): {e}")
+        try:
+            while True:
+                text = self.next_line()
+                if text is None:
+                    return
+                try:
+                    self.backend.speak(text)
+                    self.spoken += 1
+                except Exception as e:
+                    if not self._stopped:    # a line cut by stop() is not a failure
+                        print(f"voice: speaking a line failed ({getattr(self.backend, 'name', '?')}): {e}")
+        finally:
+            self._close_backend()
+
+    def _close_backend(self):
+        try:
+            close = getattr(self.backend, "close", None)
+            if close:
+                close()
+        except Exception as e:
+            print(f"voice: closing {getattr(self.backend, 'name', '?')} failed: {e}")
 
     def stop(self):
+        """Stop reading: drop waiting lines, cut the line being spoken, and close the voice."""
         with self._cv:
             self._stopped = True
             self._q.clear()
             self._cv.notify_all()
+        cancel = getattr(self.backend, "cancel", None)
+        if cancel:
+            try:
+                cancel()
+            except Exception as e:
+                print(f"voice: cutting the line failed ({getattr(self.backend, 'name', '?')}): {e}")
+        if self._thread is None:         # never started: nobody else will close it
+            self._close_backend()

@@ -75,6 +75,42 @@ def test_the_worker_speaks_and_a_failing_voice_does_not_stop_it():
     r.stop()
 
 
+class SlowTTS(FakeTTS):
+    """Speaks until cancelled, like a long line on the real voice."""
+
+    def __init__(self):
+        super().__init__()
+        self.started, self.cut, self.closed = threading.Event(), threading.Event(), 0
+
+    def speak(self, text):
+        self.started.set()
+        if self.cut.wait(5):
+            raise RuntimeError("cancelled")
+        self.said.append(text)
+
+    def cancel(self):
+        self.cut.set()
+
+    def close(self):
+        self.closed += 1
+
+
+def test_stop_cuts_the_line_being_spoken_and_closes_the_voice():
+    slow = SlowTTS()
+    r = reader.Reader(slow).start()
+    r.offer("a long line")
+    assert slow.started.wait(5)
+    r.stop()
+    r._thread.join(5)
+    assert not r._thread.is_alive() and slow.said == [] and slow.closed == 1 and r.spoken == 0
+
+
+def test_stop_before_start_still_closes_the_voice():
+    slow = SlowTTS()
+    reader.Reader(slow).stop()
+    assert slow.closed == 1
+
+
 # ------------------------------------------------------------------ backend choice
 def test_select_backend_takes_the_first_available():
     a, b = FakeTTS(ok=False), FakeTTS()

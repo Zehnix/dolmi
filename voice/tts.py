@@ -103,10 +103,17 @@ class WindowsSpeech:
         ms = int(self._ask("BENCH " + self._b64(text)).split()[1]) / 1000
         return ms, ms
 
+    def cancel(self):
+        """Cut the line being spoken now: end the voice process (the next line starts a fresh one).
+        Deliberately without the lock, which a speaking line holds until it is done."""
+        p = self._proc
+        if p is not None and p.poll() is None:
+            p.kill()
+
     def close(self):
+        self.cancel()
         with self._lock:
-            if self._proc and self._proc.poll() is None:
-                self._proc.stdin.close()
+            if self._proc is not None:
                 self._proc.wait(timeout=5)
             self._proc = None
 
@@ -116,6 +123,7 @@ class MacSay:
 
     def __init__(self, voice=None):
         self.voice_name = voice or ""
+        self._proc = None
 
     def available(self):
         return sys.platform == "darwin" and shutil.which("say") is not None
@@ -124,7 +132,13 @@ class MacSay:
         return ["say", *(["-v", self.voice_name] if self.voice_name else []), *extra]
 
     def speak(self, text):
-        subprocess.run(self._cmd(text), check=True, timeout=60)
+        self._proc = subprocess.Popen(self._cmd(text))
+        try:
+            code = self._proc.wait(timeout=60)
+        finally:
+            self._proc = None
+        if code > 0:                     # a negative code means cancel() ended it on purpose
+            raise RuntimeError(f"say failed ({code})")
 
     def first_audio(self, text):
         """'say' gives no first-audio event: time a render to a file (an upper bound for first audio)."""
@@ -135,8 +149,13 @@ class MacSay:
             total = time.perf_counter() - t
         return total, total
 
+    def cancel(self):
+        p = self._proc
+        if p is not None and p.poll() is None:
+            p.terminate()
+
     def close(self):
-        pass
+        self.cancel()
 
 
 def os_backends():
