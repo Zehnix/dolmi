@@ -1,9 +1,12 @@
 """APP-3: the 'nothing heard' warning while live.
 
 The watcher is driven tick by tick with a fake clock (api._clock), so no test waits 20 real seconds.
-Captions arrive through api._last_caption (set by the caption pump on every non-empty final/draft).
+Most tests set api._last_caption directly; the pump tests at the end check that the real caption
+pump (_ui_q -> _pump) sets it on every non-empty final/draft and that the watcher sees it.
 """
+import itertools
 import threading
+import time
 
 import pytest
 
@@ -171,3 +174,60 @@ def test_both_platforms_have_a_mic_privacy_page_and_words():
     assert mac.mic_privacy_url.startswith("x-apple.systempreferences:")
     for words in (windows.WORDS, mac.WORDS):
         assert words["mic_privacy"]
+
+
+_marks = itertools.count()
+
+
+def _through_pump(api, *items):
+    """Put items on the real caption queue and wait until the pump has handled all of them
+    (a summary marker is queued last; the pump handles items in order)."""
+    for it in items:
+        api._ui_q.put(it)
+    marker = f"mark-{next(_marks)}"
+    api._ui_q.put(("sum_done", marker, None))
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if any(isinstance(js, str) and marker in js for js in list(api._window.calls)):
+            return
+        time.sleep(0.01)
+    raise AssertionError("caption pump did not handle the items")
+
+
+def test_pump_sets_last_caption_on_non_empty_final_and_draft(live):
+    api, clock, _ = live
+    clock.t = 2000.0
+    _through_pump(api, ("final", "Hallo", "Hello"))
+    assert api._last_caption == 2000.0
+    clock.t = 2005.0
+    _through_pump(api, ("draft", "", "Hel"))
+    assert api._last_caption == 2005.0
+    clock.t = 2010.0
+    _through_pump(api, ("draft", "", ""), ("final", "", ""))
+    assert api._last_caption == 2005.0          # empty results are not captions
+
+
+def test_real_pump_captions_prevent_no_captions(live):
+    api, clock, tick = live
+    for second in range(40):
+        if second % 3 == 0:
+            _through_pump(api, ("final", "Hallo", "Hello"))
+        tick(1, level=LOUD)
+    assert warnings(api) == []
+    assert api._heard_state is None
+    tick(int(app_mod.HEARD_AFTER_S) + 1, level=LOUD)   # captions stop, sound goes on
+    assert api._heard_state == "no_captions"
+    _through_pump(api, ("final", "Hallo", "Hello"))
+    assert tick(1, level=LOUD) is None          # Python's state follows the caption too
+
+
+def test_mac_open_path_reports_a_failure(monkeypatch):
+    """macOS 'open' exits non-zero when it cannot open the page; that must reach open_mic_privacy."""
+    import subprocess
+    from dolmi_platform import mac
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a, 1, "", "no application"))
+    with pytest.raises(OSError):
+        mac.open_path(mac.mic_privacy_url)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, "", ""))
+    mac.open_path(mac.mic_privacy_url)

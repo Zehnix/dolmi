@@ -58,6 +58,7 @@ class Api:
     _clock = staticmethod(time.monotonic)
     _sleep = staticmethod(time.sleep)
     _level_peak = 0.0                    # loudest input level since the watcher's last tick
+    _last_caption = 0.0                  # _clock() time of the last non-empty final/draft
     _heard_state = None                  # None | "silent" | "no_captions": what the page shows
     _heard_key = None                    # (session token, source label) the counts belong to
     _heard_start = 0.0
@@ -135,11 +136,15 @@ class Api:
                 if kind == "error":
                     self._emit("onError", a)
                 elif kind == "final":
+                    if a or b:
+                        self._last_caption = self._clock()
                     with self._hist_lock:
                         self._history.append((datetime.now().strftime("%H:%M:%S"), a, b))
                     self._emit("onLine", datetime.now().strftime("%H:%M"), a, b)
                     self._ov("line", a, b)
                 elif kind == "draft":
+                    if a or b:
+                        self._last_caption = self._clock()
                     self._emit("onDraft", a, b)
                     self._ov("draft", a, b)
                 elif kind == "ask_start":
@@ -548,7 +553,7 @@ class Api:
             self._set_heard(None)
         if peak >= HEARD_SILENCE_RMS:
             self._last_sound = now
-        since_caption = now - max(self._heard_start, getattr(self, "_last_caption", 0) or 0)
+        since_caption = now - max(self._heard_start, self._last_caption)
         quiet_for = now - max(self._heard_start, self._last_sound)
         if since_caption < HEARD_AFTER_S:
             state = None                            # never while captions arrive
