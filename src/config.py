@@ -43,6 +43,7 @@ DEFAULTS = {
     # New keys: each domain adds its own on ONE commented line (ticket id first), and adds the same keys
     # to SETTABLE in src/ui/app.py if the page may change them, e.g.
     #   "my_key": 1,                              # APP-99: what it does
+    "bar_time": False,                            # LIVE-5: speech-start time on subtitle bar lines
     "warn_silence": True,                         # APP-3: 'Dolmi hears nothing' warning while live
     "vocab_profile": "",                          # VOC-11: spelling-hint profile for meetings ('' = every term)
     "translator": "local", "translator_timeout": 1.5,   # QA-7: cloud subtitles for finals (local|gemini|deepl), s to wait

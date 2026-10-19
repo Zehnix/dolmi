@@ -201,6 +201,13 @@ if($('#swBarLock')) $('#swBarLock').addEventListener('click',async()=>{ const b=
 async function barLockBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state(); setSw('#swBarLock',!!s.barLocked); }catch(e){ console.error('bar lock boot',e); } }
 document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) barLockBoot(); else window.addEventListener('pywebviewready',barLockBoot); });
 
+/* ---- LIVE-5: speech-start time on the subtitle bar's lines (off by default) ---- */
+{ const m=settingsMount('bar.time');
+  if(m) m.innerHTML=`<div class="set" data-kw="time times clock timestamp start bar overlay lines"><div><div class="lab">Show times</div><div class="ps">Each line on the bar starts with the time it was spoken</div></div><button class="sw" data-sw id="swBarTime"></button></div>`; wireNewSwitches(m); }
+wireSwitch('#swBarTime','bar_time');
+async function barTimeBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state(); setSw('#swBarTime',!!s.barTime); }catch(e){ console.error('bar time boot',e); } }
+document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) barTimeBoot(); else window.addEventListener('pywebviewready',barTimeBoot); });
+
 /* ---- APP-7 global shortcuts: work while Teams or Zoom has the focus. Click a key button, then press the new
    keys (Esc cancels, Backspace puts the default back). ---- */
 const SHORTCUTS=[['toggle_live','Start / stop captions'],['toggle_bar','Show / hide the subtitle bar'],['toggle_source','Switch speaker / microphone'],['toggle_lock','Lock / unlock the subtitle bar']];

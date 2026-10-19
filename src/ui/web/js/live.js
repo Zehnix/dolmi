@@ -59,6 +59,11 @@ function addFinal(ts,de,en,meta){ if(draftEl){draftEl.remove();draftEl=null;} ap
   if(!stuck){ unseen++; setPill(); }
   if(meta&&meta.lag_policy!=null&&meta.lag_compute!=null) lagSplit=[meta.lag_policy,meta.lag_compute];
   if(meta&&meta.lag_median!=null){ lagLine=meta.lag_median; showLag(); } }
+/* LIVE-4: a draft that ended as nothing usable stays as a dim 'not understood' row (the reason in its tooltip)
+   instead of vanishing; it is not a line and is not counted. resetFeed clears it with the rest of the feed. */
+function markDropped(el,reason){ el.className='pair dropped'; el.style.opacity='.4'; el.title='Not understood: '+reason;
+  el.querySelectorAll('.caret').forEach(c=>c.remove());
+  const en=el.querySelector('.c.en'); if(en) en.insertAdjacentHTML('beforeend',' <i class="nu">(not understood)</i>'); }
 /* STR-2: a draft is committed words (solid, never rewritten) + a tentative tail (dim, italic). Older
    producers send no split: then the whole draft is the tail. Only changed parts are rewritten, so the
    committed words never jump. */
@@ -69,7 +74,7 @@ function draftParts(text,committed,tentative){
 function setPart(el,c,t){ if(el._c!==c){ el.querySelector('.cm').textContent=c+(c&&t?' ':''); el._c=c; }
   if(el._t!==t){ el.querySelector('.tent').textContent=t; el._t=t; } }
 function showDraft(de,en,meta){ const m=meta||{}; if(m.lag!=null){ lagDraft=m.lag; showLag(); }
-  if(!de&&!en){ if(draftEl){draftEl.remove();draftEl=null;} return; } unstickIfScrolled(); clearIdle();
+  if(!de&&!en){ if(draftEl){ if(m.dropped) markDropped(draftEl,m.dropped); else draftEl.remove(); draftEl=null; } return; } unstickIfScrolled(); clearIdle();
   if(!draftEl){ draftEl=document.createElement('div'); draftEl.className='pair cur draft';
     draftEl.innerHTML='<div class="c de"><span class="ts"></span><span class="cm"></span><span class="tent"></span></div><div class="c en"><span class="ts"></span><span class="cm"></span><span class="tent"></span><span class="caret"></span></div>';
     brows.append(draftEl); }

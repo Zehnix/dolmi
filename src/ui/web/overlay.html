@@ -28,6 +28,7 @@ html,body{height:100%;background:transparent;overflow:hidden;font-family:var(--u
 .de{font-family:var(--mono);font-size:13px;color:#aba28c;line-height:1.4}
 .en{font-family:var(--display);font-weight:500;font-size:var(--fs);line-height:1.3;color:#F6F1E7}
 .idle{color:#776f59;font-size:14px}
+.tm{font-size:11px;color:#776f59;margin-right:8px}
 /* APP-8 locked: the window ignores the mouse (clicks go to the meeting below), so its controls are hidden */
 .lockm{display:none;align-items:center;gap:4px;font-size:11px;font-family:var(--mono);color:#776f59}
 .lockm svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
@@ -62,7 +63,8 @@ window.ov={
   style:(a,fs)=>{ document.documentElement.style.setProperty('--a',Math.max(.15,Math.min(1,a))); document.documentElement.style.setProperty('--fs',fs+'px'); },
   idle:(t)=>{ body.innerHTML='<div class="idle">'+esc(t||'Listening…')+'</div>'; stuck=true; autoTop=0; },
   /* 4 lines while live; while the reader is scrolled up, up to 40 so the line being re-read stays put */
-  line:(de,en)=>{ check(); clearIdle(); const d=document.createElement('div'); d.innerHTML='<div class="de">'+esc(de)+'</div><div class="en">'+esc(en)+'</div>';
+  /* LIVE-5: t is the speech-start time ('' unless Settings > Subtitle bar > Show times is on) */
+  line:(de,en,t)=>{ check(); clearIdle(); const d=document.createElement('div'); d.innerHTML='<div class="de">'+(t?'<span class="tm">'+esc(t)+'</span>':'')+esc(de)+'</div><div class="en">'+esc(en)+'</div>';
     const dr=document.getElementById('draft'); if(dr) body.insertBefore(d,dr); else body.append(d);
     while(body.children.length>(stuck?4:40)) body.firstChild.remove(); follow(); },
   /* STR-2: committed words solid, tentative tail dim and italic (no split sent: all of it is the tail) */
