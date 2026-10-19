@@ -144,6 +144,11 @@ class Api:
             if ov and self._overlay_visible:
                 ov.emit(fn, *args)
 
+    def _mark_caption(self):
+        """Note when a caption last arrived; the 'nothing heard' watcher (APP-3) reads _last_caption.
+        Uses the watcher's monotonic clock (self._clock, which tests can fake) when it exists."""
+        self._last_caption = getattr(self, "_clock", time.monotonic)()
+
     def _pump(self):
         """Drain ui_q (fed by the worker and answer threads) and push to the page.
         Items are (kind, a, b) or (kind, a, b, meta); captions get their timing meta completed here."""
@@ -160,10 +165,14 @@ class Api:
                     ts = _clock(meta["start"])
                     with self._hist_lock:
                         self._history.append((ts, a, b, meta))
+                    if a or b:
+                        self._mark_caption()
                     self._emit("onLine", ts[:5], a, b, meta)
                     self._ov("line", a, b)
                 elif kind == "draft":
                     meta = self._caption_meta(meta, final=False)
+                    if a or b:
+                        self._mark_caption()
                     self._emit("onDraft", a, b, meta)
                     self._ov("draft", a, b)
                 elif kind == "ask_start":

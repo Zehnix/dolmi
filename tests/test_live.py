@@ -51,6 +51,31 @@ def test_pump_accepts_old_three_tuples(api):
     assert ts == datetime.fromtimestamp(meta["start"]).strftime("%H:%M:%S")
 
 
+def test_pump_marks_last_caption_on_the_watcher_clock(api):
+    """APP-3's 'nothing heard' watcher compares _last_caption with self._clock(), so the pump must set it
+    on that clock for every non-empty final and draft, and leave it alone for empty ones."""
+    _session(api)
+    ticks = iter([100.0, 105.0])
+    api._clock = lambda: next(ticks)
+    api._last_caption = 0.0
+    api._ui_q.put(("draft", "", ""))
+    api._ui_q.put(("final", "", ""))
+    api._ui_q.put(("draft", "Wir", "We"))
+    _calls(api, "onDraft", 2)
+    assert api._last_caption == 100.0
+    api._ui_q.put(("final", "Wir liefern.", "We ship."))
+    _calls(api, "onLine", 2)
+    assert api._last_caption == 105.0
+
+
+def test_pump_last_caption_defaults_to_monotonic(api):
+    _session(api)
+    before = time.monotonic()
+    api._ui_q.put(("final", "Hallo.", "Hello."))
+    _calls(api, "onLine", 1)
+    assert before <= api._last_caption <= time.monotonic()
+
+
 def test_pump_uses_speech_times_and_measures_lag(api, tmp_path):
     tr = live_subs.Transcript(tmp_path, save=False)
     tr.t0 -= 10                                                     # the meeting began 10 s ago
