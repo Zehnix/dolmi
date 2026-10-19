@@ -39,7 +39,7 @@ let curLang='de';
 function applyLang(l){ curLang=LANG[l]?l:'de'; const f=LANG[curLang], t=LANG[f.to];
   $('#chipFrom').textContent=f.self; $('#chipTo').textContent=t.self;
   $('#headFrom').textContent=f.self.toUpperCase(); $('#headTo').textContent=t.self.toUpperCase();
-  $('#idleHint').textContent=`Press start — ${f.name} on the left, ${t.name} on the right.`;
+  const hint=$('#idleHint'); if(hint) hint.textContent=`Press start — ${f.name} on the left, ${t.name} on the right.`;   /* gone while captions show */
   if($('#srcLab')) $('#srcLab').textContent=curLang==='auto'?'Show original speech':`Show ${f.name} source`;
   if($('#setLang')) $('#setLang').value=curLang;
   $$('#onbBody [data-lang]').forEach(x=>x.classList.toggle('on',x.dataset.lang===curLang)); }
@@ -139,6 +139,8 @@ function openSettings(section,rowId){
 }
 /* an empty, hidden slot another domain fills (e.g. settingsMount('bar.time')); shown once used */
 function settingsMount(name){ const m=$(`[data-mount="${name}"]`); if(m) m.hidden=false; return m; }
+/* switches added after core.js wired the page's own (rows filled into a mount) */
+function wireNewSwitches(scope){ if(scope) scope.querySelectorAll('[data-sw]').forEach(s=>{ if(!s.onclick) s.onclick=()=>s.classList.toggle('on'); }); }
 $$('#setMenu [data-sec]').forEach(b=>b.addEventListener('click',()=>showSettingsSection(b.dataset.sec)));
 showSettingsSection(lastSettingsSection());
 
@@ -159,6 +161,7 @@ if($('#setSearch')){ const s=$('#setSearch');
 
 /* rows that only exist since the sections: warning switch, input level, data folder, version, vocabulary link */
 wireSwitch('#swWarnSilence','warn_silence');
+wireSwitch('#swPreload','preload_models');                                    /* APP-4 */
 if($('#setOpenVocab')) $('#setOpenVocab').onclick=()=>{ const n=$('.nav button[data-v="vocab"]'); if(n) n.click(); };
 if($('#setDataOpen')) $('#setDataOpen').onclick=()=>{ const b=bridge(); if(b) b.open_data_folder(); };
 function setLevelMeter(rms){ const e=$('#setLevel'); if(e) e.style.width=Math.min(100,Math.round(Math.sqrt(Math.max(0,rms||0))*400))+'%'; }
@@ -167,7 +170,76 @@ function setLevelMeter(rms){ const e=$('#setLevel'); if(e) e.style.width=Math.mi
   window.dolmi.onListening=(on,info)=>{ onListening(on,info); if(!on) setLevelMeter(0); }; }
 async function settingsBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state();
   setSw('#swWarnSilence',s.warnSilence!==false);
+  setSw('#swPreload',s.preloadModels!==false);
   if($('#setVersion')) $('#setVersion').textContent=s.version||'—';
   if($('#setDataDir')) $('#setDataDir').textContent=s.dataFolder||'—';
 }catch(e){ console.error('settings boot',e); } }
 document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) settingsBoot(); else window.addEventListener('pywebviewready',settingsBoot); });
+
+/* ---- APP-6 update check: About & updates. Dolmi asks GitHub for the latest release when it opens (can be
+   turned off); a newer one is offered as "Download x.y.z", which opens the release page. Nothing installs. ---- */
+{ const m=settingsMount('about.updates');
+  if(m) m.innerHTML=`<div class="set" data-kw="update updates new version release download check github"><div><div class="lab">Check for updates</div><div class="ps">When Dolmi opens, asks GitHub for the latest release. Nothing is downloaded or installed by itself</div></div><button class="sw on" data-sw id="swUpdates"></button></div>
+    <div class="set" data-kw="update new version download release check now"><div><div class="lab">Latest version</div><div class="ps" id="updStatus">Not checked yet</div></div><div style="display:flex;gap:8px"><button class="btn ghost" id="setCheckUpdate">Check now</button><button class="btn ghost on" id="setDownloadUpdate" style="display:none">Download</button></div></div>`; wireNewSwitches(m); }
+wireSwitch('#swUpdates','check_updates');
+function applyUpdate(u,asked){ const st=$('#updStatus'), dl=$('#setDownloadUpdate'); if(!st||!u) return;
+  if(u.available){ st.textContent=`Dolmi ${u.version} is out (you have ${u.current})`; dl.style.display=''; dl.textContent=`Download ${u.version}`; dl.dataset.url=u.url; }
+  else { dl.style.display='none'; st.textContent=u.version?`You have the latest version (${u.current})`:(asked?'Could not reach GitHub. Try again later':'Not checked yet'); } }
+if($('#setCheckUpdate')) $('#setCheckUpdate').onclick=async()=>{ const b=bridge(); if(!b) return; $('#updStatus').textContent='Checking…'; applyUpdate(await b.check_update(true),true); };
+if($('#setDownloadUpdate')) $('#setDownloadUpdate').onclick=()=>{ const b=bridge(); if(b) b.open_release($('#setDownloadUpdate').dataset.url||''); };
+{ const prev=window.dolmi.onUpdate; window.dolmi.onUpdate=u=>{ if(prev) prev(u); applyUpdate(u); toast(`Dolmi ${u.version} is available: Settings → About & updates`); }; }
+async function updatesBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state(); setSw('#swUpdates',s.checkUpdates!==false); if(s.update) applyUpdate(s.update); }catch(e){ console.error('updates boot',e); } }
+document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) updatesBoot(); else window.addEventListener('pywebviewready',updatesBoot); });
+
+/* ---- APP-8 subtitle bar lock: the bar ignores the mouse so it never takes a click from the meeting window.
+   It can't be clicked while locked, so it is unlocked here or with the shortcut (About & updates). ---- */
+{ const m=settingsMount('bar.clickthrough');
+  if(m) m.innerHTML=`<div class="set" data-kw="lock click through clickthrough mouse ignore pass bar overlay pin"><div><div class="lab">Lock the bar</div><div class="ps" id="barLockHint">Clicks go through it to the meeting window. Unlock here or with the shortcut</div></div><button class="sw" data-sw id="swBarLock"></button></div>`; wireNewSwitches(m); }
+if($('#swBarLock')) $('#swBarLock').addEventListener('click',async()=>{ const b=bridge(); if(!b) return; const on=$('#swBarLock').classList.contains('on');
+  const r=await b.set_bar_locked(on); setSw('#swBarLock',r.locked); toast(r.locked?'Subtitle bar locked: clicks go through it':'Subtitle bar unlocked'); });
+{ const prev=window.dolmi.onBarLock; window.dolmi.onBarLock=on=>{ if(prev) prev(on); setSw('#swBarLock',on); }; }
+async function barLockBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state(); setSw('#swBarLock',!!s.barLocked); }catch(e){ console.error('bar lock boot',e); } }
+document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) barLockBoot(); else window.addEventListener('pywebviewready',barLockBoot); });
+
+/* ---- APP-7 global shortcuts: work while Teams or Zoom has the focus. Click a key button, then press the new
+   keys (Esc cancels, Backspace puts the default back). ---- */
+const SHORTCUTS=[['toggle_live','Start / stop captions'],['toggle_bar','Show / hide the subtitle bar'],['toggle_source','Switch speaker / microphone'],['toggle_lock','Lock / unlock the subtitle bar']];
+let scMap={},scStatus={},scRec=null;
+function fmtCombo(c){ if(!c) return '—'; const parts=c.split('+'), key=parts.pop().toUpperCase();
+  if(PLATFORM.os==='mac') return parts.map(m=>({ctrl:'⌃',alt:'⌥',shift:'⇧',meta:'⌘'})[m]||m).join('')+key;
+  return [...parts.map(m=>({ctrl:'Ctrl',alt:'Alt',shift:'Shift',meta:'Win'})[m]||m),key].join('+'); }
+{ const m=settingsMount('about.shortcuts');
+  if(m){ m.innerHTML=`<div class="set" data-kw="shortcuts hotkeys keyboard global keys teams zoom"><div><div class="lab">Global shortcuts</div><div class="ps" id="scHint">Work while your meeting app has the focus</div></div><button class="sw on" data-sw id="swShortcuts"></button></div>`
+      +SHORTCUTS.map(([k,lab])=>`<div class="set" data-kw="shortcut hotkey keyboard ${esc(lab.toLowerCase())}"><div><div class="lab">${esc(lab)}</div><div class="ps" id="scs-${k}">Click, then press the keys</div></div><button class="btn ghost" id="sc-${k}" data-sc="${k}" style="font-family:var(--mono);font-size:12px;min-width:150px">—</button></div>`).join('');
+    wireNewSwitches(m); } }
+function applyShortcuts(map,status,on){ scMap=map||scMap; scStatus=status||scStatus;
+  SHORTCUTS.forEach(([k])=>{ const b=$('#sc-'+k), s=$('#scs-'+k); if(!b) return; if(scRec!==k) b.textContent=fmtCombo(scMap[k]);
+    if(s) s.textContent=on===false?'Shortcuts are off':scStatus[k]===false?'Another app uses these keys. Pick others':'Click, then press the keys'; });
+  if($('#scHint')) $('#scHint').textContent=`Work while your meeting app has the focus. ${W('hotkey')} always shows Dolmi`;
+  if($('#barLockHint')&&scMap.toggle_lock) $('#barLockHint').textContent=`Clicks go through it to the meeting window. Unlock here or with ${fmtCombo(scMap.toggle_lock)}`; }
+/* while recording, Dolmi's own shortcuts are let go, else the system takes a registered combo first */
+function pauseShortcuts(on){ const b=bridge(); return b&&b.pause_shortcuts?b.pause_shortcuts(on).catch(e=>console.error('pause shortcuts',e)):Promise.resolve(); }
+function stopRec(resume=true){ if(!scRec) return Promise.resolve(); const k=scRec; scRec=null; const b=$('#sc-'+k); if(b){ b.classList.remove('on'); b.textContent=fmtCombo(scMap[k]); } return resume?pauseShortcuts(false):Promise.resolve(); }
+$$('[data-sc]').forEach(btn=>btn.addEventListener('click',()=>{ const k=btn.dataset.sc; if(scRec===k){ stopRec(); return; }
+  if(scRec) stopRec(false); else pauseShortcuts(true);                          /* another key button: stay paused */
+  scRec=k; btn.classList.add('on'); btn.textContent='Press keys…'; }));
+window.addEventListener('blur',()=>{ stopRec(); });
+function comboFromKey(e){ const c=e.code||'', key=/^Key[A-Z]$/.test(c)?c.slice(3).toLowerCase():/^Digit\d$/.test(c)?c.slice(5):/^F\d{1,2}$/.test(c)?c.toLowerCase():null;
+  if(!key) return null; return [e.ctrlKey&&'ctrl',e.altKey&&'alt',e.shiftKey&&'shift',e.metaKey&&'meta'].filter(Boolean).concat(key).join('+'); }
+document.addEventListener('keydown',async e=>{ if(!scRec) return; e.preventDefault(); e.stopPropagation();
+  if(e.key==='Escape'){ stopRec(); return; }
+  const k=scRec, combo=(e.key==='Backspace'||e.key==='Delete')?'':comboFromKey(e);
+  if(combo===null) return;                                                     /* only a modifier so far */
+  const b=bridge(); await stopRec(); if(!b) return;
+  const r=await b.set_shortcut(k,combo);
+  if(!r.ok){ toast(r.message); return; }
+  applyShortcuts(r.shortcuts,r.status); toast(combo?`Shortcut set: ${fmtCombo(r.shortcuts[k])}`:'Shortcut back to its default'); },true);
+if($('#swShortcuts')) $('#swShortcuts').addEventListener('click',async()=>{ const b=bridge(); if(!b) return; const on=$('#swShortcuts').classList.contains('on');
+  await b.set_setting('shortcuts_on',on); const s=await b.state(); applyShortcuts(s.shortcuts,s.shortcutStatus,s.shortcutsOn); });
+/* a shortcut pressed anywhere: do what the button on screen does */
+{ const prev=window.dolmi.onShortcut; window.dolmi.onShortcut=name=>{ if(prev) prev(name);
+  if(name==='toggle_live') $('#go').click();
+  else if(name==='toggle_bar') setBar(!$('#barBtn').classList.contains('on'));
+  else if(name==='toggle_source') switchSource($('#srcChip').classList.contains('mic')?'speaker':'mic'); }; }
+async function shortcutsBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state(); setSw('#swShortcuts',s.shortcutsOn!==false); applyShortcuts(s.shortcuts||{},s.shortcutStatus||{},s.shortcutsOn); }catch(e){ console.error('shortcuts boot',e); } }
+document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) shortcutsBoot(); else window.addEventListener('pywebviewready',shortcutsBoot); });

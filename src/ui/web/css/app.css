@@ -330,3 +330,11 @@ textarea.voc-raw{font-size:12.5px;white-space:pre;overflow-wrap:normal;overflow-
 /* short windows (down to 900x600): one compact row so the captions keep their room */
 @media (max-height:700px){.heard-card{margin-top:8px;padding:8px 12px;align-items:center;gap:10px}.heard-ic{width:30px;height:30px;border-radius:10px}.heard-ic svg{width:16px;height:16px}.heard-body{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px}.heard-body b{font-size:15px}.heard-body ul,.heard-sub{display:none}}
 .heard-x{width:30px;height:30px;border-radius:10px;display:grid;place-items:center;color:var(--faint);flex:none;transition:.2s}.heard-x:hover{color:var(--ink);background:var(--panel)}.heard-x svg{width:16px;height:16px}
+
+/* Narrow windows (found by the UI tests, APP-11): the page never grows wider than the window, and under
+   1100 px the header drops the language chip and shows Subtitles/Invisible as icons (titles keep the words) */
+.app{grid-template-columns:minmax(0,1fr)}
+@media (max-width:1100px){
+  .top{gap:12px}.top .chip{display:none}
+  .top>.btn{font-size:0;gap:0;padding:9px 11px}
+}

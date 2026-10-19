@@ -41,8 +41,22 @@ def _setup_output():
     print(f"\n--- Dolmi (webview) started {datetime.now():%Y-%m-%d %H:%M:%S}")
 
 
+def _instance_name():
+    """APP-5: the installed Dolmi and a copy run from source share one instance name, so while one runs
+    the other only brings it forward. Developers set DOLMI_INSTANCE (letters, digits, - or _) to run a
+    second copy next to the installed one; both still use the same settings folder."""
+    suffix = os.environ.get("DOLMI_INSTANCE", "").strip()
+    if suffix and len(suffix) <= 32 and all(c.isascii() and (c.isalnum() or c in "-_") for c in suffix):
+        return "Dolmi-" + suffix
+    return "Dolmi"
+
+
 def main():
     _setup_output()
+    instance = dolmi_platform.single_instance(_instance_name())   # APP-5: one Dolmi at a time
+    if instance is None:
+        print("Dolmi is already running: asked it to come to the front")
+        return
     os.chdir(ROOT)                                            # core resolves relative paths from here
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
     dolmi_platform.register_app()                             # Windows: own taskbar entry + icon
@@ -69,8 +83,12 @@ def main():
             pass
         if api._settings.get("invisible"):
             api.toggle_invisible(True)
+        api._start_background()          # APP-4: load the downloaded models now, so Start is instant
+        instance.listen(api._bring_to_front)   # APP-5: a second launch brings this window forward
+        api._start_update_check()        # APP-6: is a newer release out? (setting; silent when offline)
         # a system-wide hotkey always brings Dolmi back, even hidden from the taskbar / Dock
         dolmi_platform.start_recover_hotkey(api.recover)
+        api._start_shortcuts()           # APP-7: start/stop, bar, source, lock from any app (after the recover key)
 
     icon = dolmi_platform.app_icon(ROOT)
     webview.start(on_start, gui=dolmi_platform.WEBVIEW_GUI, private_mode=False, icon=str(icon))

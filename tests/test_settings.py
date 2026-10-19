@@ -138,7 +138,8 @@ def test_every_key_the_page_saves_is_whitelisted_and_saves(api):
     sample = {"keep_days": 7, "opacity": 0.6, "font": 28, "language": "en", "speech_source": "local",
               "theme": "ink", "model": "small"}
     for k in keys:
-        v = sample.get(k, False if k in ("warn_silence", "show_german", "save_transcripts", "overlay") else "")
+        switch = k in app_mod.BOOL_SETTINGS | {"show_german", "save_transcripts", "overlay"}
+        v = sample.get(k, False if switch else "")
         assert api.set_setting(k, v) is True, k
         assert config.load_settings()[k] == v, k
 

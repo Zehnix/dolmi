@@ -8,6 +8,7 @@ All state is held in underscore attributes on purpose: pywebview exposes every *
 the js_api object to page JavaScript (recursively), which would hand the page the window object, the
 Whisper model, the settings with the encrypted keys, and the database handle.
 """
+import gc
 import itertools
 import json
 import numbers
@@ -16,6 +17,7 @@ import queue
 import re
 import threading
 import time
+import unicodedata
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +29,7 @@ import live_subs
 import cloud_speech
 import cloud_translate
 import dolmi_platform
+import updates
 
 VERSION = config.version()
 DEFAULT_SPEAKER = dolmi_platform.DEFAULT_SPEAKER   # what "Speaker" listens to when no device is picked
@@ -34,18 +37,119 @@ ICON = dolmi_platform.app_icon(config.ROOT)
 # a saved line: "**HH:MM:SS–HH:MM:SS** {en}  \n<sub>{de}</sub>" (older files: "**HH:MM:SS** ...")
 _MEETING_RE = re.compile(r"\*\*(.+?)\*\*\s+(.*?)\s*\n<sub>(.*?)</sub>", re.S)
 _STARTED_RE = re.compile(r"<!-- started (\d\d:\d\d:\d\d) -->")
+# APP-9 meeting titles and search
+TITLE_MAX = 70                    # characters of an automatic title
+TITLE_EDIT_MAX = 120              # characters of a title the user types
+SEARCH_HITS = 3                   # matching lines shown per meeting
+_DATE_RE = re.compile(r"\d{4}-\d\d-\d\d")
+_FILLER = {"ok", "okay", "yes", "no", "yeah", "thanks", "thank you", "hello", "hi", "hello everyone", "good morning",
+           "hallo", "ja", "nein", "danke", "genau", "gut", "hallo zusammen", "guten morgen", "can you hear me",
+           "können sie mich hören", "kannst du mich hören", "one moment", "einen moment"}
+_SUMMARY_HEADINGS = {"summary", "meeting summary", "meeting notes", "notes", "zusammenfassung", "decisions",
+                     "action items", "open questions", "overview", "tl;dr", "tldr"}
 LAG_WINDOW = 5                                     # the Lag figure is the median of this many finals
 # settings the page may change through set_setting (provider, keys and invisible have their own calls)
 SPEECH_SOURCES = ("local", *cloud_speech.PROVIDERS)   # Settings → Captions by
 SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_transcripts", "keep_days", "audio_device", "model",
             "overlay", "theme", "ai_length", "ai_context", "opacity", "font",
-            "warn_silence"}                                    # APP-3
-BOOL_SETTINGS = {"warn_silence"}                         # on/off switches that must be true or false
+            "warn_silence",                                    # APP-3
+            "preload_models",                                  # APP-4
+            "check_updates",                                   # APP-6
+            "shortcuts_on"}                                    # APP-7
+BOOL_SETTINGS = {"warn_silence", "preload_models", "check_updates", "shortcuts_on"}                         # on/off switches that must be true or false
 # APP-3 'nothing heard' warning: how quiet counts as silence, and how long before Dolmi says so
 HEARD_SILENCE_RMS = live_subs.SILENCE_RMS
 HEARD_AFTER_S = 20.0
 HEARD_TICK_S = 1.0
 HEARD_SOUND_NOW_S = 3.0          # sound in the last 3 s counts as "sound present" (speech has short gaps)
+# APP-4 Instant Start: settings that change which models the next Start needs
+ENGINE_SETTINGS = ("model", "language", "speech_source")
+WARM_DEBOUNCE_S = 0.5            # several setting changes in a row load the models once
+
+
+# APP-7 global shortcuts: what each does, and its default (Ctrl+Alt+Shift+D stays "show Dolmi")
+DEFAULT_SHORTCUTS = {"toggle_live": "ctrl+alt+shift+s", "toggle_bar": "ctrl+alt+shift+b",
+                     "toggle_source": "ctrl+alt+shift+m", "toggle_lock": "ctrl+alt+shift+l"}
+RESERVED_SHORTCUTS = {"ctrl+alt+shift+d": "showing Dolmi"}
+_SHORTCUT_MOD_ORDER = ("ctrl", "alt", "shift", "meta")
+_SHORTCUT_MOD_NAMES = {"ctrl": "ctrl", "control": "ctrl", "alt": "alt", "option": "alt", "opt": "alt",
+                       "shift": "shift", "meta": "meta", "cmd": "meta", "command": "meta", "win": "meta", "super": "meta"}
+
+
+def normalize_shortcut(text):
+    """'Ctrl+Shift+Alt+S' -> 'ctrl+alt+shift+s'; None unless it is an F1-F24 key with two or more modifiers
+    (not only Shift), or a letter or digit with three modifiers or Cmd/Win+Alt. A global hotkey takes the
+    key from every app: Ctrl+Alt is AltGr on German keyboards (Ctrl+Alt+Q = @, +7 = {, +E = EUR) and
+    Ctrl+Shift+S/T/N are everyday keys ('Save as', reopen tab)."""
+    if not isinstance(text, str) or len(text) > 40:
+        return None
+    parts = [x.strip().lower() for x in text.split("+")]
+    if len(parts) < 3 or not all(parts):
+        return None
+    *mods, key = parts
+    mods = {_SHORTCUT_MOD_NAMES.get(m) for m in mods}
+    if None in mods or len(mods) != len(parts) - 1 or mods == {"shift"} or len(mods) < 2:
+        return None
+    ok_key = (len(key) == 1 and key.isascii() and key.isalnum()) or (
+        key[:1] == "f" and key[1:].isdigit() and 1 <= int(key[1:]) <= 24 and key[1:2] != "0")
+    if not ok_key:
+        return None
+    if len(key) == 1 and len(mods) < 3 and mods != {"alt", "meta"}:
+        return None
+    return "+".join([m for m in _SHORTCUT_MOD_ORDER if m in mods] + [key])
+
+
+def _shortcut_parts(combo):
+    *mods, key = combo.split("+")
+    return tuple(mods), key
+
+
+BAR_SAVE_DELAY_S = 0.6           # APP-8: save the bar's place once it stops moving
+
+
+def _screen_key(s):
+    """A screen's identity for the bar position: its geometry, e.g. '0,0,1920x1080' (APP-8)."""
+    return f"{int(s.x)},{int(s.y)},{int(s.width)}x{int(s.height)}"
+
+
+def _screen_at(x, y, screens):
+    """The screen containing the point, else the nearest one, else None."""
+    best, dist = None, None
+    for s in screens or []:
+        dx = max(s.x - x, 0, x - (s.x + s.width))
+        dy = max(s.y - y, 0, y - (s.y + s.height))
+        d = dx * dx + dy * dy
+        if dist is None or d < dist:
+            best, dist = s, d
+    return best
+
+
+def _valid_place(p):
+    return (isinstance(p, dict) and all(isinstance(p.get(k), numbers.Real) and not isinstance(p.get(k), bool)
+                                        for k in ("x", "y", "w", "h")) and p["w"] > 0 and p["h"] > 0)
+
+
+def _bar_place(positions, last, screens, near=None):
+    """Where to open the subtitle bar: its saved place on the screen it was last on, else on the screen
+    `near` (the main window's centre) is on, else on any connected screen it was saved for; None = default.
+    Only screens connected now count (keys are geometries), and the place is pulled inside that screen."""
+    positions = positions if isinstance(positions, dict) else {}
+    by_key = {_screen_key(s): s for s in screens or []}
+    order = [last]
+    if near:
+        s = _screen_at(near[0], near[1], screens)
+        if s:
+            order.append(_screen_key(s))
+    order += list(positions)
+    for key in order:
+        p, s = positions.get(key), by_key.get(key)
+        if s is None or not _valid_place(p):
+            continue
+        w, h = min(int(p["w"]), s.width), min(int(p["h"]), s.height)
+        x = min(max(int(p["x"]), s.x), s.x + s.width - w)
+        y = min(max(int(p["y"]), s.y), s.y + s.height - h)
+        return {"x": x, "y": y, "w": w, "h": h, "screen": key}
+    return None
 
 
 def _js(v):
@@ -83,6 +187,45 @@ def _plain(meta):
             v = float(v)
         out[str(k)] = v
     return out
+
+
+def _fold(text):
+    """Case- and accent-insensitive form for search: 'Größe' and 'GROSSE' both -> 'grosse', 'é' -> 'e'."""
+    s = unicodedata.normalize("NFKD", str(text or ""))
+    return "".join(c for c in s if not unicodedata.combining(c)).casefold()
+
+
+def _shorten(text, limit=TITLE_MAX):
+    text = " ".join(str(text or "").split())
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0].rstrip(",.;:-–")
+    return (cut or text[:limit]) + "…"
+
+
+def _title_from_lines(texts):
+    """The first meaningful line (four words or more, not a greeting or 'okay'), shortened."""
+    first = ""
+    for text in texts:
+        text = " ".join(str(text or "").split())
+        if not text:
+            continue
+        first = first or text
+        bare = _fold(text).strip(" .!?,…")
+        if len(text.split()) >= 4 and bare not in _FILLER:
+            return _shorten(text)
+    return _shorten(first)
+
+
+def _title_from_summary(text):
+    """A summary's title: its first line that is not a generic heading, without markdown, first sentence."""
+    for line in str(text or "").splitlines():
+        s = re.sub(r"^[#>*\-\s]+|[*_`]+", "", line).strip()
+        s = re.sub(r"^(title|titel|topic|thema)\s*:\s*", "", s, flags=re.I).strip()
+        if not s or _fold(s).rstrip(":") in _SUMMARY_HEADINGS:
+            continue
+        return _shorten(re.split(r"(?<=[.!?])\s", s, 1)[0])
+    return ""
 
 
 def _spoken_language_ok(code):
@@ -129,6 +272,14 @@ class Api:
     _heard_start = 0.0
     _last_sound = 0.0
     _heard_tick_at = None                # clock time of the last tick (one tick per clock step)
+    # APP-4 Instant Start: the models are loaded in the background and kept; the page shows 'Ready' only
+    # when _engine_state is "ready" (idle | loading | ready | missing)
+    _engine_state = "idle"
+    _settings_gen = 0                    # bumped by every change to ENGINE_SETTINGS (a load in flight is stale)
+    _shortcuts = None                    # APP-7: the platform's registered shortcuts (None = not started)
+    _shortcut_status = {}                # action -> registered (False: another app has that key)
+    _shortcuts_paused = False            # APP-7: let go while the page records a new key
+    _update = None                       # APP-6: the last update check's answer (updates.check), None before
 
     def __init__(self):
         config.prepare()
@@ -149,6 +300,7 @@ class Api:
         self._overlay_visible = False
         self._engine = None
         self._engine_lock = threading.Lock() # one engine load at a time
+        self._gen_lock = threading.Lock()    # _settings_gen check + _engine store vs. _drop_engine (short)
         self._session = None                 # {"token", "stop", "transcript"} while starting/listening
         self._lock = threading.Lock()        # guards session transitions
         self._history = []                   # [(hh:mm:ss speech start, de, en, meta)] this session
@@ -170,6 +322,7 @@ class Api:
         self._vocab_lock = threading.Lock()  # a save and the watcher's look at the files never interleave
         self._cloud_tr = None                # QA-7: CloudTranslator for the chosen provider and key (lazy)
         os.environ["DOLMI_VOCAB_PROFILE"] = self._settings.get("vocab_profile", "")   # VOC-11: read by reload_terms
+        self._warm_req = threading.Event()   # set: load the next Start's models in the background (APP-4)
         for loop in (self._pump, self._answer_loop, self._level_loop, self._overlay_loop, self._vocab_watch_loop):
             threading.Thread(target=loop, daemon=True).start()
 
@@ -345,8 +498,12 @@ class Api:
             "theme": s.get("theme", "paper"), "listening": bool(self._session),
             "opacity": s.get("opacity", 0.88), "font": s.get("font", 22),
             "warnSilence": bool(s.get("warn_silence", True)),
-            "barVisible": bool(self._overlay_visible),
-            "engine": self._engine_label(), "dataFolder": str(self._data), "version": VERSION,
+            "barVisible": bool(self._overlay_visible), "barLocked": bool(s.get("bar_locked")),
+            "shortcutsOn": bool(s.get("shortcuts_on", True)), "shortcuts": self._shortcut_map(),
+            "shortcutStatus": dict(self._shortcut_status),
+            "engine": self._engine_label(), "engineState": self._engine_state,
+            "preloadModels": bool(s.get("preload_models", True)),
+            "checkUpdates": bool(s.get("check_updates", True)), "update": self._update, "dataFolder": str(self._data), "version": VERSION,
             "platform": {"os": dolmi_platform.OS, "words": dolmi_platform.WORDS},
         }
 
@@ -368,8 +525,16 @@ class Api:
             self._cap_stop.set()
         if key in ("opacity", "font"):
             self._push_overlay_style()
-        if key in ("model", "language", "speech_source") and not self._session:
-            self._engine = None              # next Start loads the newly chosen model/translator
+        if key in ENGINE_SETTINGS and not self._session:
+            self._drop_engine()              # next Start loads the newly chosen model/translator
+            self._request_warm()
+        if key == "shortcuts_on" and self._shortcuts is not None:
+            self._start_shortcuts()
+        if key == "preload_models":
+            if value:
+                self._request_warm()
+            elif not self._session:
+                self._drop_engine()          # off: give the memory back now
         return True
 
     def pc_info(self):
@@ -653,27 +818,21 @@ class Api:
             if not self._alive(token):
                 return
             if not self._engine:
-                self._emit("onEngine", "loading models…")
+                self._set_engine_state("loading", "speech and translation models")
                 watch = self._watch_downloads(self._needed_models())
-                source = self._settings.get("speech_source", "local")
                 try:
-                    if source == "local":
-                        self._engine = live_subs.Engine(self._settings["model"], self._settings["device"],
-                                                        self._settings["language"])
-                    else:
-                        # captions use the provider's fast speech model, not the Assistant's model
-                        self._engine = cloud_speech.CloudEngine(source, self._key_for(source),
-                                                                self._settings["language"])
+                    self._engine = self._new_engine()
                 except Exception as e:
                     watch.set()
                     with self._lock:
                         if self._alive(token):
                             self._session = None
+                    self._set_engine_state("idle", "models load on Start")
                     self._emit("onError", f"Could not start captions: {e}")
                     self._emit("onStopped")
                     return
                 watch.set()
-                self._emit("onEngine", self._engine_label())
+                self._set_engine_state("ready")
         with self._lock:
             if not self._alive(token):                # stopped while the models loaded
                 return
@@ -792,6 +951,121 @@ class Api:
             print(f"open microphone privacy page failed: {e}")
             return False
 
+    # ------------------------------------------------------------------ instant start (APP-4)
+    def _new_engine(self):
+        """The engine the next Start uses: Whisper + translator here, or a cloud speech provider."""
+        source = self._settings.get("speech_source", "local")
+        if source == "local":
+            return live_subs.Engine(self._settings["model"], self._settings["device"], self._settings["language"])
+        # captions use the provider's fast speech model, not the Assistant's model
+        return cloud_speech.CloudEngine(source, self._key_for(source), self._settings["language"])
+
+    def _set_engine_state(self, state, label=None):
+        """idle | loading | ready | missing; the page says 'Ready' only for "ready"."""
+        self._engine_state = state
+        self._emit("onEngine", label or self._engine_label(), state)
+
+    def _drop_engine(self):
+        """Forget the loaded models (a setting changed, or preloading was turned off) and free their memory."""
+        with self._gen_lock:
+            self._settings_gen += 1
+            dropped, self._engine = self._engine, None
+        if dropped is not None:
+            del dropped
+            gc.collect()
+        if self._engine_state != "idle":
+            self._set_engine_state("idle", "models load on Start")
+
+    def _start_background(self):
+        """Called once by main when the window is up: keep the models warm from now on."""
+        threading.Thread(target=self._warm_loop, name="dolmi-warm", daemon=True).start()
+        self._request_warm()
+
+    def _request_warm(self):
+        self._warm_req.set()
+
+    def _warm_loop(self):
+        while True:
+            self._warm_req.wait()
+            time.sleep(WARM_DEBOUNCE_S)
+            self._warm_req.clear()
+            try:
+                self._warm_once()
+            except Exception as e:           # never let a failed load stop later ones
+                print(f"Background model load failed: {e}")
+
+    def _warm_once(self):
+        """Load the models the next Start needs, in the background, and keep them: Start then only opens
+        the audio. Only models already on disk are loaded (a download is always the user's choice), and
+        nothing happens while captions run or when "Load models when Dolmi opens" is off.
+        Returns True when the models are loaded."""
+        if not self._settings.get("preload_models", True) or self._session:
+            return False
+        if self._engine:
+            if self._engine_state != "ready":
+                self._set_engine_state("ready")
+            return True
+        if self._needs_download():
+            self._set_engine_state("missing", "models download on Start")
+            return False
+        with self._engine_lock:              # a Start that comes now waits here, then reuses the engine
+            if self._engine or self._session:
+                return bool(self._engine)
+            gen = self._settings_gen
+            self._set_engine_state("loading", "speech and translation models")
+            try:
+                engine = self._new_engine()
+            except Exception as e:           # e.g. a cloud provider without a key: Start says why
+                print(f"Background model load skipped: {e}")
+                self._set_engine_state("idle", "models load on Start")
+                return False
+            if gen == self._settings_gen:    # priming takes seconds: skip it for an engine already stale
+                self._prime(engine)
+            with self._gen_lock:             # a setting may also change while priming: re-check, then store
+                fresh = gen == self._settings_gen
+                if fresh:
+                    self._engine = engine
+            if not fresh:                    # load the new choice instead
+                del engine
+                gc.collect()
+                self._request_warm()
+                return False
+        if self._engine is engine:           # not dropped again in the meantime
+            self._set_engine_state("ready")
+        return True
+
+    def _needs_download(self):
+        try:
+            return bool(self.missing_models())
+        except Exception as e:
+            print(f"Could not check the models: {e}")
+            return True
+
+    @staticmethod
+    def _prime(engine):
+        """Run each model once on a little silence, so the first real caption does not pay for the GPU
+        (CUDA) and decoder set-up. Failures only cost that first-caption speed."""
+        try:
+            import numpy as np
+            asr = getattr(engine, "asr", None)
+            if asr is not None:
+                silence = np.zeros(live_subs.SR, dtype=np.float32)
+                language = None if engine.language == "auto" else engine.language
+                list(asr.transcribe(silence, beam_size=1, vad_filter=False, condition_on_previous_text=False,
+                                    language=language)[0])
+                # the first real caption still paid ~4 s (bench, RTX 4060) for the Silero VAD (the
+                # segmenter's speech_gap and Whisper's vad_filter) and the beam-5 decoder: load them too
+                quiet = (np.random.default_rng(0).standard_normal(live_subs.SR)
+                         * live_subs.SILENCE_RMS * 4).astype(np.float32)
+                live_subs.speech_gap(quiet)
+                list(asr.transcribe(silence, beam_size=5, vad_filter=True, condition_on_previous_text=False,
+                                    language=language)[0])
+            lang = engine.language if engine.language != "auto" else "de"
+            engine.translate("Hello everyone." if lang == "en" else "Hallo zusammen.", lang)
+        except Exception as e:
+            print(f"Model warm-up run failed (first caption may be slower): {e}")
+        engine.context = ""
+
     # ------------------------------------------------------------------ models
     def _auto_speech(self):
         return dolmi_platform.auto_speech(self.pc_info()["gpu"])
@@ -838,7 +1112,7 @@ class Api:
                 if not m:
                     return
                 mb = models.downloaded_mb(m)
-                self._emit("onEngine", f"downloading {m.name} — {mb:,.0f} of {m.size_mb:,} MB (first start only)")
+                self._emit("onEngine", f"downloading {m.name} — {mb:,.0f} of {m.size_mb:,} MB (first start only)", "loading")
         threading.Thread(target=poll, daemon=True).start()
         return done
 
@@ -896,6 +1170,8 @@ class Api:
             stop.set()
             self._dl.discard(key)
             self._emit("onModelDone", key, err)
+            if not err:
+                self._request_warm()         # the next Start's models may all be here now
 
         threading.Thread(target=work, daemon=True).start()
         return True
@@ -909,7 +1185,7 @@ class Api:
         if e and (e.model_name == key or key in e.translators):
             if self._session:
                 return {"ok": False, "message": "Stop translating before removing a model in use."}
-            self._engine = None
+            self._drop_engine()
         try:
             models.uninstall(m)
         except Exception as ex:
@@ -938,22 +1214,103 @@ class Api:
             return None
         return p
 
-    def list_meetings(self, archived=False):
-        out, arch = [], self._archived()["meetings"]
+    def _meeting_files(self, archived, date_from="", date_to=""):
+        """(path, ISO date) of the saved meetings, newest first, in the archived or main list and between
+        the two dates (YYYY-MM-DD, both included; '' = no limit)."""
+        arch = self._archived()["meetings"]
+        lo = date_from if isinstance(date_from, str) and _DATE_RE.fullmatch(date_from) else ""
+        hi = date_to if isinstance(date_to, str) and _DATE_RE.fullmatch(date_to) else ""
         for p in sorted(self._data.glob("meeting_*.md"), reverse=True):
             if (p.name in arch) != bool(archived):
                 continue
-            try:
-                dt = datetime.strptime(p.stem.removeprefix("meeting_"), "%Y-%m-%d_%H-%M")
-                day, tm = f"{dt:%a %d %b %Y}", f"{dt:%H:%M}"
-            except ValueError:
-                day, tm = p.stem, ""
-            try:
-                lines = p.read_text(encoding="utf-8").count("<sub>")
-            except OSError:
-                lines = 0
-            out.append({"name": p.name, "day": day, "time": tm, "lines": lines})
+            date = p.stem.removeprefix("meeting_")[:10]
+            date = date if _DATE_RE.fullmatch(date) else ""
+            if (lo or hi) and (not date or (lo and date < lo) or (hi and date > hi)):
+                continue
+            yield p, date
+
+    def _meeting_item(self, p, date, rows=None):
+        try:
+            dt = datetime.strptime(p.stem.removeprefix("meeting_"), "%Y-%m-%d_%H-%M")
+            day, tm = f"{dt:%a %d %b %Y}", f"{dt:%H:%M}"
+        except ValueError:
+            day, tm = p.stem, ""
+        rows = self.read_meeting(p.name) if rows is None else rows
+        title, source = self._meeting_title(p, rows)
+        return {"name": p.name, "day": day, "time": tm, "date": date, "lines": len(rows),
+                "title": title, "titleSource": source}
+
+    def _meeting_meta(self, p):
+        """The meeting's sidecar (meeting_<stamp>.json next to its .md): {"title": ...}; {} when none."""
+        try:
+            meta = json.loads(p.with_suffix(".json").read_text(encoding="utf-8"))
+            return meta if isinstance(meta, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _meeting_title(self, p, rows):
+        """(title, source): the user's title ("custom"), else the summary's ("summary"), else the first
+        meaningful line ("lines"); ("", "") for an empty meeting."""
+        custom = self._meeting_meta(p).get("title")
+        if isinstance(custom, str) and custom.strip():
+            return custom.strip()[:TITLE_EDIT_MAX], "custom"
+        summary = self._data / f"summary_{p.stem.removeprefix('meeting_')}.md"
+        try:
+            title = _title_from_summary(summary.read_text(encoding="utf-8")) if summary.is_file() else ""
+        except OSError:
+            title = ""
+        if title:
+            return title, "summary"
+        title = _title_from_lines(self._english(r["de"], r["en"]) for r in rows)
+        return (title, "lines") if title else ("", "")
+
+    def list_meetings(self, archived=False, date_from="", date_to=""):
+        """The saved meetings, newest first: {name, day, time, date (YYYY-MM-DD), lines, title, titleSource}."""
+        return [self._meeting_item(p, date) for p, date in self._meeting_files(archived, date_from, date_to)]
+
+    def search_meetings(self, query="", archived=False, date_from="", date_to=""):
+        """Meetings whose lines (either language) or title contain every word of the query, ignoring case
+        and accents, each with its first matching lines ("hits") and how many lines match ("matches")."""
+        words = _fold(str(query or "")[:200]).split()
+        out = []
+        for p, date in self._meeting_files(archived, date_from, date_to):
+            rows = self.read_meeting(p.name)
+            item = self._meeting_item(p, date, rows)
+            if not words:
+                out.append(item)
+                continue
+            hits = [r for r in rows if all(w in _fold(r["de"] + " \n " + r["en"]) for w in words)]
+            if not hits and not all(w in _fold(item["title"]) for w in words):
+                continue
+            item["matches"] = len(hits)
+            item["hits"] = [{k: r.get(k, "") for k in ("ts", "offset", "de", "en")} for r in hits[:SEARCH_HITS]]
+            out.append(item)
         return out
+
+    def rename_meeting(self, name, title):
+        """Give a meeting its own title (kept in meeting_<stamp>.json next to it); '' = automatic again."""
+        p = self._meeting_path(name)
+        if not p or not p.exists() or not isinstance(title, str):
+            return {"ok": False, "message": "That meeting is not there any more."}
+        title = " ".join("".join(c for c in title if c.isprintable()).split())[:TITLE_EDIT_MAX]
+        side = p.with_suffix(".json")
+        meta = self._meeting_meta(p)
+        if title:
+            meta["title"] = title
+        else:
+            meta.pop("title", None)
+        try:
+            if meta:
+                tmp = side.with_suffix(".json.tmp")
+                tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+                os.replace(tmp, side)
+            elif side.exists():
+                side.unlink()
+        except OSError as e:
+            print(f"rename meeting {p.name} failed: {e}")
+            return {"ok": False, "message": f"Could not save the title: {e}"}
+        new, source = self._meeting_title(p, self.read_meeting(p.name))
+        return {"ok": True, "title": new, "titleSource": source}
 
     def read_meeting(self, name):
         """A saved meeting's lines: {ts (speech start), end ('' in old files), offset ('+mm:ss'), de, en}."""
@@ -1024,7 +1381,7 @@ class Api:
     def delete_meeting(self, name):
         p = self._meeting_path(name)
         if p:
-            for f in (p, p.with_suffix(".srt")):
+            for f in (p, p.with_suffix(".srt"), p.with_suffix(".json")):
                 try:
                     f.unlink()
                 except OSError:
@@ -1309,11 +1666,108 @@ class Api:
         threading.Thread(target=work, daemon=True).start()
         return {"ok": True}
 
+    # ------------------------------------------------------------------ global shortcuts (APP-7)
+    def _shortcut_map(self):
+        """{action: combo}: the saved ones that are still valid, defaults for the rest."""
+        saved = self._settings.get("shortcuts")
+        saved = saved if isinstance(saved, dict) else {}
+        out = {}
+        for name, default in DEFAULT_SHORTCUTS.items():
+            combo = normalize_shortcut(saved.get(name)) if name in saved else default
+            out[name] = combo or default
+        return out
+
+    def _start_shortcuts(self):
+        """(Re-)register the global shortcuts with the system (main, after the window is up; and after
+        every change). Off: none are registered."""
+        old, self._shortcuts = self._shortcuts, False      # False = started but none registered
+        if old:
+            try:
+                old.stop()
+            except Exception as e:
+                print(f"shortcuts stop: {e}")
+        self._shortcut_status = {}
+        if not self._settings.get("shortcuts_on", True) or self._shortcuts_paused:
+            return {}
+        bindings = {name: _shortcut_parts(combo) for name, combo in self._shortcut_map().items()}
+        try:
+            self._shortcuts = dolmi_platform.start_shortcuts(bindings, self._on_shortcut)
+            self._shortcut_status = dict(self._shortcuts.status)
+        except Exception as e:
+            print(f"Global shortcuts unavailable: {e}")
+        return dict(self._shortcut_status)
+
+    def _on_shortcut(self, name):
+        """A global shortcut was pressed (on the platform's thread). The lock is switched here; the others
+        go to the page, which presses its own button, so the screen and the missing-model prompt stay right."""
+        if name == "toggle_lock":
+            self.toggle_bar_lock()
+        elif name in DEFAULT_SHORTCUTS:
+            self._emit("onShortcut", name)
+
+    def pause_shortcuts(self, paused=True):
+        """While the page records a new key, Dolmi's own shortcuts are let go: a registered combo is taken
+        by the system before the page gets the key press, so the recorder would never see it."""
+        paused = bool(paused)
+        if paused != self._shortcuts_paused:
+            self._shortcuts_paused = paused
+            if self._shortcuts is not None:
+                self._start_shortcuts()
+        return {"ok": True, "status": dict(self._shortcut_status)}
+
+    def set_shortcut(self, name, combo):
+        """Change one shortcut ('' = back to its default). Refuses everyday keys, a key another action
+        has, and Dolmi's own show-Dolmi key."""
+        if name not in DEFAULT_SHORTCUTS:
+            return {"ok": False, "message": "Unknown shortcut."}
+        combo = DEFAULT_SHORTCUTS[name] if combo in ("", None) else normalize_shortcut(combo)
+        if not combo:
+            return {"ok": False, "message": "Use Ctrl+Alt+Shift (or Win/Cmd+Alt) with a letter or digit, or two of Ctrl, Alt, Shift, Win/Cmd with an F-key."}
+        if combo in RESERVED_SHORTCUTS:
+            return {"ok": False, "message": f"That one is for {RESERVED_SHORTCUTS[combo]}."}
+        current = self._shortcut_map()
+        clash = next((n for n, c in current.items() if c == combo and n != name), None)
+        if clash:
+            return {"ok": False, "message": "Another Dolmi shortcut uses that already.", "clash": clash}
+        current[name] = combo
+        with self._settings_lock:
+            self._settings["shortcuts"] = {n: c for n, c in current.items() if c != DEFAULT_SHORTCUTS[n]}
+            config.save_settings(self._settings)
+        if self._shortcuts is not None:
+            self._start_shortcuts()
+        return {"ok": True, "shortcuts": self._shortcut_map(), "status": dict(self._shortcut_status)}
+
+    # ------------------------------------------------------------------ update check (APP-6)
+    def _start_update_check(self):
+        """Called once by main when the window is up: ask GitHub in the background (when allowed)."""
+        if self._settings.get("check_updates", True):
+            threading.Thread(target=self.check_update, name="dolmi-update", daemon=True).start()
+
+    def check_update(self, force=False):
+        """Is a newer Dolmi out? {"available", "version", "url", "current"}. Skipped (available False,
+        "off" True) when the setting is off, unless the user pressed "Check now" (force)."""
+        if not force and not self._settings.get("check_updates", True):
+            return {"available": False, "version": "", "url": updates.RELEASES_PAGE, "current": VERSION, "off": True}
+        result = updates.check(VERSION)
+        self._update = result
+        if result["available"]:
+            self._emit("onUpdate", result)
+        return result
+
+    def open_release(self, url=None):
+        """'Download x.y.z': open the release page in the browser (only this repository's release pages)."""
+        url = url or updates.RELEASES_PAGE
+        if not updates.is_release_page(url):
+            return False
+        import webbrowser
+        return bool(webbrowser.open(url))
+
     # ------------------------------------------------------------------ overlay (lazy caption bar)
     def show_overlay(self):
         if not self._overlay:
             from ui.overlay import Overlay
-            ov = Overlay(background="#16150F", on_hide=self._on_overlay_hidden, on_toggle=self.toggle_source)
+            ov = Overlay(background="#16150F", on_hide=self._on_overlay_hidden, on_toggle=self.toggle_source,
+                         place=self._bar_start_place())
             self._overlay = ov
 
             def loaded(*_):
@@ -1322,6 +1776,7 @@ class Api:
                 self._push_overlay_style()
                 lab = self._source_label()
                 self._ov("source", lab["source"], lab["device"])
+                self._ov("locked", bool(self._settings.get("bar_locked")))
 
             def shown(*_):
                 self._stealth_overlay()
@@ -1329,12 +1784,15 @@ class Api:
             try:
                 ov.window.events.loaded += loaded
                 ov.window.events.shown += shown
+                ov.window.events.moved += lambda *a: self._bar_moved()
+                ov.window.events.resized += lambda *a: self._bar_moved()
             except Exception as e:
                 print(f"overlay events: {e}")
         else:
             self._overlay.show()
             self._stealth_overlay()
         self._overlay_visible = True
+        self._ov("locked", bool(self._settings.get("bar_locked")))   # it may have changed while hidden
         return True
 
     def hide_overlay(self):
@@ -1353,8 +1811,81 @@ class Api:
         self._emit("onBar", False)
 
     def _stealth_overlay(self):
-        """No taskbar button (Windows) / on every Space (Mac); follows invisible mode for capture."""
+        """No taskbar button (Windows) / on every Space (Mac); follows invisible mode for capture; and the
+        click-through lock (a style change can reset it, so it is applied after the others)."""
         dolmi_platform.overlay_stealth(self)
+        if self._overlay:
+            dolmi_platform.set_click_through(self._overlay.window, bool(self._settings.get("bar_locked")))
+
+    # ------------------------------------------------------------------ bar lock and place (APP-8)
+    def set_bar_locked(self, on):
+        """Lock the subtitle bar: it ignores the mouse, so clicks go to the meeting window below. Unlocked
+        from Dolmi (Settings > Subtitle bar) or the shortcut, since the bar itself can't be clicked then."""
+        on = bool(on)
+        with self._settings_lock:
+            self._settings["bar_locked"] = on
+            config.save_settings(self._settings)
+        ok = True
+        if self._overlay:
+            ok = dolmi_platform.set_click_through(self._overlay.window, on)
+        self._ov("locked", on)
+        self._emit("onBarLock", on)
+        return {"locked": on, "applied": bool(ok)}
+
+    def toggle_bar_lock(self):
+        return self.set_bar_locked(not self._settings.get("bar_locked"))
+
+    @staticmethod
+    def _screens():
+        try:
+            import webview
+            return list(webview.screens)
+        except Exception as e:
+            print(f"screens: {e}")
+            return []
+
+    def _bar_start_place(self):
+        """The bar's saved place for a connected screen (see _bar_place), or None for the default."""
+        near = None
+        try:
+            w = self._window
+            if w and w.width:
+                near = (w.x + w.width / 2, w.y + w.height / 2)
+        except Exception:
+            pass
+        s = self._settings
+        return _bar_place(s.get("bar_positions"), s.get("bar_screen"), self._screens(), near)
+
+    def _bar_moved(self):
+        """The bar moved or was resized: save its place for that screen once it stops (debounced)."""
+        old = getattr(self, "_bar_timer", None)
+        if old:
+            old.cancel()
+        self._bar_timer = threading.Timer(BAR_SAVE_DELAY_S, self._save_bar_place)
+        self._bar_timer.daemon = True
+        self._bar_timer.start()
+
+    def _save_bar_place(self):
+        """Remember where the bar is, keyed by the screen it is on. Returns that screen's key."""
+        ov = self._overlay
+        if not ov:
+            return None
+        try:
+            w = ov.window
+            p = {"x": int(w.x), "y": int(w.y), "w": int(w.width), "h": int(w.height)}
+        except Exception as e:
+            print(f"bar place: {e}")
+            return None
+        screen = _screen_at(p["x"] + p["w"] / 2, p["y"] + p["h"] / 2, self._screens())
+        if not screen or not _valid_place(p):
+            return None
+        key = _screen_key(screen)
+        with self._settings_lock:
+            positions = dict(self._settings.get("bar_positions") or {})
+            positions[key] = p
+            self._settings["bar_positions"], self._settings["bar_screen"] = positions, key
+            config.save_settings(self._settings)
+        return key
 
     # ------------------------------------------------------------------ invisible mode
     def toggle_invisible(self, on):
@@ -1364,6 +1895,18 @@ class Api:
             config.save_settings(self._settings)
         dolmi_platform.apply_invisible(self, on)
         return on
+
+    def _bring_to_front(self):
+        """A second Dolmi was launched (APP-5): show this window instead (invisible mode stays as it is)."""
+        w = self._window
+        if not w:
+            return
+        try:
+            w.show()
+            w.restore()
+        except Exception as e:
+            print(f"show window: {e}")
+        dolmi_platform.bring_to_front(w)
 
     def recover(self):
         """Global-hotkey escape hatch: invisible off, window back, page switches in sync."""

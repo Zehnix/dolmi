@@ -272,6 +272,21 @@ def _rebuild_main(api):
         print(f"window rebuild: {e}")
 
 
+# ------------------------------------------------------------------ subtitle bar click-through lock (APP-8)
+def set_click_through(win, on):
+    """Subtitle bar lock: NSWindow.ignoresMouseEvents, so clicks go to the window below (needs a manual
+    check on a Mac)."""
+    nswindow = _native(win)
+    if nswindow is None:
+        return False
+    stealth._main(nswindow.setIgnoresMouseEvents_, bool(on))
+    return True
+
+def click_through(win):
+    nswindow = _native(win)
+    return bool(nswindow is not None and nswindow.ignoresMouseEvents())
+
+
 # ------------------------------------------------------------------ API key storage (Keychain)
 # A random 32-byte secret lives in the login Keychain (service "Dolmi"). Keys are encrypted with an
 # HMAC-SHA256 keystream (CTR) and authenticated with HMAC-SHA256, all from the standard library.
@@ -334,8 +349,192 @@ def needs_log_file():
     return sys.stdout is None or sys.stderr is None or not sys.stdout.isatty()
 
 
+# ------------------------------------------------------------------ one Dolmi at a time (APP-5)
+class _Instance:
+    """Held by the running Dolmi: an flock on <config>/<name>.lock (so a second launch can tell) and a
+    Unix socket <config>/<name>.sock a second launch connects to, to ask for the window."""
+
+    def __init__(self, lock, sock_path):
+        self._lock, self._path, self._server = lock, sock_path, None
+
+    def listen(self, on_activate):
+        import socket
+        try:
+            self._path.unlink(missing_ok=True)       # a stale socket from a crashed run
+            srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            srv.bind(str(self._path))
+            srv.listen(4)
+            self._server = srv
+        except OSError as e:
+            print(f"Dolmi: cannot listen for a second launch ({e})")
+            return self
+
+        def run():
+            while True:
+                try:
+                    conn, _ = srv.accept()
+                except OSError:
+                    return                            # closed
+                with conn:
+                    try:
+                        conn.recv(16)
+                        on_activate()
+                    except Exception as e:
+                        print(f"Dolmi: could not bring the window to the front ({e})")
+        threading.Thread(target=run, name="dolmi-single-instance", daemon=True).start()
+        return self
+
+    def close(self):
+        if self._server:
+            self._server.close()
+            self._path.unlink(missing_ok=True)
+        self._lock.close()                          # releases the flock
+
+
+def single_instance(name="Dolmi"):
+    """The first Dolmi gets a guard to keep (and .listen(on_activate) on); a second launch gets None after
+    asking the first one to show its window, and should exit. (Dolmi.app is also single-instance through
+    Launch Services; this covers runs from source and a second copy of the app.)"""
+    import fcntl
+    import socket
+    d = config_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    lock = open(d / f"{name}.lock", "a+")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        lock.close()
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(2)
+                s.connect(str(d / f"{name}.sock"))
+                s.sendall(b"show")
+        except OSError as e:
+            print(f"Dolmi is already running but did not answer ({e})")
+        return None
+    return _Instance(lock, d / f"{name}.sock")
+
+
+def bring_to_front(win):
+    """Show the main window and make Dolmi the active app."""
+    nswindow = _native(win)
+    if nswindow is None:
+        return False
+
+    def run():
+        import AppKit
+        AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+        nswindow.makeKeyAndOrderFront_(None)
+    stealth._main(run)
+    return True
+
+
 # ------------------------------------------------------------------ global hotkey
 def start_recover_hotkey(on_press):
     """⌃⌥⇧D: a system-wide hotkey that always brings Dolmi back, even hidden from the Dock."""
     return stealth.GlobalHotkey(stealth.MOD_CONTROL | stealth.MOD_ALT | stealth.MOD_SHIFT, stealth.VK_D,
                                 on_press, name=f"show Dolmi ({WORDS['hotkey']})").start()
+
+
+# ------------------------------------------------------------------ global shortcuts (APP-7, needs a manual check)
+# Carbon RegisterEventHotKey like the recover hotkey, but one handler for all of Dolmi's shortcuts that
+# reads which one fired (kEventParamDirectObject / typeEventHotKeyID) and passes other hotkeys on.
+_SC_MODS = {"ctrl": stealth.MOD_CONTROL, "alt": stealth.MOD_ALT, "shift": stealth.MOD_SHIFT, "meta": stealth.MOD_CMD}
+_SC_KEYS = {  # ANSI virtual key codes (HIToolbox/Events.h)
+    "a": 0x00, "s": 0x01, "d": 0x02, "f": 0x03, "h": 0x04, "g": 0x05, "z": 0x06, "x": 0x07, "c": 0x08,
+    "v": 0x09, "b": 0x0B, "q": 0x0C, "w": 0x0D, "e": 0x0E, "r": 0x0F, "y": 0x10, "t": 0x11, "1": 0x12,
+    "2": 0x13, "3": 0x14, "4": 0x15, "6": 0x16, "5": 0x17, "9": 0x19, "7": 0x1A, "8": 0x1C, "0": 0x1D,
+    "o": 0x1F, "u": 0x20, "i": 0x22, "p": 0x23, "l": 0x25, "j": 0x26, "k": 0x28, "n": 0x2D, "m": 0x2E,
+    "f1": 0x7A, "f2": 0x78, "f3": 0x63, "f4": 0x76, "f5": 0x60, "f6": 0x61, "f7": 0x62, "f8": 0x64,
+    "f9": 0x65, "f10": 0x6D, "f11": 0x67, "f12": 0x6F,
+}
+_SC_SIGNATURE = "DLMS"
+_EVENT_NOT_HANDLED = -9874
+
+
+class Shortcuts:
+    """Same interface as windows.Shortcuts: .status {name: bool}, .stop()."""
+    _carbon = None
+    _handler = None          # one Carbon handler for the app's lifetime (ctypes callback kept alive)
+    _active = {}             # hotkey id -> (name, on_press) of the registered shortcuts
+
+    def __init__(self, bindings, on_press):
+        self.bindings, self.on_press = dict(bindings), on_press
+        self.status = {}
+        self._refs = []
+
+    @classmethod
+    def _fired(cls, _call, event, _data):
+        import ctypes
+        hk = stealth._HotKeyID()
+        st = cls._carbon.GetEventParameter(event, stealth._fourcc("----"), stealth._fourcc("hkid"), None,
+                                           ctypes.sizeof(hk), None, ctypes.byref(hk))
+        hit = cls._active.get(hk.id) if st == 0 and hk.signature == stealth._fourcc(_SC_SIGNATURE) else None
+        if not hit:
+            return _EVENT_NOT_HANDLED        # the recover hotkey (or another one) handles it
+        name, on_press = hit
+
+        def run():
+            try:
+                on_press(name)
+            except Exception as e:
+                print(f"Dolmi shortcut {name} failed: {e}")
+        threading.Thread(target=run, daemon=True).start()
+        return 0
+
+    def _register(self):
+        import ctypes
+        cls = Shortcuts
+        try:
+            if cls._handler is None:
+                cls._carbon = ctypes.CDLL("/System/Library/Frameworks/Carbon.framework/Carbon")
+                c = cls._carbon
+                c.GetApplicationEventTarget.restype = ctypes.c_void_p
+                c.InstallEventHandler.argtypes = [ctypes.c_void_p, stealth._HANDLER, ctypes.c_uint32,
+                                                  ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+                c.RegisterEventHotKey.argtypes = [ctypes.c_uint32, ctypes.c_uint32, stealth._HotKeyID,
+                                                  ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p]
+                c.UnregisterEventHotKey.argtypes = [ctypes.c_void_p]
+                c.GetEventParameter.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p,
+                                                ctypes.c_ulong, ctypes.c_void_p, ctypes.c_void_p]
+                spec = stealth._EventTypeSpec(stealth._fourcc("keyb"), 5)     # kEventHotKeyPressed
+                handler = stealth._HANDLER(cls._fired)
+                if c.InstallEventHandler(c.GetApplicationEventTarget(), handler, 1, ctypes.byref(spec), None, None):
+                    raise OSError("InstallEventHandler failed")
+                cls._handler = handler
+            c = cls._carbon
+            for i, (name, (mods, key)) in enumerate(self.bindings.items(), start=100):
+                code, bits = _SC_KEYS.get(key), 0
+                for m in mods:
+                    bits |= _SC_MODS.get(m, 0)
+                ref = ctypes.c_void_p()
+                ok = code is not None and bits and c.RegisterEventHotKey(
+                    code, bits, stealth._HotKeyID(stealth._fourcc(_SC_SIGNATURE), i),
+                    c.GetApplicationEventTarget(), 0, ctypes.byref(ref)) == 0
+                self.status[name] = bool(ok)
+                if ok:
+                    self._refs.append((i, ref))
+                    cls._active[i] = (name, self.on_press)
+        except Exception as e:
+            print(f"Dolmi: could not register the shortcuts ({e})")
+            for name in self.bindings:
+                self.status.setdefault(name, False)
+
+    def _unregister(self):
+        for i, ref in self._refs:
+            Shortcuts._active.pop(i, None)
+            try:
+                Shortcuts._carbon.UnregisterEventHotKey(ref)
+            except Exception as e:
+                print(f"shortcut unregister: {e}")
+        self._refs = []
+
+    def stop(self):
+        stealth._main(self._unregister, wait=True)
+
+
+def start_shortcuts(bindings, on_press):
+    """Register {name: (modifiers, key)} system-wide; returns the handle (.status {name: bool}, .stop())."""
+    s = Shortcuts(bindings, on_press)
+    stealth._main(s._register, wait=True)
+    return s

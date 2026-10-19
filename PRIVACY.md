@@ -27,6 +27,10 @@ When you press **Download** in *Settings → This PC & speech models* (*This Mac
 
 If you tick **GPU speech recognition** in the installer, it downloads NVIDIA's CUDA libraries from [PyPI](https://pypi.org) once, during setup.
 
+## Update check (on by default, can be turned off)
+
+The one request you don't start yourself: when Dolmi opens, it asks GitHub's public API which Dolmi release is the latest (`api.github.com/repos/Zehnix/dolmi/releases/latest`). The request carries no personal data and nothing about your meetings, only what any web request sends (your IP address) and a User-Agent naming the Dolmi version. GitHub's [privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement) applies. If a newer version exists, Dolmi offers **Download x.y.z**, which opens the release page in your browser; nothing is downloaded or installed by itself. Offline or slow (over 5 s), the check is silently skipped. **To opt out:** turn off *Settings → About & updates → Check for updates* (**Check now** still works when you press it).
+
 ## What stays on your computer
 
 | What | Windows | macOS |

@@ -66,7 +66,7 @@ function showDraft(de,en,meta){ if(meta&&meta.lag!=null){ lagDraft=meta.lag; sho
 function setLive(on,label){
   listening=on; $('#bhead').classList.toggle('on',on);
   $('#go').innerHTML=`<span class="ic"><i data-lucide="${on?'square':'play'}"></i></span>`; icons();
-  $('#status').innerHTML=(on?'Translating':'Ready')+'<b>'+esc(label||engineLabel)+'</b>';
+  $('#status').innerHTML=(on?'Translating':statusWord())+'<b>'+esc(label||engineLabel)+'</b>';
   $('#hero').innerHTML=on?`Listening in<br><em>${LANG[curLang].name}.</em>`:'A clear bridge between<br><em>two languages.</em>';
   track.classList.toggle('on',on); cancelAnimationFrame(raf); wave();
 }
