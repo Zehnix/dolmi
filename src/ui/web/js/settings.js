@@ -116,3 +116,58 @@ $('#openModels').onclick=()=>{ const b=bridge(); if(b) b.open_model_folder(); };
 function setRange(sel,v){ const e=$(sel); if(e&&v!=null){ e.value=v; const o=$(sel+'Val'); if(o) o.textContent=v+(sel==='#setOpacity'?'%':' px'); } }
 function wireRange(sel,key,conv){ const e=$(sel); if(!e) return; let tm; e.addEventListener('input',()=>{ setRange(sel,e.value); clearTimeout(tm); tm=setTimeout(()=>{ const b=bridge(); if(b) b.set_setting(key,conv(+e.value)); },150); }); }
 wireRange('#setOpacity','opacity',v=>v/100); wireRange('#setFont','font',v=>v);
+
+/* ---- sections (APP-2): left menu, one short page each, search, deep links ---- */
+const SET_SECTION_KEY='dolmi.settings.section';
+const setSections=()=>$$('#setMenu [data-sec]').map(b=>b.dataset.sec);
+function showSettingsSection(sec){ if(!setSections().includes(sec)) sec='audio';
+  $$('#setMenu [data-sec]').forEach(b=>{ const on=b.dataset.sec===sec; b.classList.toggle('a',on); b.setAttribute('aria-current',on?'page':'false');
+    const m=b.parentElement; if(on&&m.scrollWidth>m.clientWidth) m.scrollLeft=b.offsetLeft-m.offsetLeft-12; });   /* narrow window: menu is one row */
+  $$('.set-page').forEach(p=>p.classList.toggle('a',p.dataset.sec===sec));
+  try{ localStorage.setItem(SET_SECTION_KEY,sec); }catch(e){}
+  return sec; }
+function lastSettingsSection(){ try{ return localStorage.getItem(SET_SECTION_KEY)||'audio'; }catch(e){ return 'audio'; } }
+/* open Settings at a section, optionally at one row: rowId is a row's or a control's id (or the row) */
+function openSettings(section,rowId){
+  const n=$('.nav button[data-v="settings"]'); if(n&&!n.classList.contains('a')) n.click();
+  const sec=showSettingsSection(section||lastSettingsSection());
+  const t=typeof rowId==='string'?document.getElementById(rowId):rowId, row=t&&(t.closest('.set,.set-models')||t);
+  const page=$(`.set-page[data-sec="${sec}"]`);
+  if(row&&page&&page.contains(row)){ row.scrollIntoView({block:'nearest'}); row.classList.remove('set-hit'); void row.offsetWidth; row.classList.add('set-hit');
+    const f=row.matches('.set')&&row.querySelector('select,input,button'); if(f) f.focus({preventScroll:true}); }
+  else if(page) page.scrollTop=0;
+}
+/* an empty, hidden slot another domain fills (e.g. settingsMount('bar.time')); shown once used */
+function settingsMount(name){ const m=$(`[data-mount="${name}"]`); if(m) m.hidden=false; return m; }
+$$('#setMenu [data-sec]').forEach(b=>b.addEventListener('click',()=>showSettingsSection(b.dataset.sec)));
+showSettingsSection(lastSettingsSection());
+
+/* search: label + keywords of every row (mounted rows included), jumps to the section and row */
+function settingRows(){ return $$('.set-page').flatMap(p=>[...p.querySelectorAll('.set,.set-models')].filter(r=>!r.closest('[hidden]')).map(r=>{
+  const lab=r.querySelector('.lab'), name=(r.dataset.name||(lab?lab.textContent:p.querySelector('.cardh').textContent)).trim();
+  return {row:r,sec:p.dataset.sec,secName:p.querySelector('.cardh').textContent.trim(),name,hay:(name+' '+(r.dataset.kw||'')+' '+p.querySelector('.cardh').textContent).toLowerCase()}; })); }
+function searchSettings(q){ const box=$('#setResults'), words=q.toLowerCase().split(/\s+/).filter(Boolean);
+  $('#setMenu').hidden=!!words.length; box.hidden=!words.length; if(!words.length){ box.innerHTML=''; return []; }
+  const hits=settingRows().filter(x=>words.every(w=>x.hay.includes(w))).slice(0,8);
+  box.innerHTML=hits.length?hits.map((h,i)=>`<button data-i="${i}"><b>${esc(h.name)}</b><span>${esc(h.secName)}</span></button>`).join(''):'<div class="ps set-none">No setting matches</div>';
+  [...box.querySelectorAll('button')].forEach(btn=>btn.onclick=()=>pickSearchHit(hits[+btn.dataset.i]));
+  return hits; }
+function pickSearchHit(h){ if(!h) return; $('#setSearch').value=''; searchSettings(''); openSettings(h.sec,h.row); }
+if($('#setSearch')){ const s=$('#setSearch');
+  s.addEventListener('input',()=>searchSettings(s.value));
+  s.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); pickSearchHit(searchSettings(s.value)[0]); } else if(e.key==='Escape'){ s.value=''; searchSettings(''); } }); }
+
+/* rows that only exist since the sections: warning switch, input level, data folder, version, vocabulary link */
+wireSwitch('#swWarnSilence','warn_silence');
+if($('#setOpenVocab')) $('#setOpenVocab').onclick=()=>{ const n=$('.nav button[data-v="vocab"]'); if(n) n.click(); };
+if($('#setDataOpen')) $('#setDataOpen').onclick=()=>{ const b=bridge(); if(b) b.open_data_folder(); };
+function setLevelMeter(rms){ const e=$('#setLevel'); if(e) e.style.width=Math.min(100,Math.round(Math.sqrt(Math.max(0,rms||0))*400))+'%'; }
+{ const onLevel=window.dolmi.onLevel, onListening=window.dolmi.onListening;
+  window.dolmi.onLevel=rms=>{ onLevel(rms); setLevelMeter(rms); };
+  window.dolmi.onListening=(on,info)=>{ onListening(on,info); if(!on) setLevelMeter(0); }; }
+async function settingsBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state();
+  setSw('#swWarnSilence',s.warnSilence!==false);
+  if($('#setVersion')) $('#setVersion').textContent=s.version||'—';
+  if($('#setDataDir')) $('#setDataDir').textContent=s.dataFolder||'—';
+}catch(e){ console.error('settings boot',e); } }
+document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) settingsBoot(); else window.addEventListener('pywebviewready',settingsBoot); });

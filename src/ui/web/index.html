@@ -128,43 +128,87 @@
   </div></section>
 
   <!-- SETTINGS -->
-  <section class="view" id="v-settings"><div class="wrap">
+  <section class="view" id="v-settings"><div class="wrap set-wrap">
     <div class="ph"><div><h2>Settings</h2><p data-wt="Speech &amp; translation run on this {computer}. Only the Assistant chat goes to the AI.">Speech &amp; translation run on this PC. Only the Assistant chat goes to the AI.</p></div>
       <button class="btn dark" id="openOnb"><span class="ic"><i data-lucide="wand-sparkles" style="width:15px;height:15px"></i></span>Run setup</button></div>
-    <div class="grid2">
-      <div class="card"><div class="cardh"><span class="ic"><i data-lucide="languages"></i></span>Speech &amp; translation</div>
-        <div class="set"><div><div class="lab">Listen to</div><div class="ps" data-wt="{speaker_hint}">The speaker your meeting plays through</div></div><select class="field" id="setDevice"><option value="" data-wt="{speaker_default}">Default speaker</option></select></div>
-        <div class="set"><div><div class="lab">Audio source</div><div class="ps">Speaker for online meetings, Microphone for people in the room</div></div><div class="seg" id="setSrc"><button data-s="speaker" class="a">Speaker</button><button data-s="mic">Microphone</button></div></div>
-        <div class="set"><div><div class="lab">Microphone</div><div class="ps">Used when the source is Microphone</div></div><select class="field" id="setMic"><option value="">Default microphone</option></select></div>
-        <div class="set"><div><div class="lab">Captions by</div><div class="ps" id="sourceHint">Whisper on this computer — audio never leaves it</div></div><select class="field" id="setSource"><option value="local">This computer (private)</option><option value="gemini">Gemini — cloud</option><option value="openai">OpenAI — cloud</option><option value="cloudflare">Cloudflare — cloud</option></select></div>
-        <div class="set" id="modelRow"><div><div class="lab">Speech model</div><div class="ps" id="modelHint" data-wt="Auto picks the best model for this {computer}">Auto picks the best model for this PC</div></div><select class="field" id="setModel"><option value="auto" data-wt="Auto (best for this {computer})">Auto (best for this PC)</option><option value="tiny">Whisper Tiny</option><option value="base">Whisper Base</option><option value="small">Whisper Small</option><option value="medium">Whisper Medium</option><option value="large-v3-turbo">Whisper Large v3 Turbo</option><option value="large-v3">Whisper Large v3</option></select></div>
-        <div class="set"><div><div class="lab">Spoken language</div><div class="ps">27 languages get English subtitles; English gets German</div></div><select class="field" id="setLang"></select></div>
-        <div class="set"><div><div class="lab" id="srcLab">Show German source</div><div class="ps">Keep the left column</div></div><button class="sw on" data-sw id="swGerman"></button></div>
-      </div>
-      <div class="card"><div class="cardh"><span class="ic"><i data-lucide="sparkles"></i></span>Assistant</div>
-        <div class="set"><div><div class="lab">Provider</div></div><div class="seg" id="setProvider"><button data-p="claude" class="a">Claude</button><button data-p="openai">OpenAI</button><button data-p="gemini">Gemini</button><button data-p="nvidia">NVIDIA</button><button data-p="cloudflare">Cloudflare</button></div></div>
-        <div class="set" id="cfRow" hidden><div><div class="lab">Account ID</div><div class="ps">Workers AI → Use REST API → Account ID</div></div><input class="field" id="setCfAccount" placeholder="32-character account ID" spellcheck="false" style="width:270px;max-width:100%;font-family:var(--mono);font-size:12px"></div>
-        <div class="set"><div><div class="lab">API key</div><div class="ps" data-wt="{key_storage}">Encrypted with Windows DPAPI</div></div>
-          <div style="display:flex;gap:8px"><input class="field" id="setKey" type="password" placeholder="sk-…" style="width:140px;font-family:var(--mono)"><button class="btn ghost" id="setTest">Test</button></div></div>
-        <div class="set"><div><div class="lab">Model</div><div class="ps" id="aiModelHint">Every model this provider offers</div></div><div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end"><select class="field" id="setAiModel" style="width:270px;max-width:100%;font-family:var(--mono);font-size:12px"></select><input class="field" id="setAiModelOther" placeholder="model ID, then Enter" spellcheck="false" hidden style="width:270px;max-width:100%;font-family:var(--mono);font-size:12px"></div></div>
-        <div class="set"><div><div class="lab">Status</div></div><span class="ok" id="keyStatus" style="color:var(--mute)">—</span></div>
-      </div>
-      <div class="card"><div class="cardh"><span class="ic"><i data-lucide="shield-check"></i></span>Privacy &amp; stealth</div>
-        <div class="set"><div><div class="lab">Invisible mode</div><div class="ps" data-wt="Hidden from screen shares and the {taskbar}. {hotkey} to exit.">Hidden from screen shares and the taskbar. Ctrl+Alt+Shift+D to exit.</div></div><button class="sw on" data-sw id="swInv"></button></div>
-        <div class="set"><div><div class="lab">Subtitle bar</div><div class="ps">The floating caption bar only you see. Opens with Start when on; also the Subtitles button at the top.</div></div><button class="sw on" data-sw id="swBar"></button></div>
-        <div class="set"><div><div class="lab">Save transcripts</div></div><button class="sw on" data-sw id="swSave"></button></div>
-        <div class="set"><div><div class="lab">Delete after</div></div><div class="seg" id="setKeep"><button data-d="0">Never</button><button data-d="7">7d</button><button data-d="30" class="a">30d</button><button data-d="90">90d</button></div></div>
-      </div>
-      <div class="card"><div class="cardh"><span class="ic"><i data-lucide="palette"></i></span>Appearance</div>
-        <div class="set"><div><div class="lab">Theme</div><div class="ps">Paper is light, Ink is dark</div></div><div class="seg" id="theme"><button class="a" data-t="paper">Paper</button><button data-t="ink">Ink</button></div></div>
-        <div class="set"><div><div class="lab">Subtitle bar opacity</div><div class="ps">Lower lets the window behind show through</div></div><div style="display:flex;gap:10px;align-items:center"><input type="range" id="setOpacity" min="30" max="100" value="88" style="accent-color:var(--ac);width:150px"><span class="mtag" id="setOpacityVal">88%</span></div></div>
-        <div class="set"><div><div class="lab">Subtitle text size</div></div><div style="display:flex;gap:10px;align-items:center"><input type="range" id="setFont" min="14" max="40" value="22" style="accent-color:var(--ac);width:150px"><span class="mtag" id="setFontVal">22 px</span></div></div>
-      </div>
-      <div class="card" id="modelsCard" style="grid-column:1/-1"><div class="cardh"><span class="ic"><i data-lucide="cpu"></i></span><span data-wt="This {computer} &amp; speech models">This PC &amp; speech models</span></div>
-        <div class="ps" data-wt="Detected on this {computer}, never assumed. You choose which models to download; they download once per {os_user} and run locally.">Detected on this PC, never assumed. You choose which models to download; they download once per Windows user and run locally.</div>
-        <div class="chips" id="specs" style="margin-top:12px"><span class="chipt" data-wt="Checking this {computer}…">Checking this PC…</span></div>
-        <div id="modelList" class="mlist"><div class="ps">Loading models…</div></div>
-        <div class="mfoot"><span class="ic"><i data-lucide="folder"></i></span><span id="modelDir">—</span><button class="btn ghost" id="openModels" style="margin-left:auto">Open folder</button></div>
+    <div class="set-layout">
+      <nav class="set-nav" aria-label="Settings sections">
+        <label class="search set-search"><i data-lucide="search" style="width:15px;height:15px"></i><input id="setSearch" type="search" placeholder="Search settings" autocomplete="off" spellcheck="false" aria-label="Search settings"></label>
+        <div class="set-results" id="setResults" hidden></div>
+        <div class="set-menu" id="setMenu">
+          <button data-sec="audio" class="a"><i data-lucide="volume-2"></i>Audio</button>
+          <button data-sec="captions"><i data-lucide="languages"></i>Captions &amp; languages</button>
+          <button data-sec="speech"><i data-lucide="cpu"></i>Speech models</button>
+          <button data-sec="vocab"><i data-lucide="book-a"></i>Vocabulary</button>
+          <button data-sec="assistant"><i data-lucide="sparkles"></i>Assistant &amp; AI keys</button>
+          <button data-sec="bar"><i data-lucide="captions"></i>Subtitle bar</button>
+          <button data-sec="privacy"><i data-lucide="shield-check"></i>Privacy &amp; data</button>
+          <button data-sec="appearance"><i data-lucide="palette"></i>Appearance</button>
+          <button data-sec="about"><i data-lucide="info"></i>About &amp; updates</button>
+        </div>
+      </nav>
+      <div class="set-pages">
+        <div class="card set-page a" data-sec="audio"><div class="cardh"><span class="ic"><i data-lucide="volume-2"></i></span>Audio</div>
+          <div class="set" data-kw="speaker microphone mic input source room online meeting switch"><div><div class="lab">Audio source</div><div class="ps">Speaker for online meetings, Microphone for people in the room</div></div><div class="seg" id="setSrc"><button data-s="speaker" class="a">Speaker</button><button data-s="mic">Microphone</button></div></div>
+          <div class="set" data-kw="speaker listen to output device headphones headset loopback"><div><div class="lab">Speaker</div><div class="ps" data-wt="{speaker_hint}">The speaker your meeting plays through</div></div><select class="field" id="setDevice"><option value="" data-wt="{speaker_default}">Default speaker</option></select></div>
+          <div class="set" data-kw="microphone mic input device headset"><div><div class="lab">Microphone</div><div class="ps">Used when the source is Microphone</div></div><select class="field" id="setMic"><option value="">Default microphone</option></select></div>
+          <div class="set" data-kw="input level volume meter loudness signal"><div><div class="lab">Input level</div><div class="ps">Moves while captions run</div></div><span class="set-level" aria-hidden="true"><i id="setLevel"></i></span></div>
+          <div class="set" data-kw="nothing heard silence silent warning no captions muted blocked"><div><div class="lab">Warn when nothing is heard</div><div class="ps">After 20 s of silence or no captions, say why and how to fix it</div></div><button class="sw on" data-sw id="swWarnSilence"></button></div>
+          <div data-mount="audio.voice" hidden></div>
+          <div data-mount="audio.capture_both" hidden></div>
+        </div>
+        <div class="card set-page" data-sec="captions"><div class="cardh"><span class="ic"><i data-lucide="languages"></i></span>Captions &amp; languages</div>
+          <div class="set" data-kw="captions by cloud local whisper gemini openai cloudflare speech provider"><div><div class="lab">Captions by</div><div class="ps" id="sourceHint">Whisper on this computer — audio never leaves it</div></div><select class="field" id="setSource"><option value="local">This computer (private)</option><option value="gemini">Gemini — cloud</option><option value="openai">OpenAI — cloud</option><option value="cloudflare">Cloudflare — cloud</option></select></div>
+          <div class="set" data-kw="spoken language german english translate auto detect"><div><div class="lab">Spoken language</div><div class="ps">27 languages get English subtitles; English gets German</div></div><select class="field" id="setLang"></select></div>
+          <div class="set" data-kw="show german source original left column"><div><div class="lab" id="srcLab">Show German source</div><div class="ps">Keep the left column</div></div><button class="sw on" data-sw id="swGerman"></button></div>
+          <div data-mount="captions.translator" hidden></div>
+        </div>
+        <div class="card set-page" data-sec="speech"><div class="cardh"><span class="ic"><i data-lucide="cpu"></i></span>Speech models</div>
+          <div class="set" id="modelRow" data-kw="speech model whisper tiny base small medium large turbo auto"><div><div class="lab">Speech model</div><div class="ps" id="modelHint" data-wt="Auto picks the best model for this {computer}">Auto picks the best model for this PC</div></div><select class="field" id="setModel"><option value="auto" data-wt="Auto (best for this {computer})">Auto (best for this PC)</option><option value="tiny">Whisper Tiny</option><option value="base">Whisper Base</option><option value="small">Whisper Small</option><option value="medium">Whisper Medium</option><option value="large-v3-turbo">Whisper Large v3 Turbo</option><option value="large-v3">Whisper Large v3</option></select></div>
+          <div class="set-models" id="modelsCard" data-name="Model list" data-kw="models download remove gpu cpu ram this pc mac folder translator">
+            <div class="ps" data-wt="Detected on this {computer}, never assumed. You choose which models to download; they download once per {os_user} and run locally.">Detected on this PC, never assumed. You choose which models to download; they download once per Windows user and run locally.</div>
+            <div class="chips" id="specs" style="margin-top:10px"><span class="chipt" data-wt="Checking this {computer}…">Checking this PC…</span></div>
+            <div id="modelList" class="mlist"><div class="ps">Loading models…</div></div>
+            <div class="mfoot"><span class="ic"><i data-lucide="folder"></i></span><span id="modelDir">—</span><button class="btn ghost" id="openModels" style="margin-left:auto">Open folder</button></div>
+          </div>
+        </div>
+        <div class="card set-page" data-sec="vocab"><div class="cardh"><span class="ic"><i data-lucide="book-a"></i></span>Vocabulary</div>
+          <div class="set" data-kw="vocabulary names terms spelling hints glossary fixes words"><div><div class="lab">Names, terms &amp; fixes</div><div class="ps">Edited in the Vocabulary tab, used from the next line on</div></div><button class="btn ghost" id="setOpenVocab"><span class="ic"><i data-lucide="book-a" style="width:15px;height:15px"></i></span>Open Vocabulary</button></div>
+        </div>
+        <div class="card set-page" data-sec="assistant"><div class="cardh"><span class="ic"><i data-lucide="sparkles"></i></span>Assistant &amp; AI keys</div>
+          <div class="set" data-kw="assistant ai provider claude openai gemini nvidia cloudflare"><div><div class="lab">Provider</div></div><div class="seg" id="setProvider"><button data-p="claude" class="a">Claude</button><button data-p="openai">OpenAI</button><button data-p="gemini">Gemini</button><button data-p="nvidia">NVIDIA</button><button data-p="cloudflare">Cloudflare</button></div></div>
+          <div class="set" id="cfRow" hidden data-kw="cloudflare account id workers"><div><div class="lab">Account ID</div><div class="ps">Workers AI → Use REST API → Account ID</div></div><input class="field" id="setCfAccount" placeholder="32-character account ID" spellcheck="false" style="width:270px;max-width:100%;font-family:var(--mono);font-size:12px"></div>
+          <div class="set" data-kw="api key token secret ai key"><div><div class="lab">API key</div><div class="ps" data-wt="{key_storage}">Encrypted with Windows DPAPI</div></div>
+            <div style="display:flex;gap:8px"><input class="field" id="setKey" type="password" placeholder="sk-…" style="width:140px;font-family:var(--mono)"><button class="btn ghost" id="setTest">Test</button></div></div>
+          <div class="set" data-kw="ai model assistant model id"><div><div class="lab">Model</div><div class="ps" id="aiModelHint">Every model this provider offers</div></div><div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end"><select class="field" id="setAiModel" style="width:270px;max-width:100%;font-family:var(--mono);font-size:12px"></select><input class="field" id="setAiModelOther" placeholder="model ID, then Enter" spellcheck="false" hidden style="width:270px;max-width:100%;font-family:var(--mono);font-size:12px"></div></div>
+          <div class="set" data-kw="key status test check"><div><div class="lab">Status</div></div><span class="ok" id="keyStatus" style="color:var(--mute)">—</span></div>
+          <div class="ps set-note">Only the Assistant chat is sent to the provider. Free plans of some providers may keep or learn from what you send; check their terms.</div>
+        </div>
+        <div class="card set-page" data-sec="bar"><div class="cardh"><span class="ic"><i data-lucide="captions"></i></span>Subtitle bar</div>
+          <div class="set" data-kw="subtitle bar overlay floating caption bar show with start"><div><div class="lab">Show with Start</div><div class="ps">The floating caption bar only you see. Opens with Start when on; also the Subtitles button at the top.</div></div><button class="sw on" data-sw id="swBar"></button></div>
+          <div class="set" data-kw="subtitle bar opacity transparency see through"><div><div class="lab">Opacity</div><div class="ps">Lower lets the window behind show through</div></div><div style="display:flex;gap:10px;align-items:center"><input type="range" id="setOpacity" min="30" max="100" value="88" style="accent-color:var(--ac);width:150px"><span class="mtag" id="setOpacityVal">88%</span></div></div>
+          <div class="set" data-kw="subtitle bar text size font bigger smaller"><div><div class="lab">Text size</div></div><div style="display:flex;gap:10px;align-items:center"><input type="range" id="setFont" min="14" max="40" value="22" style="accent-color:var(--ac);width:150px"><span class="mtag" id="setFontVal">22 px</span></div></div>
+          <div data-mount="bar.clickthrough" hidden></div>
+          <div data-mount="bar.time" hidden></div>
+        </div>
+        <div class="card set-page" data-sec="privacy"><div class="cardh"><span class="ic"><i data-lucide="shield-check"></i></span>Privacy &amp; data</div>
+          <div class="set" data-kw="invisible mode stealth hidden screen share hide"><div><div class="lab">Invisible mode</div><div class="ps" data-wt="Hidden from screen shares and the {taskbar}. {hotkey} to exit.">Hidden from screen shares and the taskbar. Ctrl+Alt+Shift+D to exit.</div></div><button class="sw on" data-sw id="swInv"></button></div>
+          <div class="set" data-kw="save transcripts meetings keep history"><div><div class="lab">Save transcripts</div></div><button class="sw on" data-sw id="swSave"></button></div>
+          <div class="set" data-kw="delete after days keep retention"><div><div class="lab">Delete after</div></div><div class="seg" id="setKeep"><button data-d="0">Never</button><button data-d="7">7d</button><button data-d="30" class="a">30d</button><button data-d="90">90d</button></div></div>
+          <div class="set" data-kw="data folder transcripts location documents open"><div class="set-grow"><div class="lab">Data folder</div><div class="ps set-path" id="setDataDir">—</div></div><button class="btn ghost" id="setDataOpen">Open folder</button></div>
+          <div data-mount="privacy.speakers" hidden></div>
+        </div>
+        <div class="card set-page" data-sec="appearance"><div class="cardh"><span class="ic"><i data-lucide="palette"></i></span>Appearance</div>
+          <div class="set" data-kw="theme dark light paper ink mode colour color"><div><div class="lab">Theme</div><div class="ps">Paper is light, Ink is dark</div></div><div class="seg" id="theme"><button class="a" data-t="paper">Paper</button><button data-t="ink">Ink</button></div></div>
+          <div data-mount="appearance.textsize" hidden></div>
+        </div>
+        <div class="card set-page" data-sec="about"><div class="cardh"><span class="ic"><i data-lucide="info"></i></span>About &amp; updates</div>
+          <div class="set" data-kw="version about dolmi release"><div><div class="lab">Version</div></div><span class="mtag" id="setVersion">—</span></div>
+          <div class="set" data-kw="licences licenses open source notices third party"><div><div class="lab">Licences</div><div class="ps">Listed in THIRD-PARTY-NOTICES.md in the program folder</div></div></div>
+          <div data-mount="about.updates" hidden></div>
+          <div data-mount="about.shortcuts" hidden></div>
+          <div data-mount="about.report" hidden></div>
+        </div>
       </div>
     </div>
   </div></section>

@@ -224,3 +224,41 @@ textarea.field{width:100%;font-family:var(--mono);line-height:1.7;resize:vertica
 /* OS-only rows: mark them data-os="win" or data-os="mac"; html[data-platform] is set at boot from
    state().platform.os, so the other platform's rows are hidden. */
 html[data-platform="mac"] [data-os="win"],html[data-platform="win"] [data-os="mac"]{display:none!important}
+
+/* Settings sections (APP-2): left menu + one short page per section; the menu becomes a top row under 700 px */
+.set-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden;padding:18px 2px 20px}
+.set-wrap .ph{margin-bottom:14px}.set-wrap .ph h2{font-size:clamp(26px,3vw,34px)}
+.set-layout{flex:1;min-height:0;display:grid;grid-template-columns:220px minmax(0,1fr);gap:18px}
+.set-nav{background:var(--panel);border:1px solid var(--line);border-radius:20px;box-shadow:var(--sh-sm);padding:10px;display:flex;flex-direction:column;gap:4px;min-height:0;overflow:auto;scrollbar-width:thin}
+.set-search{margin:0;padding:8px 14px}.set-search input::-webkit-search-cancel-button{cursor:pointer}
+.set-menu,.set-results{display:flex;flex-direction:column;gap:2px}
+.set-menu[hidden],.set-results[hidden]{display:none}
+.set-menu button,.set-results button{display:flex;align-items:center;gap:9px;text-align:left;padding:7px 12px;border-radius:12px;font-size:13.5px;font-weight:600;color:var(--mute);transition:.2s}
+.set-menu button svg{width:16px;height:16px;flex:none;color:var(--faint)}
+.set-menu button:hover,.set-results button:hover{color:var(--ink);background:var(--card)}
+.set-menu button.a{color:var(--ink);background:var(--card);box-shadow:var(--sh-sm)}.set-menu button.a svg{color:var(--ac-ink)}
+.set-results button{flex-direction:column;align-items:flex-start;gap:0}.set-results button b{color:var(--ink);font-size:13.5px}.set-results button span{font-size:11.5px;font-family:var(--mono);color:var(--faint)}
+.set-none{padding:8px 12px}
+.set-pages{min-height:0;overflow:auto;scrollbar-width:thin}
+.set-page{display:none;padding:14px 20px}.set-page.a{display:block}
+.set-page .cardh{margin-bottom:4px}
+.set-page .set{padding:9px 0;border-bottom:0;border-top:1px solid var(--line)}   /* rows other domains mount get the same rule */
+.set-page .cardh+.set{border-top:0}
+.set-page .set[hidden]{display:none}   /* .set is display:flex, which beat the hidden attribute (#cfRow, #modelRow) */
+.set-models{padding-top:12px;border-top:1px solid var(--line)}.set-models>.ps{font-size:13px;color:var(--mute)}
+.set-models .mlist{margin-top:12px}
+.set-level{width:150px;height:6px;border-radius:3px;background:var(--line-dash);overflow:hidden;flex:none}
+.set-level i{display:block;height:100%;width:0;background:var(--ac);border-radius:3px;transition:width .12s linear}
+.set-grow{flex:1;min-width:0}
+.set-path{font-family:var(--mono);font-size:12px;overflow-wrap:anywhere;max-width:none}
+.set-note{margin-top:6px;font-size:12.5px;color:var(--mute)}
+.set-hit{animation:set-hit 1.6s var(--ease)}
+@keyframes set-hit{0%,40%{background:var(--ac-soft);box-shadow:0 0 0 8px var(--ac-soft)}100%{background:transparent;box-shadow:0 0 0 8px transparent}}
+@media (max-width:700px){
+  .set-layout{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);gap:12px}
+  .set-nav{padding:8px;overflow:visible}
+  .set-menu{flex-direction:row;overflow-x:auto;scrollbar-width:none}
+  .set-menu button{flex:none;white-space:nowrap}
+  .set-menu button svg{display:none}
+  .set-page .set{flex-wrap:wrap}
+}
