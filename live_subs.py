@@ -139,13 +139,14 @@ class Engine:
         print(f"📥 Translator {m.name}")
         return self.translators[key]
 
-    def transcribe(self, audio):
+    def transcribe(self, audio, retry_empty=True):
         """Speech -> (text in the spoken language, language code).
 
         People switch to English mid-meeting, so a non-English setting still lets Whisper
         detect: the chosen language or English is kept; anything else is a misdetection
         (usually a short clip) and is transcribed again in the chosen language.
-        Nothing heard: tried once more without Whisper's own VAD before the buffer is given up.
+        Nothing heard: tried once more without Whisper's own VAD before the buffer is given up
+        (finals only: transcribe_draft skips the retry, a draft is redone a moment later anyway).
         `last_info` says what happened ({'retried', 'echo'}) so the worker can log why a line is empty."""
         mixed = self.language not in ("auto", "en")
         language = None if self.language == "auto" or mixed else self.language
@@ -153,7 +154,7 @@ class Engine:
         if mixed and info.language not in (self.language, "en"):
             language = self.language
             segs, info = self._asr(audio, language)
-        retried = not any(s.text.strip() for s in segs)
+        retried = retry_empty and not any(s.text.strip() for s in segs)
         if retried:
             segs, info = self._asr(audio, language, retry=True)
         raw = [s.text.strip() for s in segs]
@@ -161,6 +162,9 @@ class Engine:
                 for t, s in zip(raw, segs)]
         self.last_info = {"retried": retried, "echo": kept != raw}
         return collapse_repeats(" ".join(t for t in kept if t).strip()), info.language
+
+    def transcribe_draft(self, audio):
+        return self.transcribe(audio, retry_empty=False)
 
     def _asr(self, audio, language, retry=False):
         """Whisper segments (each with no_speech_prob and avg_logprob) and the detection info.
@@ -567,7 +571,7 @@ def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker):
                 _, uid, audio, upto, meta = job
                 if uid != seg.uid or not seg.active or not jobs.empty():
                     continue                     # stale: that sentence is over, or a final waits
-                de, lang = eng.transcribe(audio)
+                de, lang = getattr(eng, "transcribe_draft", eng.transcribe)(audio)
                 if uid != seg.uid or not seg.active or not de or is_junk(de, lang=_spoken(eng, lang)):
                     continue
                 if len(audio) / SR >= MIN_SENTENCE and de.rstrip().endswith((".", "?", "!")):

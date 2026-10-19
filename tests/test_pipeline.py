@@ -312,6 +312,18 @@ def test_empty_decode_is_retried_once_without_whispers_vad():
     assert e.last_info == {"retried": True, "echo": False}
 
 
+def test_a_draft_is_not_retried_without_vad():
+    calls = []
+
+    def fake_asr(audio, language, retry=False):
+        calls.append(retry)
+        return [], NS(language="de")
+
+    e = object.__new__(m.Engine)
+    e.language, e.terms, e._asr = "de", set(), fake_asr
+    assert e.transcribe_draft(None) == ("", "de") and calls == [False]
+
+
 def test_whisper_vad_runs_at_the_lower_threshold_and_not_on_the_retry():
     seen = []
 
