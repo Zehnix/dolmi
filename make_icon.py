@@ -1,4 +1,4 @@
-"""Draws the Dolmi icon (assets/dolmi-2.ico + dolmi.png; the "-2" makes Windows drop its cached old icon): "Voice D", a D whose counter holds sound bars.
+"""Draws the Dolmi icon (assets/dolmi-2.ico + dolmi.png, and Mac/assets/dolmi.icns for Dolmi.app; the "-2" makes Windows drop its cached old icon): "Voice D", a D whose counter holds sound bars.
 Geometry is the 160-unit grid from the Figma concept. Run once: python make_icon.py"""
 from pathlib import Path
 
@@ -34,3 +34,7 @@ if __name__ == "__main__":
     img.resize((256, 256), Image.LANCZOS).save(out / "dolmi.png")
     img.save(out / "dolmi-2.ico", sizes=[(s, s) for s in (16, 24, 32, 48, 64, 128, 256)])
     print("wrote", out / "dolmi-2.ico")
+    mac = Path(__file__).with_name("Mac") / "assets"
+    if mac.is_dir():
+        img.save(mac / "dolmi.icns")   # Pillow writes every size macOS needs, up to 1024 px
+        print("wrote", mac / "dolmi.icns")

@@ -7,7 +7,7 @@
 | | |
 |---|---|
 | Version | 1.0 |
-| Platform | Windows 10 / 11, 64-bit |
+| Platform | Windows 10 / 11, 64-bit; macOS 14.2+ (see [macOS](#macos) below) |
 | Languages | 27 spoken languages + Auto-detect → English subtitles (default: German), and English speech → German subtitles. Set in Settings → Spoken language |
 | Delay | Draft text ~1 s after speech; final sentence ~1–2.5 s after the speaker pauses (CPU, `small` model) |
 | Translation speed | ~0.06 s per sentence on CPU |
@@ -101,17 +101,18 @@ Models download from Hugging Face and are cached in `%USERPROFILE%\.cache\huggin
 | `src/main.py` | Entry point: the native window, logging, invisible mode at launch, recovery hotkey |
 | `src/ui/app.py` | The JS bridge (`window.pywebview.api`): live captions, meetings, assistant, settings, models |
 | `src/ui/overlay.py` | Subtitle bar window |
-| `src/ui/web/` | The UI: `index.html` (main window), `overlay.html` (subtitle bar), bundled fonts/icons |
-| `src/config.py` | Settings and where files live (`%APPDATA%\Dolmi`, `Documents\Dolmi`) |
+| `src/ui/web/` | The UI: `index.html` (main window), `css/app.css`, `js/*.js` (one file per screen), `overlay.html` (subtitle bar), bundled fonts/icons |
+| `src/config.py` | Settings and where files live (`%APPDATA%\Dolmi`, `Documents\Dolmi`; Mac: `~/Library/Application Support/Dolmi`, `~/Documents/Dolmi`) |
 | `cloud_speech.py` | Optional cloud captions: Gemini (hear + translate), OpenAI or Cloudflare Whisper (hear; Opus-MT translates) |
 | `inbox.py` | Local SQLite store (`dolmi.db`) |
-| `stealth.py` | Windows window helper (`SetWindowDisplayAffinity`) |
-| `models.py` | Model catalog, PC check, download / uninstall |
-| `assistant.py` | Optional cloud helper (Claude / OpenAI / Gemini / NVIDIA / Cloudflare), DPAPI-encrypted keys |
+| `dolmi_platform/` | Everything Windows and macOS do differently, behind one API: `windows.py` (WASAPI capture, CUDA, DPAPI, `SetWindowDisplayAffinity`, Ctrl+Alt+Shift+D) and `mac.py` + `mac_stealth.py` (process-tap capture, Keychain, `NSWindow.sharingType`, ⌃⌥⇧D); `WORDS` holds every PC/Mac word the UI shows |
+| `models.py` | Model catalog, PC/Mac check, download / uninstall |
+| `assistant.py` | Optional cloud helper (Claude / OpenAI / Gemini / NVIDIA / Cloudflare), keys encrypted per user (DPAPI / Keychain) |
 | `live_subs.py` | Engine: capture, recognition, translation, transcripts |
 | `vocabulary.txt` | Translation rules (in `%APPDATA%\Dolmi`) |
 | `glossary.txt` | Spelling hints for speech recognition (in `%APPDATA%\Dolmi`) |
 | `installer/` | `build.ps1`, `dolmi.iss` (Inno Setup), `test-install.ps1` |
+| `Mac/` | Mac-only files: `audio/dolmi-audio.swift` (system-audio helper), `packaging/` (`build.sh`, `dolmi.spec`, `launcher.py`), `start.command`, Mac requirements |
 | `transcripts\` | Meeting transcripts and saved items (kept on uninstall) |
 
 ## Known limits
@@ -128,3 +129,22 @@ Models download from Hugging Face and are cached in `%USERPROFILE%\.cache\huggin
 Audio and text never leave the PC. Transcribing colleagues is processing personal data, so tell meeting participants you're using it; Dolmi shows a one-time reminder. (Not legal advice.)
 
 Settings → Privacy: turn saving transcripts off (live subtitles only), or delete Dolmi's files (meeting, saved) automatically after 7, 30 or 90 days. Other files in the folder are never touched.
+
+## macOS
+
+The Mac app runs the same code (repo root) with `dolmi_platform/mac.py`; only these points differ.
+
+| | |
+|---|---|
+| Platform | macOS 14.2 Sonoma or later, Apple Silicon (Intel builds from source) |
+| Install | Open `Dolmi-x.y.z.dmg` → drag Dolmi to Applications; uninstall by moving it to the Bin |
+| OS | Minimum macOS 14.2, recommended macOS 15 or later |
+| CPU | Minimum Apple M1; recommended Apple M3/M4 or later (tested: Apple M4, 10 cores) |
+| GPU | Not used — CTranslate2 has no Metal backend, so Whisper runs on the CPU cores (int8 with Apple Accelerate); Auto always picks `small` |
+| Python | Bundled in Dolmi.app; 3.12 to run from source (`brew install python@3.12`) |
+| Audio | Dolmi records what the Mac plays with a Core Audio process tap (`Mac/audio/dolmi-audio`, asks for *System Audio Recording* permission once), or a microphone chosen in Settings → Listen to (sounddevice) |
+| UI | pywebview 6 on WKWebView (Cocoa); the subtitle bar floats on every Space and above full-screen meetings |
+| Invisible mode | `NSWindow.sharingType = none` + Dock hiding; ⌃⌥⇧D via Carbon `RegisterEventHotKey` (no Accessibility permission). On macOS 27 turning it off rebuilds the windows |
+| API keys | Encrypted with a random secret kept in the login Keychain |
+| Packaging | PyInstaller `Dolmi.app` (the shared source ships unchanged in `Contents/Resources/app`) in a `Dolmi-x.y.z.dmg`, signed with a local self-signed certificate so permissions survive rebuilds (`Mac/packaging/build.sh`) |
+| Files | `~/Library/Application Support/Dolmi` (settings, vocabulary), `~/Documents/Dolmi` (transcripts), `~/Library/Logs/Dolmi` (log), `~/.cache/huggingface` (models) |

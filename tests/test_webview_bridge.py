@@ -1,14 +1,19 @@
-r"""Run: venv\Scripts\python.exe tests\test_webview_bridge.py
+r"""Run: venv\Scripts\python.exe tests\test_webview_bridge.py      (Windows)
+     Mac/venv/bin/python tests/test_webview_bridge.py         (macOS, from the repo root)
 
 Headless tests for the Dolmi webview Api (no GUI). Uses a temp data folder + temp repo files so
-nothing real is touched. Prints PASS/FAIL per check and a summary."""
-import sys, time, tempfile, shutil, inspect
+nothing real is touched. Prints PASS/FAIL per check and a summary. New checks belong in pytest
+files (tests/test_<area>.py with the `api` fixture from conftest.py), not here."""
+import os, sys, time, tempfile, shutil, inspect
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent   # repo root
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "src"))
 import config
 from ui import app as app_mod
+
+SEP = "\\" if os.name == "nt" else "/"           # this OS's path separator, for the traversal checks
+FS_ROOT = "C:\\" if os.name == "nt" else "/"
 
 results = []
 def check(name, ok, extra=""):
@@ -30,7 +35,8 @@ config.save_settings({**config.DEFAULTS, "data_folder": str(tmp_data)})
 
 api = app_mod.Api(); api._window = FakeWindow()
 
-# 0. config lives in %APPDATA%\Dolmi: old files copied over once, missing ones seeded from examples
+# 0. config lives in %APPDATA%\Dolmi (Mac: ~/Library/Application Support/Dolmi): old files copied over
+#    once, missing ones seeded from examples
 check("old glossary copied to the config folder", (tmp_cfg / "glossary.txt").read_text(encoding="utf-8") == "OldRootTerm" + chr(10))
 check("vocabulary seeded from the example", (tmp_cfg / "vocabulary.txt").exists())
 check("settings saved in the config folder, not the program folder", (tmp_cfg / "settings.json").exists() and not (tmp_root / "settings.json").exists())
@@ -76,7 +82,7 @@ items = api.list_meetings(); pairs = api.read_meeting("meeting_2026-10-09_11-14.
 check("list_meetings", len(items) == 1 and items[0]["lines"] == 2 and items[0]["time"] == "11:14")
 check("read_meeting maps de/en correctly", len(pairs) == 2 and pairs[0]["en"].startswith("Awesome") and pairs[0]["de"].startswith("Geil"))
 outside = tmp_root / "meeting_secret.md"; outside.write_text("**1** x  \n<sub>y</sub>\n", encoding="utf-8")
-check("path traversal blocked (read)", api.read_meeting("..\\" + tmp_root.name + "\\meeting_secret.md") == [] and api.read_meeting(str(outside)) == [])
+check("path traversal blocked (read)", api.read_meeting(".." + SEP + tmp_root.name + SEP + "meeting_secret.md") == [] and api.read_meeting(str(outside)) == [])
 api.delete_meeting(str(outside))
 check("path traversal blocked (delete)", outside.exists())
 out_txt = tmp_root / "export"
@@ -98,7 +104,7 @@ check("vocabulary.txt untouched", (tmp_cfg / "vocabulary.txt").read_text(encodin
 
 # 7. settings whitelist + atomic persistence
 check("whitelisted key accepted", api.set_setting("theme", "ink") and config.load_settings()["theme"] == "ink")
-check("non-whitelisted key rejected", api.set_setting("api_keys", {}) is False and api.set_setting("data_folder", "C:\\") is False)
+check("non-whitelisted key rejected", api.set_setting("api_keys", {}) is False and api.set_setting("data_folder", FS_ROOT) is False)
 check("unknown provider ignored", api.set_provider("evil")["provider"] in ("claude", "openai"))
 for prov, hint in (("gemini", "AIza"), ("nvidia", "nvapi-")):
     st = api.set_provider(prov)
@@ -167,7 +173,7 @@ api.archive_meeting("meeting_2026-10-09_11-14.md", True)
 check("archived meeting leaves the main list", api.list_meetings() == [] and len(api.list_meetings(True)) == 1)
 api.archive_meeting("meeting_2026-10-09_11-14.md", False)
 check("unarchive restores it", len(api.list_meetings()) == 1)
-check("archive blocks path traversal", api.archive_meeting("..\\x\\meeting_a.md") is False)
+check("archive blocks path traversal", api.archive_meeting(".." + SEP + "x" + SEP + "meeting_a.md") is False)
 db = inbox.connect(api._db_path)
 cid2 = inbox.start_chat(db, "claude", "m"); inbox.add_message(db, cid2, "Keep this?", "Yes.", "", "typed"); db.close()
 api.archive_chat(cid2, True)

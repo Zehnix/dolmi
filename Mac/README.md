@@ -2,17 +2,17 @@
 
 **Live meeting subtitles, translated to English — private and running entirely on your Mac.**
 
-> This is the **macOS** version. The Windows version lives in the repository root; both share the same UI, engine and features.
+> This folder holds the **macOS-only** files: the system-audio helper (`audio/`), packaging (`packaging/`), `start.command` and the Mac requirements. Everything else, the UI, engine and features, is one shared code base at the repository root, used by Windows and macOS alike (OS differences live in `dolmi_platform/`).
 
-Dolmi listens to whatever your Mac plays (Teams, Zoom, Meet, Slack, a browser, anything), transcribes the speech, and shows a live translation in a floating subtitle bar: English subtitles for German and 26 more languages (or Auto-detect), and German subtitles for English speech. Speech recognition and translation run locally and your audio never leaves your Mac; only the optional Assistant sends text to the AI provider you choose ([privacy policy](PRIVACY.md)).
+Dolmi listens to whatever your Mac plays (Teams, Zoom, Meet, Slack, a browser, anything), transcribes the speech, and shows a live translation in a floating subtitle bar: English subtitles for German and 26 more languages (or Auto-detect), and German subtitles for English speech. Speech recognition and translation run locally and your audio never leaves your Mac; only the optional Assistant sends text to the AI provider you choose ([privacy policy](../PRIVACY.md)).
 
 > macOS 14.2 Sonoma or later, Apple Silicon. MIT licence. [Download the `.dmg`](https://github.com/Zehnix/dolmi/releases/latest), or build it yourself with one command (below).
 
-![Dolmi live view: German on the left, English on the right](assets/screenshots/live.png)
+![Dolmi live view: German on the left, English on the right](../assets/screenshots/live.png)
 
 <p align="center"><em>Live view — English appears as people speak, with the original German line beside it.</em></p>
 
-![Dolmi floating subtitle bar](assets/screenshots/overlay.png)
+![Dolmi floating subtitle bar](../assets/screenshots/overlay.png)
 
 <p align="center"><em>The floating subtitle bar — open or close it with the <b>Subtitles</b> button at the top of Dolmi. Always on top, drag to move, resize from the corner, adjustable opacity and text size.</em></p>
 
@@ -39,19 +39,19 @@ Dolmi listens to whatever your Mac plays (Teams, Zoom, Meet, Slack, a browser, a
 
 **This Mac & speech models** — detected hardware, how each model fits it, and one-click download, use or remove:
 
-![Dolmi speech models in Settings](assets/screenshots/models.png)
+![Dolmi speech models in Settings](../assets/screenshots/models.png)
 
 **Start asks before downloading** — pick another model or download the suggested one:
 
-![Dolmi asks before downloading models](assets/screenshots/download-prompt.png)
+![Dolmi asks before downloading models](../assets/screenshots/download-prompt.png)
 
 **Meetings** — every session in both languages, with copy, archive, delete and summarize:
 
-![Dolmi meetings](assets/screenshots/meetings.png)
+![Dolmi meetings](../assets/screenshots/meetings.png)
 
 **Assistant** — questions about the meeting, answered from the live transcript:
 
-![Dolmi assistant](assets/screenshots/assistant.png)
+![Dolmi assistant](../assets/screenshots/assistant.png)
 
 <sub>Screenshots use fictional sample meetings.</sub>
 
@@ -64,7 +64,7 @@ Dolmi listens to whatever your Mac plays (Teams, Zoom, Meet, Slack, a browser, a
 3. Dolmi isn't notarized by Apple yet, so the first time macOS won't open it. Go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway**.
 4. Press **▶ Start**. macOS asks once to let Dolmi record **System Audio**: allow it (*System Settings → Privacy & Security → Screen & System Audio Recording → System Audio Recording Only*). If Start needs a model you don't have, Dolmi shows what it needs and how big it is first. Models download once and then work offline.
 
-**Build it yourself:** `./packaging/build.sh` → `dist/Dolmi-x.y.z.dmg` (needs Xcode Command Line Tools: `xcode-select --install`, and `brew install python@3.12`). Local builds are signed with a fixed local certificate, so rebuilds keep the audio permission.
+**Build it yourself:** `zsh Mac/packaging/build.sh` (from the repo root) → `Mac/dist/Dolmi-x.y.z.dmg` (needs Xcode Command Line Tools: `xcode-select --install`, and `brew install python@3.12`). Local builds are signed with a fixed local certificate, so rebuilds keep the audio permission.
 
 To uninstall, move Dolmi.app to the Bin. Your transcripts (`~/Documents/Dolmi`), settings (`~/Library/Application Support/Dolmi`) and models (`~/.cache/huggingface`) are kept.
 
@@ -106,13 +106,13 @@ App plays audio ─► Core Audio process tap (you still hear it)
 | API keys | Encrypted with a random secret kept in the login Keychain |
 | App | PyInstaller `Dolmi.app` + `.dmg` (`packaging/build.sh`), signed with a local certificate |
 
-See [SPECS.md](SPECS.md) for the full technical details, models, languages and system requirements.
+See [SPECS.md](../SPECS.md#macos) for the full technical details, models, languages and system requirements.
 
 ---
 
 ## Privacy
 
-No account, no telemetry, no analytics. Speech recognition and translation run entirely on your Mac. Dolmi uses the network only for the optional Assistant and summaries (your chosen AI provider) and to download the models you choose (Hugging Face). Details: [PRIVACY.md](PRIVACY.md).
+No account, no telemetry, no analytics. Speech recognition and translation run entirely on your Mac. Dolmi uses the network only for the optional Assistant and summaries (your chosen AI provider) and to download the models you choose (Hugging Face). Details: [PRIVACY.md](../PRIVACY.md).
 
 Transcribing other people processes their personal data, so tell meeting participants you are using live transcription. Dolmi shows a one-time reminder and lets you turn off saving or auto-delete old files in Settings. *(Not legal advice.)*
 
@@ -125,9 +125,9 @@ Transcribing other people processes their personal data, so tell meeting partici
 ## Tests
 
 ```bash
-cd Mac
-venv/bin/python -m pytest tests/test_helpers.py
-venv/bin/python tests/test_webview_bridge.py
+# from the repo root, with the venv start.command created in Mac/
+Mac/venv/bin/python -m pytest -q tests
+Mac/venv/bin/python tests/test_webview_bridge.py
 ```
 
 The helper tests cover the transcript, vocabulary and question-detection logic. The bridge tests exercise the webview API headlessly: captions, meetings, vocabulary, chats, archive, settings, clipboard, Mac detection and model choice (including that Start never downloads without asking). Neither touches the network.
@@ -141,4 +141,4 @@ The helper tests cover the transcript, vocabulary and question-detection logic. 
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](../LICENSE).

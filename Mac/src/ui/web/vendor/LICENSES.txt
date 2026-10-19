@@ -1,3 +1,0 @@
-Fonts (fonts/): Fraunces, Hanken Grotesk, JetBrains Mono — SIL Open Font License 1.1
-  https://openfontlicense.org
-Icons (lucide.min.js): Lucide 0.469.0 — ISC License, https://lucide.dev/license
