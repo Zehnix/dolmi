@@ -93,6 +93,10 @@
     ['about','#sc-toggle_source','rec:ctrl+alt+shift+Digit7','set_shortcut','toggle_source'],
     ['about','#sc-toggle_lock','rec:Backspace','set_shortcut','toggle_lock'],
     ['about','#setDownloadUpdate','click','open_release','https://github.com/Zehnix/dolmi/releases/tag/v2.3.0'],
+    ['about','#setReport','click','report_problem',false],                                  // APP-12
+    ['about','#swRepTranscripts','click','report_problem',null,true],                      // local switches: no call
+    ['about','#swRepVocab','click','report_problem',null,true],
+    ['about','#setReport','click','report_problem',true],                                   // now with transcripts
     ['captions','#setTranslator','change:deepl','translator_set','deepl'],                 // QA-7
     ['captions','#setTrxKey','change:mock-key','translator_set_key','deepl'],
     ['captions','#setTranslator','change:local','translator_set','local'],
@@ -187,6 +191,15 @@
       ok(since(m,'rename_meeting').some(c=>c.args[1]==='Budget review'),`${label}: rename does not call rename_meeting`);
       ok(q('#mRows .row.a b').textContent==='Budget review',`${label}: the new title is not shown`); }
     noOverflow(q('#v-meetings'),`${label} meetings after filters`);
+    /* APP-10: a structured summary renders as cards with the two copy buttons */
+    sumOpen(); sumDone('',{title:'Budget review',summary:'We went over the budget.',decisions:['Keep the date'],
+      action_items:[{who:'Lena',what:'Send the numbers',when:'Friday'}],open_questions:[],email:'Subject: x',teams:'**x**'});
+    ok(q('#sumTitle')&&q('#sumTitle').textContent==='Budget review'&&qa('#sumModal .sum-card').length===4,`${label}: the summary cards do not render`);
+    ok(qa('#sumModal .sum-act .mtag').map(e=>e.textContent).join('|')==='Lena|Friday',`${label}: action item owner/deadline not shown`);
+    m=mark(); q('#sumEmail').click(); await tick(); ok(since(m,'copy_text').some(c=>c.args[0]==='Subject: x'),`${label}: Copy as email does not copy the email text`);
+    m=mark(); q('#sumTeams').click(); await tick(); ok(since(m,'copy_text').some(c=>c.args[0]==='**x**'),`${label}: Copy as Teams does not copy the Teams text`);
+    noOverflow(q('#sumModal .onb'),`${label} summary cards`);
+    sumClose();
   }
 
   async function viewChecks(label){

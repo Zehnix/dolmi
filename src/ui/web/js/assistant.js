@@ -45,3 +45,20 @@ function chatText(){ return currentMsgs.map(m=>`You (${m.when}): ${m.q}\nAssista
 $('#aArchView').onclick=()=>{ aArch=!aArch; $('#aArchView').classList.toggle('on',aArch); archLabel($('#aArchive'),aArch); currentChat=null; currentMsgs=[]; asrIdle(aArch?'Archived chats — open one to read it.':'Ask about the meeting below.'); loadChats(); };
 $('#aCopy').onclick=()=>{ if(!currentMsgs.length){ toast('Open a chat first.'); return; } copyText(chatText()); };
 $('#aArchive').onclick=async()=>{ const b=bridge(); if(!b||currentChat==null){ toast('Open a chat first.'); return; } await b.archive_chat(currentChat,!aArch); if(!aArch) await b.new_chat(); toast(aArch?'Chat restored':'Chat archived'); currentChat=null; currentMsgs=[]; asrIdle(aArch?'Chat restored.':'Chat archived.'); loadChats(); };
+
+/* ---- APP-10 structured summary: title, summary, decisions, action items (who/what/when), open questions as
+   cards in the summary modal, plus 'Copy as email' / 'Copy as Teams message' (texts built by Python). ---- */
+function sumCards(box,n){
+  const list=(items,empty)=>items.length?'<ul style="margin:6px 0 0;padding-left:18px">'+items.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>':'<div style="color:var(--faint)">'+empty+'</div>';
+  const card=(head,body)=>'<div class="card sum-card" style="padding:12px 14px;margin-top:10px;border-radius:14px"><div class="lab" style="font-weight:700;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute)">'+head+'</div><div style="margin-top:4px">'+body+'</div></div>';
+  const acts=n.action_items.length?n.action_items.map(a=>'<div class="sum-act" style="display:flex;gap:10px;align-items:baseline;margin-top:6px"><span style="flex:1">'+esc(a.what)+'</span>'+(a.who?'<span class="mtag">'+esc(a.who)+'</span>':'')+(a.when?'<span class="mtag">'+esc(a.when)+'</span>':'')+'</div>').join(''):'<div style="color:var(--faint)">None recorded.</div>';
+  box.style.whiteSpace='normal';
+  box.innerHTML=(n.title?'<h4 id="sumTitle" style="margin:0;font-size:18px">'+esc(n.title)+'</h4>':'')
+    +card('Summary','<div style="white-space:pre-wrap">'+esc(n.summary||'—')+'</div>')
+    +card('Decisions',list(n.decisions,'None recorded.'))
+    +card('Action items',acts)
+    +card('Open questions',list(n.open_questions,'None.'))
+    +'<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button class="btn ghost" id="sumEmail">Copy as email</button><button class="btn ghost" id="sumTeams">Copy as Teams message</button></div>';
+  box.querySelector('#sumEmail').onclick=()=>copyText(n.email);
+  box.querySelector('#sumTeams').onclick=()=>copyText(n.teams);
+}

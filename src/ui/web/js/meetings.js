@@ -8,7 +8,7 @@ let sumBox=null;
 function sumOpen(){ let s=document.getElementById('sumModal'); if(!s){ s=document.createElement('div'); s.id='sumModal'; s.className='scrim'; s.innerHTML='<div class="onb" style="max-width:600px"><h3 style="font-size:24px">Meeting summary</h3><div id="sumText" style="white-space:pre-wrap;margin-top:12px;max-height:50vh;overflow:auto;font-size:14px;line-height:1.6"></div><div class="foot" style="justify-content:flex-end"><button class="btn ghost" id="sumClose">Close</button></div></div>'; document.body.append(s); s.onclick=e=>{ if(e.target.id==='sumModal') s.hidden=true; }; s.querySelector('#sumClose').onclick=()=>s.hidden=true; } s.hidden=false; sumBox=s.querySelector('#sumText'); sumBox.textContent='Writing the summary…'; }
 function sumClose(){ const s=document.getElementById('sumModal'); if(s) s.hidden=true; }
 function sumChunk(p){ if(!sumBox) return; if(sumBox.textContent==='Writing the summary…') sumBox.textContent=''; sumBox.textContent+=p; sumBox.scrollTop=sumBox.scrollHeight; }
-function sumDone(err){ if(sumBox&&err) sumBox.textContent=err; }
+function sumDone(err,notes){ if(!sumBox) return; if(err){ sumBox.textContent=err; return; } if(notes) sumCards(sumBox,notes); }
 async function runSummary(meeting){
   const b=bridge(); if(!b){ toast('Summaries run in the app.'); return; }
   sumOpen();

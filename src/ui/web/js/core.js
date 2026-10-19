@@ -52,7 +52,7 @@ window.dolmi={
   onAnswerChunk:(qid,p)=>asrChunk(qid,p),
   onAnswerDone:(qid,err)=>asrDone(qid,err),
   onSummaryChunk:(p)=>sumChunk(p),
-  onSummaryDone:(err)=>sumDone(err),
+  onSummaryDone:(err,notes)=>sumDone(err,notes),
   onInvisible:(on)=>{ setSw('#swInv',on); $('#stealth').classList.toggle('on',!!on); },
   onBar:(on)=>{ setSw('#swBar',on); setBarBtn(on); },
   onChatsChanged:(id)=>{ currentChat=id; if(aLoaded&&!aArch) loadChats(); },

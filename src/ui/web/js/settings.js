@@ -243,3 +243,15 @@ if($('#swShortcuts')) $('#swShortcuts').addEventListener('click',async()=>{ cons
   else if(name==='toggle_source') switchSource($('#srcChip').classList.contains('mic')?'speaker':'mic'); }; }
 async function shortcutsBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state(); setSw('#swShortcuts',s.shortcutsOn!==false); applyShortcuts(s.shortcuts||{},s.shortcutStatus||{},s.shortcutsOn); }catch(e){ console.error('shortcuts boot',e); } }
 document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) shortcutsBoot(); else window.addEventListener('pywebviewready',shortcutsBoot); });
+
+/* ---- APP-12 report a problem: a zip (log, settings without keys, version, OS, models) saved where the user picks.
+   Transcripts and vocabulary only when switched on here. Nothing is sent anywhere. ---- */
+{ const m=settingsMount('about.report');
+  if(m){ m.innerHTML=`<div class="set" data-kw="report problem bug issue log support zip help"><div><div class="lab">Report a problem</div><div class="ps" id="repStatus">Saves a zip with the log, your settings without any keys, the version and your system. Nothing is sent</div></div><button class="btn ghost" id="setReport">Save report…</button></div>
+    <div class="set" data-kw="report include transcripts meetings"><div><div class="lab">Include transcripts</div><div class="ps">Your saved meetings and summaries go into the zip too</div></div><button class="sw" data-sw id="swRepTranscripts"></button></div>
+    <div class="set" data-kw="report include vocabulary glossary"><div><div class="lab">Include vocabulary</div><div class="ps">Your spelling hints and glossary go into the zip too</div></div><button class="sw" data-sw id="swRepVocab"></button></div>`; wireNewSwitches(m); } }
+if($('#setReport')) $('#setReport').onclick=async()=>{ const b=bridge(); if(!b){ toast('Reports are saved in the app.'); return; }
+  const on=s=>$(s).classList.contains('on');
+  try{ const r=await b.report_problem(on('#swRepTranscripts'),on('#swRepVocab'));
+    if(r.ok){ $('#repStatus').textContent='Saved: '+r.path; toast('Report saved'); } else if(!r.cancelled) toast(r.message||'Could not save the report'); }
+  catch(e){ console.error('report_problem',e); toast('Could not save the report'); } };
