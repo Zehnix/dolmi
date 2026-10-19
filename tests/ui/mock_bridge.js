@@ -18,7 +18,7 @@
     audioDevice:'',audioSource:'speaker',micDevice:'',sourceLabel:{source:'speaker',device:'Default speaker'},
     speechModel:'auto',overlay:true,theme:'paper',listening:false,opacity:.88,font:22,warnSilence:true,barVisible:false,
     engine:'not loaded',engineState:'idle',dataFolder:'C:\\Users\\Test\\Documents\\Dolmi',version:'2.2.0',
-    checkUpdates:true,barLocked:false,shortcutsOn:true,speakerLabels:false,
+    checkUpdates:true,barLocked:false,shortcutsOn:true,speakerLabels:false,voiceReadout:false,
     shortcuts:{toggle_live:'ctrl+alt+shift+s',toggle_bar:'ctrl+alt+shift+b',toggle_source:'ctrl+alt+shift+m',toggle_lock:'ctrl+alt+shift+l'},
     shortcutStatus:{toggle_live:true,toggle_bar:true,toggle_source:true,toggle_lock:false},
     platform:{os:'win',words:WORDS}};

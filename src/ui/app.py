@@ -56,9 +56,10 @@ SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_tran
             "preload_models",                                  # APP-4
             "check_updates",                                   # APP-6
             "shortcuts_on",                                    # APP-7
-            "speaker_labels"}                                  # SPK-4
+            "speaker_labels",                                  # SPK-4
+            "voice_readout"}                                   # VOICE-1
 BOOL_SETTINGS = {"warn_silence", "preload_models", "check_updates", "shortcuts_on",
-                 "speaker_labels"}                       # on/off switches that must be true or false
+                 "speaker_labels", "voice_readout"}      # on/off switches that must be true or false
 SPEAKER_NAME_MAX = 40                                    # SPK-4: longest speaker name
 # APP-3 'nothing heard' warning: how quiet counts as silence, and how long before Dolmi says so
 HEARD_SILENCE_RMS = live_subs.SILENCE_RMS
@@ -378,6 +379,7 @@ class Api:
                     self._emit("onLine", ts[:5], a, b, meta)
                     self._ov("line", a, b)
                     self._cloud_submit(a, b, meta)
+                    self._voice_offer(b, meta)
                 elif kind == "final_update":
                     self._apply_line_update(a, b, meta)
                 elif kind == "draft":
@@ -502,6 +504,7 @@ class Api:
             "opacity": s.get("opacity", 0.88), "font": s.get("font", 22),
             "warnSilence": bool(s.get("warn_silence", True)),
             "speakerLabels": bool(s.get("speaker_labels", False)),
+            "voiceReadout": bool(s.get("voice_readout", False)),
             "barVisible": bool(self._overlay_visible), "barLocked": bool(s.get("bar_locked")),
             "shortcutsOn": bool(s.get("shortcuts_on", True)), "shortcuts": self._shortcut_map(),
             "shortcutStatus": dict(self._shortcut_status),
@@ -532,6 +535,8 @@ class Api:
         if key in ENGINE_SETTINGS and not self._session:
             self._drop_engine()              # next Start loads the newly chosen model/translator
             self._request_warm()
+        if key == "voice_readout" and not value:
+            self._voice_stop()
         if key == "shortcuts_on" and self._shortcuts is not None:
             self._start_shortcuts()
         if key == "preload_models":
@@ -684,6 +689,48 @@ class Api:
         """The running engine's glossary and Vocabulary rules (the same the local translator uses)."""
         e = self._engine
         return getattr(e, "glossary", ""), getattr(e, "vocab", None)
+
+    # ---- VOICE-1 prototype: read English finals aloud (off by default; does not mute the meeting audio)
+    def _voice_reader(self):
+        """The running reader, started on first use; None when no voice backend works here."""
+        r = getattr(self, "_voice", None)
+        if r is None:
+            try:
+                from voice import reader, tts
+                backend = tts.select_backend()
+            except ImportError as e:            # a build without the voice/ folder
+                print(f"voice: not in this build ({e})")
+                backend = None
+            if backend is None:
+                return None
+            r = self._voice = reader.Reader(backend).start()
+        return r
+
+    def _voice_offer(self, en, meta):
+        if not self._settings.get("voice_readout") or not en:
+            return
+        r = self._voice_reader()
+        if r:
+            r.offer(en, meta.get("end"))
+
+    def _voice_stop(self):
+        r, self._voice = getattr(self, "_voice", None), None
+        if r:
+            r.stop()
+
+    def voice_state(self):
+        """For Settings > Audio: is reading aloud on, and which voice would speak."""
+        r = self._voice_reader() if self._settings.get("voice_readout") else None
+        backend = r.backend if r else None
+        if backend is None:
+            try:
+                from voice import tts
+                backend = tts.select_backend()
+            except ImportError:
+                backend = None
+        return {"on": bool(self._settings.get("voice_readout")), "available": backend is not None,
+                "backend": getattr(backend, "name", ""), "spoken": r.spoken if r else 0,
+                "skipped": r.skipped if r else 0}
 
     def _cloud_submit(self, de, en, meta):
         """Send a final (never a draft) to the cloud translator, with the previous lines as context."""
