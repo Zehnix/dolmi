@@ -192,8 +192,10 @@ def copy_text(text):
         return False
 
 def open_path(path):
-    """Show a folder in Finder."""
-    subprocess.run(["open", str(path)], check=False)
+    """Show a folder in Finder or open a URL (raises OSError on failure, like Windows' os.startfile)."""
+    r = subprocess.run(["open", str(path)], check=False, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise OSError(f"open {path} failed ({r.returncode}): {(r.stderr or '').strip()}")
 
 def register_app():
     """Nothing to register: the Dock entry comes from Dolmi.app (or the Python framework from source)."""
