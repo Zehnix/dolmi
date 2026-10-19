@@ -109,7 +109,7 @@ class Api:
     def _pump(self):
         """Drain ui_q (fed by the worker and answer threads) and push to the page."""
         while True:
-            kind, a, b = self._ui_q.get()
+            kind, a, b, *rest = self._ui_q.get()
             try:
                 if kind in ("final", "draft") and not self._session:
                     continue                          # late result after Stop
