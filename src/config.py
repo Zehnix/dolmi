@@ -43,11 +43,20 @@ DEFAULTS = {
 }
 
 
+def _old_location():
+    """Where the user's files lived before they moved to CONFIG. A Mac source checkout used to run from
+    Mac/ (its own copy of the core), so that is where its files are; everywhere else it is ROOT."""
+    if dolmi_platform.OS == "mac" and (ROOT / "Mac").is_dir():
+        return ROOT / "Mac"
+    return ROOT
+
+
 def prepare():
     """Create the config folder; copy the user's files from the old location once; seed examples."""
     CONFIG.mkdir(parents=True, exist_ok=True)
+    legacy = _old_location()
     for name in USER_FILES:
-        new, old = CONFIG / name, ROOT / name
+        new, old = CONFIG / name, legacy / name
         if not new.exists() and old.exists():
             shutil.copy2(old, new)                 # the original stays where it was
     for name in ("vocabulary", "glossary"):
