@@ -33,7 +33,7 @@ def test_worker_segments_on_pause(tmp_path):
     time.sleep(0.3); stop.set()
     finals = []
     while not uq.empty():
-        k, de, en = uq.get()
+        k, de, en, *_ = uq.get()
         if k == "final": finals.append(en)
     assert finals == ["Sentence"] and tr.n == 1
 
@@ -189,8 +189,8 @@ def test_cloud_captions_send_whole_sentences_and_parse_gemini():
     sent, drafts = [], []
     class Fake:
         cloud, DRAFT_EVERY = True, 0.5
-        def submit(self, audio, start, end, ui_q, tr): sent.append(len(audio) / m.SR)
-        def draft(self, audio, ui_q): drafts.append(len(audio) / m.SR)
+        def submit(self, audio, start, end, ui_q, tr, meta=None): sent.append(len(audio) / m.SR)
+        def draft(self, audio, ui_q, meta=None): drafts.append(len(audio) / m.SR)
     audio_q, ui_q, stop = queue.Queue(), queue.Queue(), threading.Event()
     speaking = threading.Event(); speaking.set()
     def detect(_): return 0.0 if speaking.is_set() else None
@@ -233,7 +233,7 @@ def test_cloud_finals_show_in_spoken_order_even_when_replies_arrive_out_of_order
     for _ in range(4):
         threading.Thread(target=serve, daemon=True).start()
     eng._utterance = eng._shown = 0; eng._pending = {}; eng._drafting = False; eng._last_error = 0.0
-    eng.context, eng.provider = "", "gemini"
+    eng.context, eng.provider, eng.language = "", "gemini", "de"
     def slow_first(audio):
         if audio[0] == 1:
             time.sleep(0.4)
@@ -241,12 +241,12 @@ def test_cloud_finals_show_in_spoken_order_even_when_replies_arrive_out_of_order
     eng.recognize = slow_first
     class Tr:
         rows = []
-        def add(self, s, e, heard, sub): self.rows.append(heard)
+        def add(self, s, e, heard, sub, meta=None): self.rows.append(heard)
     ui_q, tr = queue.Queue(), Tr()
     for n in (1, 2, 3):
         eng.submit(np.full(16000, n, np.float32), 0, 1, ui_q, tr)
     time.sleep(0.8)
-    finals = [a for kind, a, b in list(ui_q.queue) if kind == "final"]
+    finals = [a for kind, a, b, *_ in list(ui_q.queue) if kind == "final"]
     assert finals == ["Satz 1", "Satz 2", "Satz 3"] and tr.rows == finals
 
 def test_english_speech_detected_when_another_language_is_set():

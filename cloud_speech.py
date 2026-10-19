@@ -17,6 +17,7 @@ Kept fast on purpose:
 import base64
 import http.client
 import io
+import itertools
 import json
 import ssl
 import threading
@@ -84,6 +85,7 @@ class CloudEngine(live_subs.Engine):
     speech recognition (and for Gemini the translation) happens in the cloud."""
     cloud = True
     DRAFT_EVERY = DRAFT_EVERY
+    line_ids = itertools.count(1)   # final caption ids; live_subs.worker starts a new count per session
 
     def __init__(self, provider, api_key, language="de", model=""):
         if provider not in PROVIDERS:
@@ -131,7 +133,7 @@ class CloudEngine(live_subs.Engine):
                 print(f"cloud captions: {e}")
 
     # ---- the worker hands audio here (from live_subs.worker; never blocks it)
-    def draft(self, audio, ui_q):
+    def draft(self, audio, ui_q, meta=None):
         """Live line for the sentence still being spoken; skipped while the previous draft is in flight."""
         with self._lock:
             if self._drafting >= DRAFTS_IN_FLIGHT:
@@ -139,16 +141,17 @@ class CloudEngine(live_subs.Engine):
             self._drafting += 1
             self._draft_seq += 1
             uid, seq = self._utterance + 1, self._draft_seq
-        self._jobs.put((self._run_draft, (audio.copy(), uid, seq, ui_q)))
+        self._jobs.put((self._run_draft, (audio.copy(), uid, seq, ui_q, meta)))
 
-    def submit(self, audio, start, end, ui_q, transcript):
-        """A finished sentence: recognized in parallel with others, shown in the order spoken."""
+    def submit(self, audio, start, end, ui_q, transcript, meta=None):
+        """A finished sentence: recognized in parallel with others, shown in the order spoken.
+        meta carries the speaker fields (see live_subs.UI_Q_CONTRACT)."""
         with self._lock:
             self._utterance += 1
             uid = self._utterance
-        self._jobs.put((self._run_final, (audio.copy(), uid, start, end, ui_q, transcript)))
+        self._jobs.put((self._run_final, (audio.copy(), uid, start, end, ui_q, transcript, meta)))
 
-    def _run_draft(self, audio, uid, seq, ui_q):
+    def _run_draft(self, audio, uid, seq, ui_q, meta=None):
         try:
             heard, subtitle = self.recognize(audio)
         except Exception as e:
@@ -158,11 +161,11 @@ class CloudEngine(live_subs.Engine):
             self._drafting -= 1
             # only for the sentence still being spoken, and never older than a draft already shown
             show = uid == self._utterance + 1 and uid > self._shown and seq > self._draft_shown
-            if show and heard and not live_subs.is_junk(heard):
+            if show and heard and not live_subs.is_junk(heard, lang=self.language):
                 self._draft_shown = seq
-                ui_q.put(("draft", heard, subtitle))
+                ui_q.put(("draft", heard, subtitle, {**(meta or {}), "emitted": time.time()}))
 
-    def _run_final(self, audio, uid, start, end, ui_q, tr):
+    def _run_final(self, audio, uid, start, end, ui_q, tr, meta=None):
         try:
             result = self.recognize(audio)
         except Exception as e:
@@ -172,16 +175,19 @@ class CloudEngine(live_subs.Engine):
                 ui_q.put(("error", f"{PROVIDERS[self.provider]} captions failed: {e}", ""))
             print(f"cloud captions: {e}")
         with self._lock:
-            self._pending[uid] = (result, start, end)
+            self._pending[uid] = (result, start, end, meta or {})
             while self._shown + 1 in self._pending:          # show finished sentences in order
                 self._shown += 1
-                (heard, subtitle), s, e = self._pending.pop(self._shown)
-                if heard and not live_subs.is_junk(heard):
-                    ui_q.put(("final", heard, subtitle))
-                    tr.add(s, e, heard, subtitle)
+                (heard, subtitle), s, e, m = self._pending.pop(self._shown)
+                if heard and not live_subs.is_junk(heard, lang=self.language):
+                    line = {"id": next(self.line_ids), "start": s, "end": e, "emitted": time.time(),
+                            "lang": self.language, "speaker": m.get("speaker"),
+                            "speaker_conf": m.get("speaker_conf")}
+                    ui_q.put(("final", heard, subtitle, line))
+                    tr.add(s, e, heard, subtitle, meta=line)
                     self.context = heard
                 if self._shown == self._utterance:           # nothing newer is being spoken
-                    ui_q.put(("draft", "", ""))
+                    ui_q.put(("draft", "", "", {}))
 
     # ---- one piece of speech: audio -> (what was said, its translation)
     def recognize(self, audio):
