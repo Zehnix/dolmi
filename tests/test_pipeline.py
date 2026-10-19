@@ -352,6 +352,17 @@ def test_real_sentences_about_subtitles_are_kept():
         assert m.junk_reason(line, lang="de") == "hallucination", line
 
 
+def test_credit_ghosts_without_a_credit_word_are_junk():
+    for line in ("Untertitelung aufgrund der Amara.org-Community", "Untertitelung durch die Amara.org-Community",
+                 "Untertitelung des Bayerischen Rundfunks", "Untertitel des Bayerischen Rundfunks, 2018",
+                 "Untertitel Stephanie Geiges", "Sous-titres realises par la communaute d'Amara.org",
+                 "Sous-titres fait par la communauté d'Amara.org", "Untertitel. ZDF 2020"):
+        assert m.junk_reason(line, energy=0.1, lang="de") == "hallucination", line
+    for line in ("Untertitel vom Meeting speichern.", "Untertitel des Kunden sind falsch.",
+                 "Untertitel funktionieren jetzt.", "Untertitel für alle, bitte."):
+        assert m.junk_reason(line, energy=0.1, lang="de") is None, line
+
+
 def test_other_scripts_are_kept_when_auto_detect_hears_them():
     for line, lang in (("שלום לכולם, נתחיל את הפגישה", "he"), ("Добар дан свима", "sr"),
                        ("สวัสดีทุกคน", "th"), ("Բարեւ բոլորին", "hy")):

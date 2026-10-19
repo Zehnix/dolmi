@@ -260,9 +260,16 @@ _HALLUCINATION = re.compile("|".join(
     for h in sorted(HALLUCINATIONS + BROADCASTERS, key=len, reverse=True)) + r"|(?<!\d)(?:19|20)\d\d(?!\d)", re.I)
 # A subtitle credit ("Untertitel von ...", "Sous-titres réalisés par ...") is a ghost at any length, but
 # people in a subtitle app also say "Untertitel bitte auf Englisch": only the credit shape counts.
+# That is a credit word right after it, Amara or a broadcaster anywhere in the line ("Untertitelung
+# aufgrund der Amara.org-Community", "Untertitel des Bayerischen Rundfunks"), or just a name
+# ("Untertitel Stephanie Geiges").
+_CREDIT_HEAD = r"^(?:untertitel\w*|sous-titr\w*)"
 _CREDIT = re.compile(
-    r"^(?:amara\.org|(?:untertitel\w*|sous-titr\w*)[\s,]*(?::|(?:von|vom|by|par)\b|im\s+auftrag|réalis|société"
-    r"|(?:des|der|de\s+la|du)\s+(?:amara|" + "|".join(map(re.escape, BROADCASTERS)) + r")\b))", re.I)
+    r"^amara\.org|" + _CREDIT_HEAD + r"[\s,]*(?::|(?:von|by|par)\b|(?:faits?|r[ée]alis\w*)\s+par\b"
+    r"|im\s+auftrag|soci[ée]t[ée])"
+    r"|" + _CREDIT_HEAD + rf"(?![{_W}]).*?(?<![{_W}])(?:amara|\w*rundfunk\w*|"
+    + "|".join(map(re.escape, BROADCASTERS)) + rf")(?![{_W}])", re.I)
+_CREDIT_NAME = re.compile(r"^(?:Untertitel\w*|Sous-titr\w*)\s+(?:[A-ZÄÖÜÉ][a-zäöüßéèàç'-]+\s*){2,3}[.!]?$")
 
 def _letters(t: str) -> int:
     return sum(c.isalnum() for c in t)
@@ -280,7 +287,8 @@ def junk_reason(t: str, energy=None, lang=None):
     domains = [m.group() for m in _DOMAIN.finditer(t) if not any(a <= m.start() < b for a, b in links)]
     if sum(_letters(t[a:b]) for a, b in links) + sum(map(_letters, domains)) >= 0.5 * letters:
         return "url"
-    if _CREDIT.match(t.lstrip(" \"'([-–—.,:")):
+    head = t.strip().lstrip("\"'([-–—.,: ")
+    if _CREDIT.match(head) or _CREDIT_NAME.match(head):
         return "hallucination"
     covered = sum(_letters(m.group()) for m in _HALLUCINATION.finditer(t))
     if covered >= 0.6 * letters:
