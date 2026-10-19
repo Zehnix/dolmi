@@ -8,6 +8,7 @@ that user on that computer can read them; settings.json never holds a key in pla
 import base64, getpass, hashlib, hmac, json, os, re
 
 import dolmi_platform
+import netgate
 
 PROVIDERS = {
     "claude": {"label": "Claude (Anthropic)", "model": "claude-haiku-4-5",
@@ -136,6 +137,13 @@ def decrypt_key(stored):
 class AssistantError(Exception):
     """A problem worth showing the user as-is (bad key, no credit, network)."""
 
+def _gate(purpose):
+    """STR-7: a refused call shows the local-only message like any other Assistant error."""
+    try:
+        netgate.check(purpose)
+    except netgate.LocalOnly as e:
+        raise AssistantError(str(e)) from None
+
 def build_system(context="", length="short"):
     system = f"{SYSTEM}\n{LENGTHS.get(length, LENGTHS['short'])}"
     if context.strip():
@@ -154,6 +162,7 @@ def stream_answer(provider, model, api_key, question, context="", history=(), le
         content = "Said in the meeting just before:\n" + "\n".join(meeting) + f"\n\nQuestion: {question}"
     messages = list(history)[-HISTORY_MESSAGES:] + [{"role": "user", "content": content}]
     system = build_system(context, length)
+    _gate("assistant")
     yield from _sender(provider)(model, api_key, system, messages)
 
 def stream_summary(provider, model, api_key, transcript, context=""):
@@ -166,6 +175,7 @@ def stream_summary(provider, model, api_key, transcript, context=""):
     if context.strip():
         system += f"\n\nBackground the user saved about themselves and the project:\n{context.strip()}"
     messages = [{"role": "user", "content": f"Meeting transcript:\n\n{transcript}"}]
+    _gate("assistant")
     yield from _sender(provider)(model, api_key, system, messages, max_tokens=2048)
 
 # Shown in Settings → Assistant → Model before a key is saved (with a key, the provider's own list is used)
@@ -268,6 +278,7 @@ def list_models(provider, api_key=""):
     the others need the key. Raises AssistantError when the list can't be fetched."""
     p = PROVIDERS[provider]
     try:
+        netgate.check("models")   # STR-7
         if provider == "cloudflare":
             import json, urllib.error, urllib.request
             account, token = _cloudflare(api_key)

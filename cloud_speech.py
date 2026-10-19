@@ -29,6 +29,7 @@ import numpy as np
 
 import live_subs
 import models
+import netgate
 
 PROVIDERS = {"gemini": "Gemini", "openai": "OpenAI", "cloudflare": "Cloudflare Workers AI"}
 GEMINI_MODEL = "gemini-3.1-flash-lite"           # ~1 s with minimal thinking; 3.8 Flash takes ~2 s
@@ -40,6 +41,13 @@ WORKERS = 4           # parallel requests (finals are still shown in the order s
 _ERROR_EVERY = 30.0   # s between repeated error toasts
 FINAL_RETRIES = 1     # a failed request for a finished sentence is sent once more before the line is dropped
 RETRY_DELAY = 0.3     # s before that retry
+PROBE_EVERY = 30.0    # STR-9: s between tries of the cloud while this PC captions instead
+
+
+def is_auth_error(error):
+    """401/403: a wrong or expired key. Retrying will not help; the user has to check the key."""
+    text = str(error)
+    return "HTTP 401" in text or "HTTP 403" in text
 
 
 def wav_bytes(audio, rate=live_subs.SR):
@@ -57,8 +65,9 @@ def wav_bytes(audio, rate=live_subs.SR):
 _conns = threading.local()   # one kept-alive HTTPS connection per host per thread: no TLS handshake per request
 
 
-def _post_json(url, payload, headers, timeout=30):
+def _post_json(url, payload, headers, timeout=30, purpose="captions"):
     host, _, path = url.removeprefix("https://").partition("/")
+    netgate.check(purpose, host)   # STR-7
     body = json.dumps(payload).encode()
     headers = {"Content-Type": "application/json", **headers}
     pool = _conns.__dict__.setdefault("pool", {})
@@ -162,6 +171,11 @@ class CloudEngine(live_subs.Engine):
     DRAFT_EVERY = DRAFT_EVERY
     line_ids = itertools.count(1)   # final caption ids; live_subs.worker starts a new count per session
     on_drop = None                  # live_subs.worker sets its drop(reason, start, end, text) here
+    fallback_factory = None         # STR-9: () -> a local live_subs.Engine; None = no failover (default)
+    _fallback = None
+    _local_since = None             # STR-9: when this PC took over (None = the cloud is captioning)
+    _last_probe = 0.0
+    _fb_lock = threading.Lock()
 
     def __init__(self, provider, api_key, language="de", model=""):
         if provider not in PROVIDERS:
@@ -247,20 +261,74 @@ class CloudEngine(live_subs.Engine):
         else:
             print(f"Dropped a cloud line ({reason}): {ascii(text[:80])}")
 
-    def _run_final(self, audio, uid, start, end, ui_q, tr, meta=None):
-        result, failed = ("", ""), None
+    def _recognize_cloud(self, audio):
+        """(result, error): the cloud's answer after SEG-11's one retry (none for a bad key / local-only)."""
+        failed = None
         for attempt in range(1 + FINAL_RETRIES):   # a dropped connection or a busy server: try again once
             try:
-                result, failed = self.recognize(audio), None
-                break
+                return self.recognize(audio), None
             except Exception as e:
                 failed = e
                 print(f"cloud captions (attempt {attempt + 1}): {e}")
+                if is_auth_error(e) or isinstance(e, netgate.LocalOnly):
+                    break
                 if attempt < FINAL_RETRIES:
                     time.sleep(RETRY_DELAY)
+        return ("", ""), failed
+
+    def _local(self, audio):
+        """STR-9: this PC's Whisper + translator for one line; None when there is no failover."""
+        if self.fallback_factory is None:
+            return None
+        with self._fb_lock:   # not self._lock: loading the model takes seconds, ordering must not wait
+            if self._fallback is None:
+                try:
+                    self._fallback = self.fallback_factory()
+                except Exception as e:
+                    print(f"cloud failover: local model unavailable ({e})")
+                    self.fallback_factory = None
+                    return None
+            eng = self._fallback
+        heard, lang = eng.transcribe(audio)
+        return heard, (eng.translate(heard, lang) if heard else "")
+
+    def _run_final(self, audio, uid, start, end, ui_q, tr, meta=None):
+        now = time.time()
+        local_mode = self._local_since is not None and self.fallback_factory is not None
+        result, failed, source = ("", ""), None, None
+        if local_mode and now - self._last_probe < PROBE_EVERY:
+            local = self._local(audio)
+            if local is not None:
+                result, source = local, "local"
+        if source is None:
+            if local_mode:
+                self._last_probe = now                      # this line is the probe
+            result, failed = self._recognize_cloud(audio)
+            if failed is None and local_mode:
+                self._local_since = None
+                print("cloud failover: the cloud answers again")
+                ui_q.put(("cloud_status", "cloud", ""))
+            elif failed is not None and not is_auth_error(failed):
+                try:
+                    local = self._local(audio)
+                except Exception as e:
+                    local = None
+                    print(f"cloud failover: local captioning failed too ({e})")
+                if local is not None:                       # no line lost
+                    print(f"cloud failover: line {uid} captioned on this PC ({failed})")
+                    if self._local_since is None:
+                        self._local_since = self._last_probe = time.time()
+                        ui_q.put(("cloud_status", "local", ""))
+                    result, failed, source = local, None, "local"
         if failed is not None and time.time() - self._last_error > _ERROR_EVERY:
             self._last_error = time.time()
-            ui_q.put(("error", f"{PROVIDERS[self.provider]} captions failed: {failed}", ""))
+            msg = (f"{PROVIDERS[self.provider]} did not accept your API key: check your key in Settings."
+                   if is_auth_error(failed) else
+                   str(failed) if isinstance(failed, netgate.LocalOnly) else
+                   f"{PROVIDERS[self.provider]} captions failed: {failed}")
+            ui_q.put(("error", msg, ""))
+        if source:
+            meta = {**(meta or {}), "asr_source": source}
         energy = live_subs.peak_rms(audio)
         with self._lock:
             self._pending[uid] = (result, start, end, dict(meta or {}), failed, energy)

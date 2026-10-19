@@ -43,6 +43,9 @@ DEFAULTS = {
     # New keys: each domain adds its own on ONE commented line (ticket id first), and adds the same keys
     # to SETTABLE in src/ui/app.py if the page may change them, e.g.
     #   "my_key": 1,                              # APP-99: what it does
+    "unsure_marks": False,                        # STR-8: '?' on lines Whisper was unsure about (off until calibrated)
+    "cloud_failover": False,                      # STR-9: cloud captions fall back to this PC's Whisper
+    "local_only": False,                          # STR-7: no outbound network at all (netgate)
     "bar_time": False,                            # LIVE-5: speech-start time on subtitle bar lines
     "warn_silence": True,                         # APP-3: 'Dolmi hears nothing' warning while live
     "vocab_profile": "",                          # VOC-11: spelling-hint profile for meetings ('' = every term)

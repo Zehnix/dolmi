@@ -106,6 +106,9 @@
     ['audio','#swCaptureBoth','click','set_setting','capture_both'],                    // SPK-5
     ['appearance','#swTextSize','click','set_setting','ui_text_size'],                  // APP-14 (large)
     ['appearance','#swTextSize','click','set_setting','ui_text_size'],                  // and back
+    ['privacy','#swLocalOnly','click','set_setting','local_only'],                      // STR-7
+    ['captions','#swUnsure','click','set_setting','unsure_marks'],                      // STR-8
+    ['captions','#swFailover','click','set_setting','cloud_failover'],                  // STR-9
   ];
   window.__uiControls=CONTROLS;   // other checks (new features) push rows here before run() starts
   async function use(el,how){

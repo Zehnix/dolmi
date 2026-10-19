@@ -113,6 +113,7 @@ input,textarea,select{font:inherit;color:inherit}
 .pair .de{color:var(--mute);font-size:15px;line-height:1.5}
 .pair .en{font-family:var(--display);font-weight:500;font-size:18px;line-height:1.42}
 .pair .ts{display:block;font-family:var(--mono);font-size:11px;color:var(--faint);margin-bottom:4px}
+.pair.unsure .c:first-child .ts::after{content:" ?";color:var(--mute);font-weight:600}   /* STR-8: Dolmi is not sure it heard this line right */
 .pair.cur .c{background:var(--ac-soft)}
 .pair.cur .de{color:var(--ink)}
 .pair.cur .en{color:var(--ink)}

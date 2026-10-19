@@ -30,6 +30,7 @@ import streaming
 import clarify
 import cloud_speech
 import cloud_translate
+import netgate
 import dolmi_platform
 import updates
 
@@ -63,11 +64,15 @@ SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_tran
             "bar_time",                                        # LIVE-5
             "capture_both",                                    # SPK-5
             "voice_readout",                                   # VOICE-1
-            "ui_text_size"}                                    # APP-14
+            "ui_text_size",                                    # APP-14
+            "local_only",                                      # STR-7
+            "unsure_marks",                                    # STR-8
+            "cloud_failover"}                                  # STR-9
 UI_TEXT_SIZES = ("normal", "large")                      # APP-14: Appearance > Larger UI text
 BOOL_SETTINGS = {"warn_silence", "preload_models", "check_updates", "shortcuts_on",
                  "speaker_labels", "clarify_queue", "bar_time",
-                 "capture_both", "voice_readout"}        # on/off switches that must be true or false
+                 "capture_both", "voice_readout", "local_only",
+                 "unsure_marks", "cloud_failover"}        # on/off switches that must be true or false
 SPEAKER_NAME_MAX = 40                                    # SPK-4: longest speaker name
 # APP-3 'nothing heard' warning: how quiet counts as silence, and how long before Dolmi says so
 HEARD_SILENCE_RMS = live_subs.SILENCE_RMS
@@ -328,6 +333,7 @@ class Api:
         if not _spoken_language_ok(self._settings["language"]):
             self._settings["language"] = "de"
         self._settings_lock = threading.Lock()
+        netgate.set_local_only(self._settings.get("local_only", False))   # STR-7
         self._data = config.data_folder(self._settings)
         self._data.mkdir(parents=True, exist_ok=True)
         self._db_path = self._data / "dolmi.db"
@@ -424,6 +430,8 @@ class Api:
                     self._ov("line", a, b, ts[:5] if self._settings.get("bar_time") else "")
                     self._cloud_submit(a, b, meta)
                     self._voice_offer(b, meta)
+                elif kind == "cloud_status":                    # STR-9: "local" while the cloud is down
+                    self._emit("onCloudStatus", a)
                 elif kind == "final_update":
                     self._apply_line_update(a, b, meta)
                 elif kind == "draft":
@@ -576,6 +584,8 @@ class Api:
             "shortcutStatus": dict(self._shortcut_status),
             "engine": self._engine_label(), "engineState": self._engine_state,
             "preloadModels": bool(s.get("preload_models", True)),
+            "localOnly": netgate.is_local_only(), "unsureMarks": bool(s.get("unsure_marks")),
+            "cloudFailover": bool(s.get("cloud_failover")),
             "checkUpdates": bool(s.get("check_updates", True)), "update": self._update, "dataFolder": str(self._data), "version": VERSION,
             "platform": {"os": dolmi_platform.OS, "words": dolmi_platform.WORDS},
         }
@@ -594,6 +604,10 @@ class Api:
         with self._settings_lock:
             self._settings[key] = value
             config.save_settings(self._settings)
+        if key == "unsure_marks" and self._engine is not None:
+            self._engine.unsure_marks = bool(value)
+        if key == "local_only":
+            netgate.set_local_only(value)
         if key == "keep_days":
             threading.Thread(target=self._purge_old, daemon=True).start()
         if key == "mic_device" and self._session and self._source() == "mic" and getattr(self, "_cap_stop", None):
@@ -1198,10 +1212,15 @@ class Api:
     def _new_engine(self):
         """The engine the next Start uses: Whisper + translator here, or a cloud speech provider."""
         source = self._settings.get("speech_source", "local")
+        s = self._settings
         if source == "local":
-            return live_subs.Engine(self._settings["model"], self._settings["device"], self._settings["language"])
-        # captions use the provider's fast speech model, not the Assistant's model
-        return cloud_speech.CloudEngine(source, self._key_for(source), self._settings["language"])
+            eng = live_subs.Engine(s["model"], s["device"], s["language"])
+        else:   # captions use the provider's fast speech model, not the Assistant's model
+            eng = cloud_speech.CloudEngine(source, self._key_for(source), s["language"])
+            if s.get("cloud_failover"):   # STR-9: a failed line is captioned on this PC (model loads on first need)
+                eng.fallback_factory = lambda: live_subs.Engine(s["model"], s["device"], s["language"])
+        eng.unsure_marks = bool(s.get("unsure_marks"))   # STR-8
+        return eng
 
     def _set_engine_state(self, state, label=None):
         """idle | loading | ready | missing; the page says 'Ready' only for "ready"."""

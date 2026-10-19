@@ -319,3 +319,48 @@ class TraceWriter:
                     f.write(json.dumps(row) + "\n")
         except OSError as e:
             print(f"Trace not written ({e})")
+
+
+# ---- STR-12: adaptive endpointing (idea from LiveTranslate vad_processor.py, MIT; own code)
+class AdaptivePause:
+    """End-of-sentence pause learned from this speaker's own pauses: P75 of the recent pauses x 1.2,
+    clamped to [low, high]; as the utterance grows towards the cap, a shorter pause is accepted."""
+
+    def __init__(self, default=0.6, low=0.35, high=1.0, keep=30, min_pause=0.15, min_samples=5):
+        self.default, self.low, self.high = default, low, high
+        self.min_pause, self.min_samples = min_pause, min_samples
+        self.pauses = []
+        self.keep = keep
+
+    def observe(self, pause):
+        """A pause inside speech (speech resumed after `pause` s)."""
+        if pause >= self.min_pause:
+            self.pauses = (self.pauses + [pause])[-self.keep:]
+
+    def base(self):
+        if len(self.pauses) < self.min_samples:
+            return self.default
+        p = sorted(self.pauses)
+        p75 = p[min(len(p) - 1, int(round(0.75 * (len(p) - 1))))]
+        return min(self.high, max(self.low, p75 * 1.2))
+
+    def limit(self, duration, cap):
+        """The pause that ends an utterance `duration` s long (cap = the length cap)."""
+        grow = min(1.0, max(0.0, duration / cap)) if cap else 0.0
+        return max(self.low, self.base() * (1.0 - 0.4 * grow))
+
+
+def deepest_valley(levels, start=0, smooth=3):
+    """Index of the lowest point of a moving average over `levels` (per-piece speech confidence or
+    loudness), searched from `start`; None when there is nothing to search."""
+    n = len(levels)
+    if n - start < 1:
+        return None
+    half = smooth // 2
+    best, where = None, None
+    for i in range(start, n):
+        window = levels[max(0, i - half):i + half + 1]
+        v = sum(window) / len(window)
+        if best is None or v < best:
+            best, where = v, i
+    return where
