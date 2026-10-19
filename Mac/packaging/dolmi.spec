@@ -9,7 +9,7 @@ VERSION = (ROOT / "VERSION").read_text().strip()
 
 # the program itself, as source, in Contents/Resources/app (see launcher.py): the shared files from
 # the repo root, plus the Mac-only audio helper from Mac/audio (into app/audio)
-APP_FILES = ["assistant.py", "cloud_speech.py", "inbox.py", "live_subs.py", "models.py", "speakers.py", "VERSION",
+APP_FILES = ["assistant.py", "cloud_speech.py", "inbox.py", "live_subs.py", "models.py", "speakers.py", "streaming.py", "VERSION",
              "vocabulary.example.txt", "glossary.example.txt", "LICENSE", "THIRD-PARTY-NOTICES.md",
              "PRIVACY.md", "assets/dolmi.png"]
 APP_DIRS = ["src", "dolmi_platform"]          # copied whole (web UI: src/ui/web incl. css/ and js/)
