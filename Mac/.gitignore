@@ -1,38 +1,4 @@
-# Python
-venv/
-__pycache__/
-*.pyc
-
-# Local secrets and config (never commit)
-.env
-
-# Personal data — kept out of the repo
-vocabulary.txt
-glossary.txt
-settings.json
-transcripts/
-dolmi.db
-dolmi.log
-# real meeting output (private conversations) — never publish
-meeting_*
-summary_*
-saved_*
-assistant_*
-
-# Downloaded models and build output
-models/
-dist/
-
-# Stray git temp files
-_to_delete/
-
-# installer build cache (downloaded Python runtime)
-installer/.cache/
-
-# design plans and UI demos — kept local, not published
-design/
-
-# macOS build output
+# macOS-only build output (the rest is covered by the root .gitignore)
 build/
 audio/dolmi-audio
 .DS_Store

@@ -1,6 +1,6 @@
 # Dolmi privacy policy
 
-Dolmi has no account, no telemetry and no analytics. **Speech recognition and translation run on your PC. Your audio never leaves it.** That includes the microphone, when you switch the audio source to Microphone for in-person meetings: it is only recorded while you are captioning, and stays on this device unless you turn on cloud captions (below).
+Dolmi has no account, no telemetry and no analytics. **Speech recognition and translation run on your computer (PC or Mac). Your audio never leaves it.** That includes the microphone, when you switch the audio source to Microphone for in-person meetings: it is only recorded while you are captioning, and stays on this device unless you turn on cloud captions (below).
 
 Dolmi only uses the network in the cases below. You start each one yourself.
 
@@ -21,24 +21,24 @@ If you set *Settings → Captions by* to Gemini, OpenAI or Cloudflare, Dolmi sen
 
 ## 2. Speech and translation models — downloaded from Hugging Face
 
-When you press **Download** in *Settings → This PC & speech models*, or agree to download when Start needs a model you don't have yet, Dolmi downloads its models from [Hugging Face](https://huggingface.co): the Whisper speech model and the Opus-MT translator for your language. This happens once per model. The download sends no personal data, only what any download sends, such as your IP address.
+When you press **Download** in *Settings → This PC & speech models* (*This Mac & speech models* on a Mac), or agree to download when Start needs a model you don't have yet, Dolmi downloads its models from [Hugging Face](https://huggingface.co): the Whisper speech model and the Opus-MT translator for your language. This happens once per model. The download sends no personal data, only what any download sends, such as your IP address.
 
-## 3. GPU add-on (optional) — downloaded from PyPI
+## 3. GPU add-on (optional, Windows) — downloaded from PyPI
 
 If you tick **GPU speech recognition** in the installer, it downloads NVIDIA's CUDA libraries from [PyPI](https://pypi.org) once, during setup.
 
-## What stays on your PC
+## What stays on your computer
 
-| What | Where |
-|---|---|
-| Settings, API keys (encrypted with Windows DPAPI), vocabulary, glossary | `%APPDATA%\Dolmi` |
-| Transcripts, summaries, saved lines, Assistant chats | `Documents\Dolmi` (change it in Settings) |
-| Log file | `%LOCALAPPDATA%\Dolmi\dolmi.log` |
-| Speech and translation models | `%USERPROFILE%\.cache\huggingface` |
+| What | Windows | macOS |
+|---|---|---|
+| Settings, API keys, vocabulary, glossary | `%APPDATA%\Dolmi` (keys encrypted with Windows DPAPI) | `~/Library/Application Support/Dolmi` (keys encrypted with a secret in your login Keychain) |
+| Transcripts, summaries, saved lines, Assistant chats | `Documents\Dolmi` (change it in Settings) | `~/Documents/Dolmi` (change it in Settings) |
+| Log file | `%LOCALAPPDATA%\Dolmi\dolmi.log` | `~/Library/Logs/Dolmi/dolmi.log` |
+| Speech and translation models | `%USERPROFILE%\.cache\huggingface` | `~/.cache/huggingface` |
 
 - To stop saving, turn off **Save transcripts** in Settings.
 - To delete old files and chats automatically, use **Delete after**.
-- Uninstalling Dolmi keeps your data. Delete the folders above to remove it.
+- Uninstalling Dolmi (or moving Dolmi.app to the Bin) keeps your data. Delete the folders above to remove it.
 
 **Recording other people:** transcribing a meeting processes the other participants' personal data. Tell them you are using live transcription. *(This is not legal advice.)*
 

@@ -1,11 +1,14 @@
-"""Dolmi model catalog: what each model does, what it needs, and whether this PC has/can run it."""
-import ctypes, os, sys, types
+"""Dolmi model catalog: what each model does, what it needs, and whether this computer has/can run it."""
+import sys, types
 from dataclasses import dataclass
 from pathlib import Path
 
+from dolmi_platform import MODEL_NOTES, WORDS, auto_speech, gpu_ready, system_info  # noqa: F401  (models.system_info etc.)
+
 # faster-whisper imports PyAV (FFmpeg) at startup, but only uses it to decode audio *files*;
-# Dolmi passes raw samples. Smart App Control can block PyAV's unsigned FFmpeg DLLs at any time
-# (it blocked libvpx here on 2026-10-05), so fall back to an empty stand-in instead of crashing.
+# Dolmi passes raw samples. If PyAV's FFmpeg libraries can't load (Windows Smart App Control can block
+# its unsigned DLLs at any time; it blocked libvpx here on 2026-10-05), fall back to an empty stand-in
+# instead of crashing.
 try:
     import av  # noqa: F401
 except ImportError as e:
@@ -21,7 +24,7 @@ class Model:
     size_mb: int        # download size from Hugging Face
     ram_gb: int         # free RAM needed while running
     min_cores: int      # for live use on CPU
-    gpu: str            # "no" | "optional" | "recommended" | "required"
+    gpu: str            # "no" | "optional" | "recommended" | "required" (NVIDIA; Macs run on the CPU)
     vram_gb: int
     accuracy: int       # 1-5, relative, German speech
     speed: int          # 1-5, relative, on CPU
@@ -31,18 +34,18 @@ SPEECH, TRANSLATE = "Speech recognition (speech → text, 99 languages)", "Trans
 
 CATALOG = [
     Model("tiny", "Whisper Tiny", "Systran/faster-whisper-tiny", SPEECH, 78, 1, 2, "no", 0, 1, 5,
-          "Fastest, for very weak PCs. Makes many mistakes in German."),
+          MODEL_NOTES["tiny"]),
     Model("base", "Whisper Base", "Systran/faster-whisper-base", SPEECH, 148, 1, 2, "no", 0, 2, 4,
           "Fast and light. Noticeably less accurate than Small."),
     Model("small", "Whisper Small", "Systran/faster-whisper-small", SPEECH, 486, 2, 4, "no", 0, 3, 3,
-          "Recommended for laptops without NVIDIA GPU. Good balance of speed and accuracy."),
+          MODEL_NOTES["small"]),
     Model("medium", "Whisper Medium", "Systran/faster-whisper-medium", SPEECH, 1531, 4, 8, "optional", 4, 4, 2,
-          "More accurate. On CPU it needs a strong processor and adds 2-4 s delay."),
+          MODEL_NOTES["medium"]),
     Model("large-v3-turbo", "Whisper Large v3 Turbo", "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
           SPEECH, 1622, 6, 12, "recommended", 4, 5, 2,
-          "Near best accuracy, much faster than Large v3. Best with an NVIDIA GPU."),
+          MODEL_NOTES["large-v3-turbo"]),
     Model("large-v3", "Whisper Large v3", "Systran/faster-whisper-large-v3", SPEECH, 3091, 8, 16, "required", 6, 5, 1,
-          "Highest accuracy. Too slow for live subtitles without an NVIDIA GPU."),
+          MODEL_NOTES["large-v3"]),
 ]
 
 # Spoken languages Dolmi offers. Every language gets English subtitles, except English, which gets
@@ -85,36 +88,19 @@ for _code, _mb in TRANSLATOR_SIZES.items():
         TRANSLATE, _mb, 1, 2, "no", 0, 4, 5, f"Translates {_src} sentences into {_dst} in ~0.06 s, even on CPU."))
 BY_KEY = {m.key: m for m in CATALOG}
 
-# ------------------------------------------------------------------ this PC
-class _MemStatus(ctypes.Structure):
-    _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
-                ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
-                ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
-                ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
-                ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
-
-def system_info():
-    m = _MemStatus(); m.dwLength = ctypes.sizeof(m)
-    ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))
-    return {"ram_gb": round(m.ullTotalPhys / 2**30), "cores": os.cpu_count() or 1,
-            "gpu": gpu_ready()}
-
-def gpu_ready():
-    """NVIDIA GPU that CTranslate2 can actually use (card + CUDA 12 libraries)."""
-    import ctypes.util, ctranslate2
-    return ctranslate2.get_cuda_device_count() > 0 and all(
-        ctypes.util.find_library(l) for l in ("cublas64_12", "cudnn64_9"))
+# ------------------------------------------------------------------ this computer
+# system_info(), gpu_ready() and auto_speech() are platform code (dolmi_platform), re-exported above.
 
 def fit(model, pc):
-    """(verdict, colour key) for how well this PC runs the model live."""
+    """(verdict, colour key) for how well this computer runs the model live."""
     if pc["ram_gb"] < model.ram_gb + 2:
         return "Not enough RAM", "live"
     if pc["gpu"]:
         return "Runs well (GPU)", "ok"
     if model.gpu == "required":
-        return "Needs NVIDIA GPU", "live"
+        return WORDS["fit_needs_gpu"], "live"
     if pc["cores"] < model.min_cores or model.gpu == "recommended":
-        return "Slow on this PC", "draft"
+        return WORDS["fit_slow"], "draft"
     if model.gpu == "optional":
         return "Works, 2-4 s delay", "draft"
     return "Runs well", "ok"
@@ -130,7 +116,8 @@ def is_installed(model):
     return snapshots.exists() and any((s / "model.bin").exists() for s in snapshots.iterdir())
 
 def downloaded_mb(model):
-    # Without symlink support (most Windows PCs) files end up in snapshots/, not blobs/
+    # Without symlink support (most Windows PCs) files end up in snapshots/, not blobs/; on a Mac they
+    # land in blobs/ and snapshots/ holds symlinks to them, so symlinks are skipped
     root = _cache_dir(model)
     if not root.exists():
         return 0

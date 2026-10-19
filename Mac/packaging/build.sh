@@ -1,10 +1,12 @@
 #!/bin/zsh
 # Builds dist/Dolmi.app and dist/Dolmi-<version>.dmg (Apple Silicon or Intel, whichever builds it).
-# Run from anywhere: ./packaging/build.sh   (needs Xcode Command Line Tools: xcode-select --install)
+# Run from anywhere: zsh Mac/packaging/build.sh   (needs Xcode Command Line Tools: xcode-select --install)
+# The program is the shared code at the repo root (see dolmi.spec); Mac/ holds the venv, the audio
+# helper and the build output.
 set -euo pipefail
 MAC="${0:A:h:h}"
 cd "$MAC"
-VERSION=$(cat VERSION)
+VERSION=$(cat ../VERSION)          # one VERSION for Windows and Mac, at the repo root
 
 echo "[1/5] Python environment"
 [[ -x venv/bin/python ]] || /usr/bin/env python3.12 -m venv venv

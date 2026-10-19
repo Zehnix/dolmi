@@ -25,4 +25,4 @@ if [[ ! -x audio/dolmi-audio || audio/dolmi-audio.swift -nt audio/dolmi-audio ]]
 fi
 
 echo "[3/3] Starting Dolmi..."
-venv/bin/python src/main.py &!
+venv/bin/python ../src/main.py &!   # the app itself is the shared code at the repo root

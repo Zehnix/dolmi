@@ -1,11 +1,13 @@
 """Dolmi Assistant mode: answers spoken English technical questions with a fast cloud model.
 
 Providers: Claude (Anthropic), OpenAI, Gemini (Google), NVIDIA or Cloudflare Workers AI. The last
-three are reached through their OpenAI-compatible endpoints, so the openai package talks to all four. API keys are encrypted with Windows DPAPI, so only the
-signed-in Windows user can read them; settings.json never holds a key in plain text.
+three are reached through their OpenAI-compatible endpoints, so the openai package talks to all four. API keys are encrypted for the
+signed-in user (Windows DPAPI, or a secret in the macOS login Keychain; see dolmi_platform), so only
+that user on that computer can read them; settings.json never holds a key in plain text.
 """
-import base64, ctypes, getpass, hashlib, hmac, os, re
-from ctypes import wintypes
+import base64, getpass, hashlib, hmac, os, re
+
+import dolmi_platform
 
 PROVIDERS = {
     "claude": {"label": "Claude (Anthropic)", "model": "claude-haiku-4-5",
@@ -99,7 +101,7 @@ def _pro_token():
     return f"dolmi-pro:{getpass.getuser()}"
 
 def pro_unlock_value():
-    """Stored in settings; DPAPI-encrypted for this Windows user, so it can't be copied to another PC."""
+    """Stored in settings; encrypted for this user (DPAPI / Keychain), so it can't be copied to another computer."""
     return encrypt_key(_pro_token())
 
 def is_pro(stored):
@@ -123,27 +125,13 @@ def is_question(text):
     t = text.strip()
     return len(t.split()) >= 2 and bool(QUESTION_START.match(t) or QUESTION_ANYWHERE.search(t))
 
-# ------------------------------------------------------------------ key storage (DPAPI)
-class _Blob(ctypes.Structure):
-    _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
-
-def _dpapi(protect, data):
-    buf = ctypes.create_string_buffer(data, len(data))
-    blob_in, blob_out = _Blob(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char))), _Blob()
-    fn = ctypes.windll.crypt32.CryptProtectData if protect else ctypes.windll.crypt32.CryptUnprotectData
-    if not fn(ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out)):
-        raise OSError("Windows could not encrypt/decrypt the API key")
-    try:
-        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
-    finally:
-        ctypes.windll.kernel32.LocalFree(blob_out.pbData)
-
+# ------------------------------------------------------------------ key storage (dolmi_platform.protect)
 def encrypt_key(key):
-    return base64.b64encode(_dpapi(True, key.encode())).decode() if key else ""
+    return base64.b64encode(dolmi_platform.protect(key.encode())).decode() if key else ""
 
 def decrypt_key(stored):
     try:
-        return _dpapi(False, base64.b64decode(stored)).decode() if stored else ""
+        return dolmi_platform.unprotect(base64.b64decode(stored)).decode() if stored else ""
     except (OSError, ValueError):
         return ""
 

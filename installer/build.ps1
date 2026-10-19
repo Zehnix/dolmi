@@ -69,11 +69,12 @@ Assert-Exit "pip install"
 Get-ChildItem $site -Directory -Filter "bin" | Remove-Item -Recurse -Force   # console-script shims, unused
 
 Step "App files"
-foreach ($f in "live_subs.py", "cloud_speech.py", "assistant.py", "inbox.py", "models.py", "stealth.py",
+foreach ($f in "live_subs.py", "cloud_speech.py", "assistant.py", "inbox.py", "models.py",
                "vocabulary.example.txt", "glossary.example.txt") {
   Copy-Item (Join-Path $root $f) $appDir
 }
 Copy-Item (Join-Path $root "src") (Join-Path $appDir "src") -Recurse
+Copy-Item (Join-Path $root "dolmi_platform") (Join-Path $appDir "dolmi_platform") -Recurse   # Windows/Mac layer (shared core)
 Get-ChildItem $appDir -Recurse -Directory -Filter "__pycache__" | Remove-Item -Recurse -Force
 New-Item -ItemType Directory -Force (Join-Path $appDir "assets") | Out-Null
 Copy-Item (Join-Path $root "assets\dolmi-2.ico"), (Join-Path $root "assets\dolmi.png") (Join-Path $appDir "assets")
@@ -88,7 +89,7 @@ $rtPy = Join-Path $runtime "python.exe"
 Assert-Exit "compileall"
 
 Step "Smoke test: the bundled runtime imports the whole app"
-& $rtPy -c "import sys; sys.path[:0] = [r'$appDir', r'$appDir\src']; import webview, faster_whisper, ctranslate2, onnxruntime, av, pyaudiowpatch, numpy, sentencepiece, huggingface_hub, anthropic, openai; import live_subs, models, assistant, inbox, stealth; from ui import app; print('imports ok, Dolmi', app.VERSION)"
+& $rtPy -c "import sys; sys.path[:0] = [r'$appDir', r'$appDir\src']; import webview, faster_whisper, ctranslate2, onnxruntime, av, pyaudiowpatch, numpy, sentencepiece, huggingface_hub, anthropic, openai; import live_subs, models, assistant, inbox, dolmi_platform; assert dolmi_platform.OS == 'win'; from ui import app; print('imports ok, Dolmi', app.VERSION)"
 Assert-Exit "smoke test"
 & $rtPy -m pip --version | Out-Null
 Assert-Exit "bundled pip (needed by the GPU add-on)"

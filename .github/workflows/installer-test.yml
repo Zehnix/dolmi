@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ["installer/**", "src/**", "*.py", "requirements-lock.txt", "VERSION"]
+    paths: ["installer/**", "src/**", "dolmi_platform/**", "*.py", "requirements-lock.txt", "VERSION"]
 
 permissions:
   contents: read
