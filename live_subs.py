@@ -40,6 +40,8 @@ LOW_ENERGY_RMS = 0.01      # loudest 100 ms below this: a lone "Thank you." ther
                            # (quiet remote speech peaks near 0.018, so this stays well under it)
 ASR_VAD_THRESHOLD = 0.35   # faster-whisper's own VAD: lower than its 0.5 default so soft speech survives
 CLOUD_SPLIT, CLOUD_BREATH, CLOUD_MAX = 3.0, 0.2, 6.0   # cloud captions: cut long speech sooner
+CLOUD_MIN = 0.3            # s of speech a cloud utterance needs ("Ja, genau." is ~0.6 s)
+CLOUD_OVERLAP = 0.3        # s carried over (and de-duplicated) when a cloud cut finds no pause
 
 # Typical Whisper output on silence / noise. A line is junk only when these phrases (whole words),
 # broadcaster names and years make up most of it: "Tschüss, bis morgen alle!" is a real line.
@@ -853,7 +855,8 @@ class Segmenter:
     def _cut(self):
         """At the length cap: cut in the middle of the last pause (at least MIN_CUT in) and carry
         the rest into the next utterance. With no pause, cut here and also carry the last OVERLAP s
-        (local only; the ASR side drops the repeated words) so no word is split without a second look."""
+        (CLOUD_OVERLAP on the cloud path; the receiving side drops the repeated words) so no word is
+        split without a second look."""
         offs = [0]
         for p in self.parts:
             offs.append(offs[-1] + len(p))
@@ -867,7 +870,7 @@ class Segmenter:
             speech_end = self.first + offs[begin]
         else:
             cut, speech_end, reason = total, self.first + total, "cap_hard"
-            keep_from = None if self.cloud else max(0, total - int(OVERLAP * SR))
+            keep_from = max(0, total - int((CLOUD_OVERLAP if self.cloud else OVERLAP) * SR))
         carry = cut if keep_from is None else keep_from
         u = Utterance(self.uid, self.audio()[:cut], self.first, self.onset,
                       min(speech_end, self.last_voice), self.overlap, reason)
@@ -919,6 +922,7 @@ def worker(eng, audio_q, ui_q, tr, stop, detect=speech_gap, clock=time.time, on_
     jobs, busy = queue.Queue(), threading.Event()
     if cloud:
         eng.line_ids = itertools.count(1)
+        eng.on_drop = drop                       # the engine reports failed and junk lines here
         every = eng.DRAFT_EVERY
     else:
         every = DRAFT_EVERY
@@ -939,9 +943,10 @@ def worker(eng, audio_q, ui_q, tr, stop, detect=speech_gap, clock=time.time, on_
                     drop("no_speech", start, end)
                 elif not cloud:
                     jobs.put(("final", u, start, end))
-                elif len(u.audio) / SR > 0.8:
+                elif (u.end - u.onset) / SR >= CLOUD_MIN:
                     spk, conf = speaker(u.audio, start, end)
-                    eng.submit(u.audio, start, end, ui_q, tr, meta={"speaker": spk, "speaker_conf": conf})
+                    eng.submit(u.audio, start, end, ui_q, tr,
+                               meta={"speaker": spk, "speaker_conf": conf, "overlap": u.overlap})
                 else:
                     drop("too_short", start, end)
             if not seg.active:

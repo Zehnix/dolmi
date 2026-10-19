@@ -38,6 +38,8 @@ DRAFT_EVERY = 0.8     # s between draft requests while someone is talking
 DRAFTS_IN_FLIGHT = 2  # so drafts keep their pace even when a request takes ~1 s
 WORKERS = 4           # parallel requests (finals are still shown in the order spoken)
 _ERROR_EVERY = 30.0   # s between repeated error toasts
+FINAL_RETRIES = 1     # a failed request for a finished sentence is sent once more before the line is dropped
+RETRY_DELAY = 0.3     # s before that retry
 
 
 def wav_bytes(audio, rate=live_subs.SR):
@@ -159,6 +161,7 @@ class CloudEngine(live_subs.Engine):
     cloud = True
     DRAFT_EVERY = DRAFT_EVERY
     line_ids = itertools.count(1)   # final caption ids; live_subs.worker starts a new count per session
+    on_drop = None                  # live_subs.worker sets its drop(reason, start, end, text) here
 
     def __init__(self, provider, api_key, language="de", model=""):
         if provider not in PROVIDERS:
@@ -238,29 +241,67 @@ class CloudEngine(live_subs.Engine):
                 self._draft_shown = seq
                 ui_q.put(("draft", heard, subtitle, {**(meta or {}), "emitted": time.time()}))
 
+    def _drop(self, reason, start, end, text=""):
+        if self.on_drop:
+            self.on_drop(reason, start, end, text)
+        else:
+            print(f"Dropped a cloud line ({reason}): {ascii(text[:80])}")
+
     def _run_final(self, audio, uid, start, end, ui_q, tr, meta=None):
-        try:
-            result = self.recognize(audio)
-        except Exception as e:
-            result = ("", "")
-            if time.time() - self._last_error > _ERROR_EVERY:
-                self._last_error = time.time()
-                ui_q.put(("error", f"{PROVIDERS[self.provider]} captions failed: {e}", ""))
-            print(f"cloud captions: {e}")
+        result, failed = ("", ""), None
+        for attempt in range(1 + FINAL_RETRIES):   # a dropped connection or a busy server: try again once
+            try:
+                result, failed = self.recognize(audio), None
+                break
+            except Exception as e:
+                failed = e
+                print(f"cloud captions (attempt {attempt + 1}): {e}")
+                if attempt < FINAL_RETRIES:
+                    time.sleep(RETRY_DELAY)
+        if failed is not None and time.time() - self._last_error > _ERROR_EVERY:
+            self._last_error = time.time()
+            ui_q.put(("error", f"{PROVIDERS[self.provider]} captions failed: {failed}", ""))
+        energy = live_subs.peak_rms(audio)
         with self._lock:
-            self._pending[uid] = (result, start, end, meta or {})
+            self._pending[uid] = (result, start, end, dict(meta or {}), failed, energy)
             while self._shown + 1 in self._pending:          # show finished sentences in order
                 self._shown += 1
-                (heard, subtitle), s, e, m = self._pending.pop(self._shown)
-                if heard and not live_subs.is_junk(heard, lang=self.language):
-                    line = {"id": next(self.line_ids), "start": s, "end": e, "emitted": time.time(),
+                (heard, subtitle), s, e, m, err, rms = self._pending.pop(self._shown)
+                heard, subtitle = self._dedupe(self._shown, m.pop("overlap", 0), heard, subtitle)
+                if err is not None:
+                    reason = "error"
+                elif not heard:
+                    reason = "empty"
+                else:
+                    reason = live_subs.junk_reason(heard, rms, self.language)
+                if reason:
+                    self._previous = (self._shown, "", "")
+                    self._drop(reason, s, e, heard)
+                else:
+                    line = {**m, "id": next(self.line_ids), "start": s, "end": e, "emitted": time.time(),
                             "lang": self.language, "speaker": m.get("speaker"),
                             "speaker_conf": m.get("speaker_conf")}
                     ui_q.put(("final", heard, subtitle, line))
                     tr.add(s, e, heard, subtitle, meta=line)
+                    self._previous = (self._shown, heard, subtitle)
                     self.context = heard
                 if self._shown == self._utterance:           # nothing newer is being spoken
                     ui_q.put(("draft", "", "", {}))
+
+    def _dedupe(self, uid, overlap, heard, subtitle):
+        """A cut without a pause sends the last CLOUD_OVERLAP s twice: drop the repeated words from
+        the line after it (and from its translation: Gemini's own, or a new local one)."""
+        prev_uid, prev_heard, prev_sub = getattr(self, "_previous", (None, "", ""))
+        if not (overlap and heard and prev_heard and prev_uid == uid - 1):
+            return heard, subtitle
+        trimmed = live_subs.dedupe_overlap(prev_heard, heard)
+        if trimmed == heard:
+            return heard, subtitle
+        if not trimmed:
+            return "", ""
+        if self.provider == "gemini":
+            return trimmed, live_subs.dedupe_overlap(prev_sub, subtitle)
+        return trimmed, self.translate(trimmed, self.language)
 
     # ---- one piece of speech: audio -> (what was said, its translation)
     def recognize(self, audio):
@@ -296,7 +337,7 @@ class CloudEngine(live_subs.Engine):
         parts = data["candidates"][0]["content"].get("parts", [])
         out = json.loads("".join(p.get("text", "") for p in parts) or "{}")
         heard = live_subs.collapse_repeats((out.get("heard") or "").strip())
-        return heard, self.vocab.enforce(heard, (out.get("translation") or "").strip())
+        return heard, live_subs.collapse_repeats(self.vocab.enforce(heard, (out.get("translation") or "").strip()))
 
     def _openai(self, audio):
         import openai
