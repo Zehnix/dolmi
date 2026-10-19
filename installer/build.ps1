@@ -75,6 +75,7 @@ foreach ($f in "live_subs.py", "cloud_speech.py", "assistant.py", "inbox.py", "m
 }
 Copy-Item (Join-Path $root "src") (Join-Path $appDir "src") -Recurse
 Copy-Item (Join-Path $root "dolmi_platform") (Join-Path $appDir "dolmi_platform") -Recurse   # Windows/Mac layer (shared core)
+Copy-Item (Join-Path $root "voice") (Join-Path $appDir "voice") -Recurse     # VOICE-1 read-aloud (system voice)
 Get-ChildItem $appDir -Recurse -Directory -Filter "__pycache__" | Remove-Item -Recurse -Force
 New-Item -ItemType Directory -Force (Join-Path $appDir "assets") | Out-Null
 Copy-Item (Join-Path $root "assets\dolmi-2.ico"), (Join-Path $root "assets\dolmi.png") (Join-Path $appDir "assets")

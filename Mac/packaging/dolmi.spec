@@ -12,7 +12,7 @@ VERSION = (ROOT / "VERSION").read_text().strip()
 APP_FILES = ["assistant.py", "cloud_speech.py", "inbox.py", "live_subs.py", "models.py", "speakers.py", "streaming.py", "clarify.py", "VERSION",
              "vocabulary.example.txt", "glossary.example.txt", "LICENSE", "THIRD-PARTY-NOTICES.md",
              "PRIVACY.md", "assets/dolmi.png"]
-APP_DIRS = ["src", "dolmi_platform"]          # copied whole (web UI: src/ui/web incl. css/ and js/)
+APP_DIRS = ["src", "dolmi_platform", "voice"] # copied whole (web UI: src/ui/web incl. css/ and js/)
 MAC_FILES = ["audio/dolmi-audio"]
 datas = [(str(ROOT / f), str(Path("app") / Path(f).parent)) for f in APP_FILES]
 datas += [(str(MAC / f), str(Path("app") / Path(f).parent)) for f in MAC_FILES]
