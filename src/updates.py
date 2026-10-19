@@ -32,6 +32,8 @@ def is_release_page(url):
 
 def fetch_latest(current, timeout=TIMEOUT_S, opener=urllib.request.urlopen):
     """GitHub's latest release as {"version", "url"}; raises on any network or format problem."""
+    import netgate
+    netgate.check("update")   # STR-7: local-only mode = "offline"
     req = urllib.request.Request(LATEST_URL, headers={
         "Accept": "application/vnd.github+json", "User-Agent": f"Dolmi/{current} (update check)"})
     with opener(req, timeout=timeout) as r:

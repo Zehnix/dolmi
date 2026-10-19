@@ -22,6 +22,8 @@
     </nav>
     <div class="sp"></div>
     <span class="chip"><span class="de" id="chipFrom">Deutsch</span> <i data-lucide="arrow-right" style="width:13px;height:13px"></i> <b id="chipTo">English</b></span>
+    <span class="chip" id="chipLocal" hidden title="Local-only mode: nothing leaves this computer"><i data-lucide="shield-check" style="width:13px;height:13px"></i> Local only</span>
+    <span class="chip" id="chipCloud" hidden title="Cloud captions failed; this computer captions until the provider answers again"><i data-lucide="cloud-off" style="width:13px;height:13px"></i> Cloud unavailable, using this PC</span>
     <button class="btn ghost" id="barBtn" title="Open or close the floating subtitle bar"><span class="ic"><i data-lucide="captions" style="width:15px;height:15px"></i></span><span id="barLab">Subtitles</span></button>
     <button class="btn ghost on" id="stealth" title="Invisible mode: hidden from screen shares"><span class="ic"><i data-lucide="shield-check" style="width:15px;height:15px"></i></span>Invisible</button>
   </header>
@@ -200,6 +202,8 @@
           <div class="set" data-kw="captions by cloud local whisper gemini openai cloudflare speech provider"><div><div class="lab">Captions by</div><div class="ps" id="sourceHint">Whisper on this computer — audio never leaves it</div></div><select class="field" id="setSource"><option value="local">This computer (private)</option><option value="gemini">Gemini — cloud</option><option value="openai">OpenAI — cloud</option><option value="cloudflare">Cloudflare — cloud</option></select></div>
           <div class="set" data-kw="spoken language german english translate auto detect"><div><div class="lab">Spoken language</div><div class="ps">27 languages get English subtitles; English gets German</div></div><select class="field" id="setLang"></select></div>
           <div class="set" data-kw="show german source original left column"><div><div class="lab" id="srcLab">Show German source</div><div class="ps">Keep the left column</div></div><button class="sw on" data-sw id="swGerman"></button></div>
+          <div class="set" data-kw="unsure not sure question mark confidence uncertain beta"><div><div class="lab">Mark unsure lines <span class="mtag">beta</span></div><div class="ps">A ? next to the time when Dolmi is not sure it heard a line right; hover it to see the words.</div></div><button class="sw" data-sw id="swUnsure" aria-label="Mark unsure lines"></button></div>
+          <div class="set" data-kw="cloud failover fallback offline backup local whisper beta"><div><div class="lab">If cloud captions fail, use this PC <span class="mtag">beta</span></div><div class="ps">A line the cloud could not caption is captioned here instead, and Dolmi goes back to the cloud when it answers again. Loads the local speech model when first needed.</div></div><button class="sw" data-sw id="swFailover" aria-label="If cloud captions fail, use this PC"></button></div>
           <div data-mount="captions.translator" hidden></div>
         </div>
         <div class="card set-page" data-sec="speech"><div class="cardh"><span class="ic"><i data-lucide="cpu"></i></span>Speech models</div>
@@ -236,6 +240,7 @@
           <div class="set" data-kw="save transcripts meetings keep history"><div><div class="lab">Save transcripts</div></div><button class="sw on" data-sw id="swSave"></button></div>
           <div class="set" data-kw="delete after days keep retention"><div><div class="lab">Delete after</div></div><div class="seg" id="setKeep"><button data-d="0">Never</button><button data-d="7">7d</button><button data-d="30" class="a">30d</button><button data-d="90">90d</button></div></div>
           <div class="set" data-kw="data folder transcripts location documents open"><div class="set-grow"><div class="lab">Data folder</div><div class="ps set-path" id="setDataDir">—</div></div><button class="btn ghost" id="setDataOpen">Open folder</button></div>
+          <div class="set" data-kw="local only offline no internet network cloud privacy"><div><div class="lab">Local only</div><div class="ps">Nothing goes on the internet: cloud captions, the cloud translator, the Assistant, model downloads and the update check are switched off.</div></div><button class="sw" data-sw id="swLocalOnly" aria-label="Local only"></button></div>
           <div data-mount="privacy.speakers" hidden></div>
         </div>
         <div class="card set-page" data-sec="appearance"><div class="cardh"><span class="ic"><i data-lucide="palette"></i></span>Appearance</div>

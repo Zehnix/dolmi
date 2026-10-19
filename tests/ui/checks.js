@@ -104,6 +104,9 @@
     ['captions','#setTranslator','change:local','translator_set','local'],
     ['privacy','#swSpeakers','click','set_setting','speaker_labels'],                      // SPK-4
     ['audio','#swCaptureBoth','click','set_setting','capture_both'],                    // SPK-5
+    ['privacy','#swLocalOnly','click','set_setting','local_only'],                      // STR-7
+    ['captions','#swUnsure','click','set_setting','unsure_marks'],                      // STR-8
+    ['captions','#swFailover','click','set_setting','cloud_failover'],                  // STR-9
   ];
   window.__uiControls=CONTROLS;   // other checks (new features) push rows here before run() starts
   async function use(el,how){

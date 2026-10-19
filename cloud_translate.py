@@ -19,6 +19,7 @@ from collections import deque
 
 import cloud_speech
 import models
+import translation_router
 
 PROVIDERS = {
     "gemini": {"label": "Gemini Flash-Lite", "model": cloud_speech.GEMINI_MODEL,
@@ -88,7 +89,7 @@ def _post(url, payload, headers, timeout):
         conn.timeout = timeout
         if conn.sock is not None:
             conn.sock.settimeout(timeout)
-    return cloud_speech._post_json(url, payload, headers, timeout=timeout)
+    return cloud_speech._post_json(url, payload, headers, timeout=timeout, purpose="translate")
 
 
 def _gemini(key, model, prompt, timeout, post, thinking="minimal"):
@@ -133,6 +134,7 @@ class CloudTranslator:
         self.clock, self.wall = clock, wall
         self.stats = {"sent": 0, "replaced": 0, "same": 0, "late": 0, "errors": 0, "skipped": 0}
         self.latency = deque(maxlen=200)
+        self.cooldown = translation_router.Cooldown(clock=clock)   # STR-6: skip it a while after 429/5xx
         self._jobs = queue.Queue()
         self._lock = threading.Lock()
         self._closed = False
@@ -154,6 +156,9 @@ class CloudTranslator:
         dst, src = target_language(lang, spoken)
         if src == dst or (src == "en" and spoken != "en"):
             return False      # English said in a German meeting: shown as heard, nothing to translate
+        if not self.cooldown.ready(self.provider):
+            self._count("skipped")   # cooling down: the local line stays
+            return False
         self._jobs.put((self.clock(), line_id, de, local_en, src, dst, list(context or []), ui_q, session))
         return True
 
@@ -197,7 +202,13 @@ class CloudTranslator:
             print(f"cloud translator: line {line_id} kept local (queued {self.clock() - submitted:.2f} s)")
             return
         self._count("sent")
-        en = self.translate(de, src, dst, context, left)
+        try:
+            en = self.translate(de, src, dst, context, left)
+        except Exception as e:
+            reason = translation_router.cooling_reason(e)
+            if reason and reason != "local-only":
+                self.cooldown.hit(self.provider, reason)
+            raise
         took = self.clock() - submitted
         self.latency.append(took)
         if took > self.timeout:

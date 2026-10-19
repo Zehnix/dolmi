@@ -142,6 +142,8 @@ def download(timeout=60):
         return path
     path.parent.mkdir(parents=True, exist_ok=True)
     part = path.with_suffix(".part")
+    import netgate
+    netgate.check("download")   # STR-7
     try:
         with urllib.request.urlopen(MODEL_URL, timeout=timeout) as r, open(part, "wb") as f:
             while block := r.read(1 << 20):

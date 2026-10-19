@@ -155,6 +155,8 @@ def downloaded_mb(model):
     return sum(f.stat().st_size for f in root.rglob("*") if f.is_file() and not f.is_symlink()) / 1e6
 
 def download(model):
+    import netgate
+    netgate.check("download")   # STR-7
     if model.job == SPEECH:   # same files faster-whisper loads
         from faster_whisper.utils import download_model
         download_model(model.key)
