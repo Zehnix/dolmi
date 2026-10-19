@@ -99,3 +99,25 @@ def test_page_loads_its_css_and_scripts_in_order():
     assert sorted(p.name for p in (WEB / "js").glob("*.js")) == sorted(Path(s).name for s in scripts)
     assert '<link href="css/app.css" rel="stylesheet">' in html and (WEB / "css" / "app.css").is_file()
     assert "<style>" not in html and "<script>" not in html          # no inline CSS/JS left
+
+
+def _root_modules_needed():
+    """Repo-root .py modules the app imports (src/, dolmi_platform/, voice/ and those modules themselves)."""
+    root_mods = {p.stem for p in ROOT.glob("*.py")} - {"make_icon"}
+    pat = re.compile(r'^\s*(?:import|from)\s+([A-Za-z_]\w*)', re.M)
+    todo = [p for d in ("src", "dolmi_platform", "voice") for p in (ROOT / d).rglob("*.py")]
+    seen = set()
+    while todo:
+        names = set(pat.findall(todo.pop().read_text(encoding="utf-8"))) & root_mods
+        for n in names - seen:
+            seen.add(n)
+            todo.append(ROOT / f"{n}.py")
+    return seen
+
+
+def test_packages_ship_every_root_module_the_app_imports():
+    # cloud_translate.py (QA-7) was imported by the app but missing from both packages
+    need = {f"{m}.py" for m in _root_modules_needed()}
+    _ps, files, _joined = _installer_copies()
+    assert sorted(need - set(files)) == []
+    assert sorted(need - set(_spec_lists()["APP_FILES"])) == []
