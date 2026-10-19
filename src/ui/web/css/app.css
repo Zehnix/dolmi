@@ -239,6 +239,11 @@ html[data-platform="mac"] [data-os="win"],html[data-platform="win"] [data-os="ma
 
 /* Vocabulary editor (VOC-1): four row-editor groups over glossary.txt + vocabulary.txt, or raw text */
 .voc-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:-6px 0 16px}
+.clar{margin-bottom:18px}.clar .cardh{display:flex;align-items:center}.clar-on{margin-left:auto;font-size:12.5px;font-weight:600;color:var(--mute);display:flex;gap:6px;align-items:center}
+.clar-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
+.clar-row q{flex:1 1 100%;font-size:12.5px;color:var(--mute)}.clar-row .field{min-width:0;flex:1 1 140px}
+.clar-link{display:flex;align-items:center;gap:5px;padding:6px 10px;border-radius:999px;background:var(--panel);border:1px solid var(--line);font-size:12.5px;font-weight:600;color:var(--ac-ink)}
+.clar-link[hidden],.clar-row [hidden]{display:none}.clar-link svg{width:15px;height:15px}
 .voc-status{flex:1;min-width:0;font-size:12.5px;font-weight:600;color:var(--mute)}
 .voc-status.voc-ok{color:var(--ac-ink)}.voc-status.voc-warn{color:var(--src)}
 .voc-groups{margin-bottom:18px}.voc-groups[hidden],.voc-problems[hidden]{display:none}
