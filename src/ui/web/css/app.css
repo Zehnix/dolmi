@@ -272,4 +272,6 @@ html[data-platform="mac"] [data-os="win"],html[data-platform="win"] [data-os="ma
 .heard-sub{color:var(--mute);font-size:13px;margin-left:6px}
 .heard-body ul{margin:2px 0 8px 18px;font-size:13px;color:var(--mute);line-height:1.45}
 .heard-fix{display:flex;flex-wrap:wrap;gap:8px}.heard-fix .btn{padding:6px 12px;font-size:12.5px}
+/* short windows (down to 900x600): one compact row so the captions keep their room */
+@media (max-height:700px){.heard-card{margin-top:8px;padding:8px 12px;align-items:center;gap:10px}.heard-ic{width:30px;height:30px;border-radius:10px}.heard-ic svg{width:16px;height:16px}.heard-body{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px}.heard-body b{font-size:15px}.heard-body ul,.heard-sub{display:none}}
 .heard-x{width:30px;height:30px;border-radius:10px;display:grid;place-items:center;color:var(--faint);flex:none;transition:.2s}.heard-x:hover{color:var(--ink);background:var(--panel)}.heard-x svg{width:16px;height:16px}
