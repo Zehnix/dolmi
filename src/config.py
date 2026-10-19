@@ -44,6 +44,7 @@ DEFAULTS = {
     # to SETTABLE in src/ui/app.py if the page may change them, e.g.
     #   "my_key": 1,                              # APP-99: what it does
     "warn_silence": True,                         # APP-3: 'Dolmi hears nothing' warning while live
+    "vocab_profile": "",                          # VOC-11: spelling-hint profile for meetings ('' = every term)
 }
 
 
