@@ -90,7 +90,7 @@
     ['about','#swShortcuts','click','set_setting','shortcuts_on'],                          // APP-7
     ['about','#sc-toggle_live','rec:ctrl+alt+shift+KeyK','set_shortcut','toggle_live'],
     ['about','#sc-toggle_bar','rec:ctrl+alt+shift+F9','set_shortcut','toggle_bar'],
-    ['about','#sc-toggle_source','rec:ctrl+alt+Digit7','set_shortcut','toggle_source'],
+    ['about','#sc-toggle_source','rec:ctrl+alt+shift+Digit7','set_shortcut','toggle_source'],
     ['about','#sc-toggle_lock','rec:Backspace','set_shortcut','toggle_lock'],
     ['about','#setDownloadUpdate','click','open_release','https://github.com/Zehnix/dolmi/releases/tag/v2.3.0'],
   ];

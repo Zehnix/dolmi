@@ -217,15 +217,20 @@ function applyShortcuts(map,status,on){ scMap=map||scMap; scStatus=status||scSta
     if(s) s.textContent=on===false?'Shortcuts are off':scStatus[k]===false?'Another app uses these keys. Pick others':'Click, then press the keys'; });
   if($('#scHint')) $('#scHint').textContent=`Work while your meeting app has the focus. ${W('hotkey')} always shows Dolmi`;
   if($('#barLockHint')&&scMap.toggle_lock) $('#barLockHint').textContent=`Clicks go through it to the meeting window. Unlock here or with ${fmtCombo(scMap.toggle_lock)}`; }
-function stopRec(){ if(!scRec) return; const k=scRec; scRec=null; const b=$('#sc-'+k); if(b){ b.classList.remove('on'); b.textContent=fmtCombo(scMap[k]); } }
-$$('[data-sc]').forEach(btn=>btn.addEventListener('click',()=>{ const k=btn.dataset.sc; if(scRec===k){ stopRec(); return; } stopRec(); scRec=k; btn.classList.add('on'); btn.textContent='Press keys…'; }));
+/* while recording, Dolmi's own shortcuts are let go, else the system takes a registered combo first */
+function pauseShortcuts(on){ const b=bridge(); return b&&b.pause_shortcuts?b.pause_shortcuts(on).catch(e=>console.error('pause shortcuts',e)):Promise.resolve(); }
+function stopRec(resume=true){ if(!scRec) return Promise.resolve(); const k=scRec; scRec=null; const b=$('#sc-'+k); if(b){ b.classList.remove('on'); b.textContent=fmtCombo(scMap[k]); } return resume?pauseShortcuts(false):Promise.resolve(); }
+$$('[data-sc]').forEach(btn=>btn.addEventListener('click',()=>{ const k=btn.dataset.sc; if(scRec===k){ stopRec(); return; }
+  if(scRec) stopRec(false); else pauseShortcuts(true);                          /* another key button: stay paused */
+  scRec=k; btn.classList.add('on'); btn.textContent='Press keys…'; }));
+window.addEventListener('blur',()=>{ stopRec(); });
 function comboFromKey(e){ const c=e.code||'', key=/^Key[A-Z]$/.test(c)?c.slice(3).toLowerCase():/^Digit\d$/.test(c)?c.slice(5):/^F\d{1,2}$/.test(c)?c.toLowerCase():null;
   if(!key) return null; return [e.ctrlKey&&'ctrl',e.altKey&&'alt',e.shiftKey&&'shift',e.metaKey&&'meta'].filter(Boolean).concat(key).join('+'); }
 document.addEventListener('keydown',async e=>{ if(!scRec) return; e.preventDefault(); e.stopPropagation();
   if(e.key==='Escape'){ stopRec(); return; }
   const k=scRec, combo=(e.key==='Backspace'||e.key==='Delete')?'':comboFromKey(e);
   if(combo===null) return;                                                     /* only a modifier so far */
-  const b=bridge(); stopRec(); if(!b) return;
+  const b=bridge(); await stopRec(); if(!b) return;
   const r=await b.set_shortcut(k,combo);
   if(!r.ok){ toast(r.message); return; }
   applyShortcuts(r.shortcuts,r.status); toast(combo?`Shortcut set: ${fmtCombo(r.shortcuts[k])}`:'Shortcut back to its default'); },true);

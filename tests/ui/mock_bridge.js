@@ -71,6 +71,7 @@
     show_overlay:()=>true, hide_overlay:()=>true, toggle_invisible:on=>on, recover:()=>true,
     check_update:()=>({available:true,version:'2.3.0',url:'https://github.com/Zehnix/dolmi/releases/tag/v2.3.0',current:'2.2.0'}),
     open_release:()=>true,
+    pause_shortcuts:on=>({ok:true,status:on?{}:state.shortcutStatus}),
     set_shortcut:(name,combo)=>({ok:true,shortcuts:{...state.shortcuts,[name]:combo||state.shortcuts[name]},status:state.shortcutStatus}),
     set_bar_locked:on=>({locked:!!on,applied:true}), toggle_bar_lock:()=>({locked:true,applied:true}),
     copy_text:()=>true, open_data_folder:()=>true, open_model_folder:()=>true, open_mic_privacy:()=>true,

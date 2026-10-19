@@ -76,8 +76,10 @@ _SHORTCUT_MOD_NAMES = {"ctrl": "ctrl", "control": "ctrl", "alt": "alt", "option"
 
 
 def normalize_shortcut(text):
-    """'Ctrl+Shift+Alt+S' -> 'ctrl+alt+shift+s'; None unless it is two or more modifiers (not only Shift)
-    plus a letter, digit or F1-F24, so it can't take an everyday key like Ctrl+S from other apps."""
+    """'Ctrl+Shift+Alt+S' -> 'ctrl+alt+shift+s'; None unless it is an F1-F24 key with two or more modifiers
+    (not only Shift), or a letter or digit with three modifiers or Cmd/Win+Alt. A global hotkey takes the
+    key from every app: Ctrl+Alt is AltGr on German keyboards (Ctrl+Alt+Q = @, +7 = {, +E = EUR) and
+    Ctrl+Shift+S/T/N are everyday keys ('Save as', reopen tab)."""
     if not isinstance(text, str) or len(text) > 40:
         return None
     parts = [x.strip().lower() for x in text.split("+")]
@@ -90,6 +92,8 @@ def normalize_shortcut(text):
     ok_key = (len(key) == 1 and key.isascii() and key.isalnum()) or (
         key[:1] == "f" and key[1:].isdigit() and 1 <= int(key[1:]) <= 24 and key[1:2] != "0")
     if not ok_key:
+        return None
+    if len(key) == 1 and len(mods) < 3 and mods != {"alt", "meta"}:
         return None
     return "+".join([m for m in _SHORTCUT_MOD_ORDER if m in mods] + [key])
 
@@ -264,6 +268,7 @@ class Api:
     _settings_gen = 0                    # bumped by every change to ENGINE_SETTINGS (a load in flight is stale)
     _shortcuts = None                    # APP-7: the platform's registered shortcuts (None = not started)
     _shortcut_status = {}                # action -> registered (False: another app has that key)
+    _shortcuts_paused = False            # APP-7: let go while the page records a new key
     _update = None                       # APP-6: the last update check's answer (updates.check), None before
 
     def __init__(self):
@@ -1520,7 +1525,7 @@ class Api:
             except Exception as e:
                 print(f"shortcuts stop: {e}")
         self._shortcut_status = {}
-        if not self._settings.get("shortcuts_on", True):
+        if not self._settings.get("shortcuts_on", True) or self._shortcuts_paused:
             return {}
         bindings = {name: _shortcut_parts(combo) for name, combo in self._shortcut_map().items()}
         try:
@@ -1538,6 +1543,16 @@ class Api:
         elif name in DEFAULT_SHORTCUTS:
             self._emit("onShortcut", name)
 
+    def pause_shortcuts(self, paused=True):
+        """While the page records a new key, Dolmi's own shortcuts are let go: a registered combo is taken
+        by the system before the page gets the key press, so the recorder would never see it."""
+        paused = bool(paused)
+        if paused != self._shortcuts_paused:
+            self._shortcuts_paused = paused
+            if self._shortcuts is not None:
+                self._start_shortcuts()
+        return {"ok": True, "status": dict(self._shortcut_status)}
+
     def set_shortcut(self, name, combo):
         """Change one shortcut ('' = back to its default). Refuses everyday keys, a key another action
         has, and Dolmi's own show-Dolmi key."""
@@ -1545,7 +1560,7 @@ class Api:
             return {"ok": False, "message": "Unknown shortcut."}
         combo = DEFAULT_SHORTCUTS[name] if combo in ("", None) else normalize_shortcut(combo)
         if not combo:
-            return {"ok": False, "message": "Use two or more of Ctrl, Alt, Shift (or Win/Cmd) with a letter, digit or F-key."}
+            return {"ok": False, "message": "Use Ctrl+Alt+Shift (or Win/Cmd+Alt) with a letter or digit, or two of Ctrl, Alt, Shift, Win/Cmd with an F-key."}
         if combo in RESERVED_SHORTCUTS:
             return {"ok": False, "message": f"That one is for {RESERVED_SHORTCUTS[combo]}."}
         current = self._shortcut_map()

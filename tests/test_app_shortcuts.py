@@ -14,7 +14,9 @@ from ui import app as app_mod
 
 @pytest.mark.parametrize("text,want", [
     ("ctrl+alt+shift+s", "ctrl+alt+shift+s"), ("Shift+Ctrl+Alt+S", "ctrl+alt+shift+s"),
-    ("ctrl+alt+7", "ctrl+alt+7"), ("Cmd+Option+K", "alt+meta+k"), ("ctrl+shift+F9", "ctrl+shift+f9"),
+    ("ctrl+alt+shift+7", "ctrl+alt+shift+7"), ("Cmd+Option+K", "alt+meta+k"), ("ctrl+shift+F9", "ctrl+shift+f9"),
+    ("ctrl+alt+q", None), ("ctrl+alt+7", None), ("ctrl+shift+s", None), ("ctrl+meta+k", None),  # AltGr / everyday
+    ("ctrl+alt+f9", "ctrl+alt+f9"),
     ("ctrl+s", None), ("shift+a", None), ("ctrl+alt", None), ("ctrl+alt+space", None), ("ctrl+alt+é", None),
     ("ctrl+ctrl+a", None), ("hyper+alt+a", None), ("ctrl+alt+f25", None), ("ctrl+alt+f0", None), ("", None),
     (None, None), (42, None), ("ctrl++a", None)])
@@ -31,16 +33,16 @@ def test_defaults_and_state(api):
 
 
 def test_set_shortcut_saves_only_changes(api):
-    r = api.set_shortcut("toggle_live", "Ctrl+Alt+K")
-    assert r["ok"] and r["shortcuts"]["toggle_live"] == "ctrl+alt+k"
-    assert config.load_settings()["shortcuts"] == {"toggle_live": "ctrl+alt+k"}
+    r = api.set_shortcut("toggle_live", "Ctrl+Shift+Alt+K")
+    assert r["ok"] and r["shortcuts"]["toggle_live"] == "ctrl+alt+shift+k"
+    assert config.load_settings()["shortcuts"] == {"toggle_live": "ctrl+alt+shift+k"}
     assert api.set_shortcut("toggle_live", "")["shortcuts"]["toggle_live"] == "ctrl+alt+shift+s"
     assert config.load_settings()["shortcuts"] == {}
 
 
 @pytest.mark.parametrize("name,combo,why", [
-    ("toggle_live", "ctrl+s", "two or more"), ("toggle_live", "ctrl+alt+shift+d", "showing Dolmi"),
-    ("toggle_live", "ctrl+alt+shift+b", "Another Dolmi shortcut"), ("nope", "ctrl+alt+k", "Unknown")])
+    ("toggle_live", "ctrl+s", "Ctrl+Alt+Shift"), ("toggle_live", "ctrl+alt+shift+d", "showing Dolmi"),
+    ("toggle_live", "ctrl+alt+shift+b", "Another Dolmi shortcut"), ("nope", "ctrl+alt+shift+k", "Unknown")])
 def test_set_shortcut_refuses(api, name, combo, why):
     r = api.set_shortcut(name, combo)
     assert not r["ok"] and why in r["message"]
@@ -48,8 +50,8 @@ def test_set_shortcut_refuses(api, name, combo, why):
 
 
 def test_bad_saved_shortcuts_fall_back_to_defaults(api):
-    api._settings["shortcuts"] = {"toggle_live": "ctrl+s", "toggle_bar": "ctrl+alt+9", "evil": "x"}
-    assert api._shortcut_map() == {**app_mod.DEFAULT_SHORTCUTS, "toggle_bar": "ctrl+alt+9"}
+    api._settings["shortcuts"] = {"toggle_live": "ctrl+s", "toggle_bar": "ctrl+alt+shift+9", "evil": "x"}
+    assert api._shortcut_map() == {**app_mod.DEFAULT_SHORTCUTS, "toggle_bar": "ctrl+alt+shift+9"}
     api._settings["shortcuts"] = "junk"
     assert api._shortcut_map() == app_mod.DEFAULT_SHORTCUTS
 
@@ -82,14 +84,23 @@ def test_start_registers_every_action_and_reports_status(api, handles):
 
 
 def test_change_or_switch_off_re_registers(api, handles):
-    assert api.set_shortcut("toggle_bar", "ctrl+alt+9")["ok"] and handles == []   # not started yet: nothing
+    assert api.set_shortcut("toggle_bar", "ctrl+alt+shift+9")["ok"] and handles == []   # not started yet: nothing
     api._start_shortcuts()
-    api.set_shortcut("toggle_bar", "ctrl+alt+8")
-    assert handles[0].stopped and handles[1].bindings["toggle_bar"] == (("ctrl", "alt"), "8")
+    api.set_shortcut("toggle_bar", "ctrl+alt+shift+8")
+    assert handles[0].stopped and handles[1].bindings["toggle_bar"] == (("ctrl", "alt", "shift"), "8")
     api.set_setting("shortcuts_on", False)
     assert handles[1].stopped and len(handles) == 2 and api.state()["shortcutStatus"] == {}
     api.set_setting("shortcuts_on", True)
     assert len(handles) == 3
+
+
+def test_recording_a_key_lets_go_of_the_registered_ones(api, handles):
+    """A registered combo never reaches the page's recorder, so they are let go while it records."""
+    api._start_shortcuts()
+    assert api.pause_shortcuts(True)["status"] == {} and handles[0].stopped and len(handles) == 1
+    assert api.pause_shortcuts(True)["ok"] and len(handles) == 1                    # twice: nothing more
+    assert api.pause_shortcuts(False)["status"]["toggle_live"] is True and len(handles) == 2
+    assert api.pause_shortcuts(False)["ok"] and len(handles) == 2
 
 
 def test_pressed_shortcuts(api, handles, monkeypatch):
