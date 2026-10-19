@@ -20,7 +20,7 @@ def test_worker_segments_on_pause(tmp_path):
     import queue, threading, time, numpy as np
     class Fake:
         context = ""
-        def transcribe(self, a): return f"Satz mit {len(a)} Samples", "de"
+        def transcribe(self, a): return f"Satz mit {len(a)} Samples.", "de"
         def translate(self, text, lang): return "Sentence"
     aq, uq, stop = queue.Queue(), queue.Queue(), threading.Event()
     tr = m.Transcript(tmp_path)
