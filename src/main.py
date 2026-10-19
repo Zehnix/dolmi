@@ -75,6 +75,7 @@ def main():
             api.toggle_invisible(True)
         api._start_background()          # APP-4: load the downloaded models now, so Start is instant
         instance.listen(api._bring_to_front)   # APP-5: a second launch brings this window forward
+        api._start_update_check()        # APP-6: is a newer release out? (setting; silent when offline)
         # a system-wide hotkey always brings Dolmi back, even hidden from the taskbar / Dock
         dolmi_platform.start_recover_hotkey(api.recover)
 

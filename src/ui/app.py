@@ -27,6 +27,7 @@ import inbox
 import live_subs
 import cloud_speech
 import dolmi_platform
+import updates
 
 VERSION = config.version()
 DEFAULT_SPEAKER = dolmi_platform.DEFAULT_SPEAKER   # what "Speaker" listens to when no device is picked
@@ -40,8 +41,9 @@ SPEECH_SOURCES = ("local", *cloud_speech.PROVIDERS)   # Settings → Captions by
 SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_transcripts", "keep_days", "audio_device", "model",
             "overlay", "theme", "ai_length", "ai_context", "opacity", "font",
             "warn_silence",                                    # APP-3
-            "preload_models"}                                  # APP-4
-BOOL_SETTINGS = {"warn_silence", "preload_models"}                         # on/off switches that must be true or false
+            "preload_models",                                  # APP-4
+            "check_updates"}                                   # APP-6
+BOOL_SETTINGS = {"warn_silence", "preload_models", "check_updates"}                         # on/off switches that must be true or false
 # APP-3 'nothing heard' warning: how quiet counts as silence, and how long before Dolmi says so
 HEARD_SILENCE_RMS = live_subs.SILENCE_RMS
 HEARD_AFTER_S = 20.0
@@ -128,6 +130,7 @@ class Api:
     # when _engine_state is "ready" (idle | loading | ready | missing)
     _engine_state = "idle"
     _settings_gen = 0                    # bumped by every change to ENGINE_SETTINGS (a load in flight is stale)
+    _update = None                       # APP-6: the last update check's answer (updates.check), None before
 
     def __init__(self):
         config.prepare()
@@ -342,7 +345,8 @@ class Api:
             "warnSilence": bool(s.get("warn_silence", True)),
             "barVisible": bool(self._overlay_visible),
             "engine": self._engine_label(), "engineState": self._engine_state,
-            "preloadModels": bool(s.get("preload_models", True)), "dataFolder": str(self._data), "version": VERSION,
+            "preloadModels": bool(s.get("preload_models", True)),
+            "checkUpdates": bool(s.get("check_updates", True)), "update": self._update, "dataFolder": str(self._data), "version": VERSION,
             "platform": {"os": dolmi_platform.OS, "words": dolmi_platform.WORDS},
         }
 
@@ -1260,6 +1264,31 @@ class Api:
 
         threading.Thread(target=work, daemon=True).start()
         return {"ok": True}
+
+    # ------------------------------------------------------------------ update check (APP-6)
+    def _start_update_check(self):
+        """Called once by main when the window is up: ask GitHub in the background (when allowed)."""
+        if self._settings.get("check_updates", True):
+            threading.Thread(target=self.check_update, name="dolmi-update", daemon=True).start()
+
+    def check_update(self, force=False):
+        """Is a newer Dolmi out? {"available", "version", "url", "current"}. Skipped (available False,
+        "off" True) when the setting is off, unless the user pressed "Check now" (force)."""
+        if not force and not self._settings.get("check_updates", True):
+            return {"available": False, "version": "", "url": updates.RELEASES_PAGE, "current": VERSION, "off": True}
+        result = updates.check(VERSION)
+        self._update = result
+        if result["available"]:
+            self._emit("onUpdate", result)
+        return result
+
+    def open_release(self, url=None):
+        """'Download x.y.z': open the release page in the browser (only this repository's release pages)."""
+        url = url or updates.RELEASES_PAGE
+        if not updates.is_release_page(url):
+            return False
+        import webbrowser
+        return bool(webbrowser.open(url))
 
     # ------------------------------------------------------------------ overlay (lazy caption bar)
     def show_overlay(self):

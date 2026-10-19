@@ -173,3 +173,18 @@ async function settingsBoot(){ const b=bridge(); if(!b) return; try{ const s=awa
   if($('#setDataDir')) $('#setDataDir').textContent=s.dataFolder||'—';
 }catch(e){ console.error('settings boot',e); } }
 document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) settingsBoot(); else window.addEventListener('pywebviewready',settingsBoot); });
+
+/* ---- APP-6 update check: About & updates. Dolmi asks GitHub for the latest release when it opens (can be
+   turned off); a newer one is offered as "Download x.y.z", which opens the release page. Nothing installs. ---- */
+{ const m=settingsMount('about.updates');
+  if(m) m.innerHTML=`<div class="set" data-kw="update updates new version release download check github"><div><div class="lab">Check for updates</div><div class="ps">When Dolmi opens, asks GitHub for the latest release. Nothing is downloaded or installed by itself</div></div><button class="sw on" data-sw id="swUpdates"></button></div>
+    <div class="set" data-kw="update new version download release check now"><div><div class="lab">Latest version</div><div class="ps" id="updStatus">Not checked yet</div></div><div style="display:flex;gap:8px"><button class="btn ghost" id="setCheckUpdate">Check now</button><button class="btn ghost on" id="setDownloadUpdate" hidden>Download</button></div></div>`; }
+wireSwitch('#swUpdates','check_updates');
+function applyUpdate(u,asked){ const st=$('#updStatus'), dl=$('#setDownloadUpdate'); if(!st||!u) return;
+  if(u.available){ st.textContent=`Dolmi ${u.version} is out (you have ${u.current})`; dl.hidden=false; dl.textContent=`Download ${u.version}`; dl.dataset.url=u.url; }
+  else { dl.hidden=true; st.textContent=u.version?`You have the latest version (${u.current})`:(asked?'Could not reach GitHub. Try again later':'Not checked yet'); } }
+if($('#setCheckUpdate')) $('#setCheckUpdate').onclick=async()=>{ const b=bridge(); if(!b) return; $('#updStatus').textContent='Checking…'; applyUpdate(await b.check_update(true),true); };
+if($('#setDownloadUpdate')) $('#setDownloadUpdate').onclick=()=>{ const b=bridge(); if(b) b.open_release($('#setDownloadUpdate').dataset.url||''); };
+{ const prev=window.dolmi.onUpdate; window.dolmi.onUpdate=u=>{ if(prev) prev(u); applyUpdate(u); toast(`Dolmi ${u.version} is available: Settings → About & updates`); }; }
+async function updatesBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state(); setSw('#swUpdates',s.checkUpdates!==false); if(s.update) applyUpdate(s.update); }catch(e){ console.error('updates boot',e); } }
+document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) updatesBoot(); else window.addEventListener('pywebviewready',updatesBoot); });

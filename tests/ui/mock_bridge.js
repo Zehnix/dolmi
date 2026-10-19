@@ -67,6 +67,8 @@
     new_chat:()=>true, delete_chat:()=>true, archive_chat:()=>true, ask:()=>1,
     summarize:()=>({ok:false,message:'Add an API key in Settings → Assistant first.'}),
     show_overlay:()=>true, hide_overlay:()=>true, toggle_invisible:on=>on, recover:()=>true,
+    check_update:()=>({available:true,version:'2.3.0',url:'https://github.com/Zehnix/dolmi/releases/tag/v2.3.0',current:'2.2.0'}),
+    open_release:()=>true,
     copy_text:()=>true, open_data_folder:()=>true, open_model_folder:()=>true, open_mic_privacy:()=>true,
     geometry:()=>({w:640,h:200}), resize:()=>true, hide:()=>true,   // the subtitle bar's own bridge (overlay.py)
   };
