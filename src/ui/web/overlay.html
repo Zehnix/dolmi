@@ -22,7 +22,9 @@ html,body{height:100%;background:transparent;overflow:hidden;font-family:var(--u
 .srcb.mic{color:var(--src)}
 .x{width:26px;height:22px;display:grid;place-items:center;border-radius:6px;color:#9a917b;font-size:13px;font-weight:700;cursor:pointer}
 .x:hover{background:rgba(255,255,255,.08);color:#fff}
-.body{flex:1;overflow:auto;padding:4px 18px 16px;display:flex;flex-direction:column;justify-content:flex-end;gap:6px}
+.body{flex:1;overflow:auto;padding:4px 18px 16px;display:flex;flex-direction:column;gap:6px}
+/* lines sit at the bottom via an auto top margin, not justify-content:flex-end (that would make the overflow unscrollable) */
+.body>:first-child{margin-top:auto}
 .de{font-family:var(--mono);font-size:13px;color:#aba28c;line-height:1.4}
 .en{font-family:var(--display);font-weight:500;font-size:var(--fs);line-height:1.3;color:#F6F1E7}
 .idle{color:#776f59;font-size:14px}
@@ -42,15 +44,22 @@ const api=()=>window.pywebview&&window.pywebview.api;
 const esc=s=>(''+s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const body=$('#body');
 function clearIdle(){ const i=$('#idle'); if(i) i.remove(); }
-/* follow new lines only while the bar is scrolled to the bottom (scrolling up to re-read stays put) */
-let stuck=true;
-body.addEventListener('scroll',()=>{ stuck=body.scrollHeight-body.scrollTop-body.clientHeight<=48; });
-const follow=()=>{ if(stuck) body.scrollTop=body.scrollHeight; };
+/* follow new lines only while the bar is scrolled to the bottom (scrolling up to re-read stays put).
+   Only the reader un-sticks it: autoTop is where follow() last scrolled, so a resize does not. Checked on
+   each new line too, since a scroll-up and a line can land before the scroll event. */
+let stuck=true,autoTop=0;
+const atEnd=()=>body.scrollHeight-body.scrollTop-body.clientHeight<=48;
+function check(){ if(stuck){ if(body.scrollTop<autoTop-1&&!atEnd()) stuck=false; } else if(atEnd()) stuck=true; }
+body.addEventListener('scroll',check);
+const follow=()=>{ if(stuck){ body.scrollTop=body.scrollHeight; autoTop=body.scrollTop; } };
 window.ov={
   style:(a,fs)=>{ document.documentElement.style.setProperty('--a',Math.max(.15,Math.min(1,a))); document.documentElement.style.setProperty('--fs',fs+'px'); },
-  idle:(t)=>{ body.innerHTML='<div class="idle">'+esc(t||'Listening…')+'</div>'; stuck=true; },
-  line:(de,en)=>{ clearIdle(); const d=document.createElement('div'); d.innerHTML='<div class="de">'+esc(de)+'</div><div class="en">'+esc(en)+'</div>'; body.append(d); while(body.children.length>4) body.firstChild.remove(); follow(); },
-  draft:(de,en)=>{ clearIdle(); let dr=document.getElementById('draft'); if(!de&&!en){ if(dr)dr.remove(); return; } if(!dr){ dr=document.createElement('div'); dr.id='draft'; dr.style.opacity='.65'; body.append(dr); } dr.innerHTML='<div class="de">'+esc(de)+'</div><div class="en">'+esc(en)+'</div>'; follow(); },
+  idle:(t)=>{ body.innerHTML='<div class="idle">'+esc(t||'Listening…')+'</div>'; stuck=true; autoTop=0; },
+  /* 4 lines while live; while the reader is scrolled up, up to 40 so the line being re-read stays put */
+  line:(de,en)=>{ check(); clearIdle(); const d=document.createElement('div'); d.innerHTML='<div class="de">'+esc(de)+'</div><div class="en">'+esc(en)+'</div>';
+    const dr=document.getElementById('draft'); if(dr) body.insertBefore(d,dr); else body.append(d);
+    while(body.children.length>(stuck?4:40)) body.firstChild.remove(); follow(); },
+  draft:(de,en)=>{ check(); clearIdle(); let dr=document.getElementById('draft'); if(!de&&!en){ if(dr)dr.remove(); return; } if(!dr){ dr=document.createElement('div'); dr.id='draft'; dr.style.opacity='.65'; body.append(dr); } dr.innerHTML='<div class="de">'+esc(de)+'</div><div class="en">'+esc(en)+'</div>'; follow(); },
 };
 const ICONS={speaker:'M11 5 6 9H2v6h4l5 4V5zM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14',
   mic:'M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2M12 19v3'};

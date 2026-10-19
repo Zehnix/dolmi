@@ -1,0 +1,23 @@
+<!-- Headless check of the subtitle bar (tests/test_live.py appends this to src/ui/web/overlay.html and loads it
+     in Edge/Chrome headless at a bar-sized window): long lines overflow and can be scrolled, scrolling up stays
+     put and keeps the lines, scrolling back down follows again and trims to 4. Reports JSON in pre#result. -->
+<script>
+(async()=>{
+  const out={}, tick=()=>new Promise(r=>setTimeout(r,60)), L='Ein sehr langer Satz, der umbricht und weiter geht und noch weiter. ';
+  const atEnd=()=>body.scrollHeight-body.scrollTop-body.clientHeight<=48;
+  try{
+    for(let i=0;i<4;i++) ov.line(L+i,L+i);
+    await tick();
+    out.scrollable=body.scrollHeight>body.clientHeight; out.followsAtBottom=atEnd();
+    body.scrollTop=0; await tick();                    // the reader scrolls up
+    const first=body.firstChild.textContent;
+    for(let i=4;i<8;i++) ov.line(L+i,L+i);
+    await tick();
+    out.stayedPut=body.scrollTop===0&&body.firstChild.textContent===first; out.keptWhileUp=body.children.length;
+    body.scrollTop=body.scrollHeight; await tick();    // and back down
+    ov.line('Zurück','Back'); await tick();
+    out.trimmed=body.children.length; out.followsAgain=atEnd();
+  }catch(e){ out.error=String(e&&e.stack||e); }
+  const pre=document.createElement('pre'); pre.id='result'; pre.textContent=JSON.stringify(out); document.body.append(pre);
+})();
+</script>
