@@ -171,7 +171,8 @@ def test_update_line_and_finish_rewrite_both_files(tmp_path):
     md, srt = t.md.read_text(encoding="utf-8"), t.srt.read_text(encoding="utf-8")
     assert "Twoo" not in md and "Two  \n<sub>Zwei</sub>" in md and md.startswith("# Meeting ")
     assert md.count("<sub>") == 2 and t.lines[2]["speaker"] == "Alice"
-    assert srt.startswith("1\n00:00:01,000 --> 00:00:02,000\nOne") and "2\n00:00:03,000 --> 00:00:04,000\nTwo\n" in srt
+    # a line with a speaker carries its name (SPK-3; a plain string is the name itself)
+    assert srt.startswith("1\n00:00:01,000 --> 00:00:02,000\nOne") and "2\n00:00:03,000 --> 00:00:04,000\nAlice: Two\n" in srt
 
 
 def test_auto_ids_never_clash_with_producer_ids(tmp_path):
