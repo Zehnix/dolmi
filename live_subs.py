@@ -43,6 +43,8 @@ FINAL_BEAM = 5             # Whisper beam for finals
 DRAFT_BEAM = 1             # drafts decode greedily: they are redone a second later anyway
 DRAFT_WINDOW = 6.0         # s, a draft decodes only the end of the sentence (cost stays flat on long ones)
 DRAFT_MT_LAG = 2.0         # s, a draft whose audio is this far behind the capture skips translation
+HOLD_MAX = 4.0             # s, a final without . ? ! waits this long for the next one to join it (0 = off)
+MT_CONTEXT = True          # translate with the previous line as context (synthetic gold: chrF +0.5, BLEU +1.0)
 CLOUD_SPLIT, CLOUD_BREATH, CLOUD_MAX = 3.0, 0.2, 6.0   # cloud captions: cut long speech sooner
 CLOUD_MIN = 0.3            # s of speech a cloud utterance needs ("Ja, genau." is ~0.6 s)
 CLOUD_OVERLAP = 0.3        # s carried over (and de-duplicated) when a cloud cut finds no pause
@@ -503,6 +505,18 @@ class Engine:
             hotwords=self.glossary or None, initial_prompt=self.context[-200:] or None)
         return list(segs), info
 
+    def translate_context(self, text, lang, prev_de, prev_en):
+        """Translate `text` with the previous line in front of it, so pronouns and verb-final clauses
+        get their context, and keep only the new part. Only when the previous line's accepted English
+        comes out again word for word at the start; otherwise the line is translated on its own."""
+        if not (prev_de and prev_en):
+            return self.translate(text, lang)
+        both = self.translate(f"{prev_de} {text}", lang).split()
+        head = prev_en.split()
+        if len(both) > len(head) and [w.lower() for w in both[:len(head)]] == [w.lower() for w in head]:
+            return " ".join(both[len(head):])
+        return self.translate(text, lang)
+
     def translate(self, text, lang):
         if lang == "en" and self.language != "en":
             if not looks_german(text):
@@ -789,9 +803,15 @@ Items are (kind, a, b) or (kind, a, b, meta). Times are time.time() epoch second
                                     reserved for QA-7 (wave 2): a better subtitle for final `id`
   ("error", message, "")            from the cloud engine
 Each final is also written with tr.add(start, end, heard, subtitle, meta=meta).
-Cloud path: eng.submit(audio, start, end, ui_q, tr, meta={"speaker", "speaker_conf"}) and
+A final without . ? ! is held up to HOLD_MAX s and joined with the next final of the same speaker and
+language (one line, one id, start of the first, end of the second); meanwhile its words stay on the
+live line as a draft.
+Cloud path: eng.submit(audio, start, end, ui_q, tr, meta={"speaker", "speaker_conf", "overlap"}) and
 eng.draft(audio, ui_q, meta={"start", "end"}); the engine emits the same shapes and numbers its
-finals from eng.line_ids, which worker() resets for each session.
+finals from eng.line_ids, which worker() resets for each session. "overlap" is the seconds at the
+start that repeat the end of the previous utterance (the engine drops those words). worker() sets
+eng.on_drop = its drop function, so the engine reports lines it drops (error after one retry, empty,
+junk reasons) the same way.
 """
 
 
@@ -1040,15 +1060,76 @@ class _Discard:
         pass
 
 
+def ends_sentence(text: str) -> bool:
+    """True when `text` ends a sentence (. ? !); a trailing '...' means the speaker went on."""
+    t = text.rstrip().rstrip("\"'»«“”)")
+    return t.endswith((".", "?", "!")) and not t.endswith(("...", "…"))
+
+
+def strip_repeat(previous: str, text: str) -> str:
+    """`text` without a copy of the whole previous sentence at its start (Whisper can read its prompt
+    back). Needs 3+ words and something after the copy: saying a sentence again is real speech."""
+    norm = lambda w: re.sub(r"\W", "", w.lower())
+    prev, words = [norm(w) for w in previous.split()], text.split()
+    k = len(prev)
+    if k >= 3 and len(words) > k and [norm(w) for w in words[:k]] == prev:
+        return " ".join(words[k:])
+    return text
+
+
+def _translate(eng, de, lang, last):
+    """The subtitle for a final: with the previous line as context when MT_CONTEXT is on."""
+    fn = getattr(eng, "translate_context", None)
+    if MT_CONTEXT and fn and last[0] and last[2] == lang:
+        return fn(de, lang, last[0], last[1])
+    return eng.translate(de, lang)
+
+
 def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker):
     """Whisper side of worker(): finals in the order spoken; a draft only while nothing else waits.
-    After Stop it still transcribes the finals already queued, into the transcript file only: that
-    speech was captured, so it must not be lost because the CPU was behind."""
+    A final without . ? ! is held up to HOLD_MAX s and joined with the next one, so a sentence cut
+    in two is translated whole. After Stop it still transcribes the finals already queued, into the
+    transcript file only: that speech was captured, so it must not be lost because the CPU was behind."""
     ids, draft_shown = itertools.count(1), None
     previous = (None, "")                        # (uid, text) of the last utterance; "" when it was dropped
+    held = None                                  # a final without . ? ! waiting for the next one
+    last = ("", "", None)                        # (German, English, lang) of the last line shown
+
+    def emit(line):
+        nonlocal last
+        en = _translate(eng, line["de"], line["lang"], last)
+        meta = {"id": next(ids), "start": line["start"], "end": line["end"], "emitted": clock(),
+                "lang": line["lang"], "speaker": line["speaker"], "speaker_conf": line["speaker_conf"]}
+        ui_q.put(("final", line["de"], en, meta))
+        tr.add(line["start"], line["end"], line["de"], en, meta=meta)
+        last = (line["de"], en, line["lang"])
+        ui_q.put(("draft", "", "", {}))
+
+    def show_held():                             # the held words stay on the live line meanwhile
+        ui_q.put(("draft", held["de"], eng.translate(held["de"], held["lang"]),
+                  {"start": held["start"], "end": held["end"], "emitted": clock()}))
+
+    def flush(line):                             # a held line on its own, outside the per-job guard
+        try:
+            emit(line)
+        except Exception as e:
+            print(f"Translation failed on one line: {e!r}")
+            drop("error", line["start"], line["end"], line["de"])
+
+    def due():
+        return clock() - held["end"] >= HOLD_MAX or (seg.samples - held["upto"]) / SR >= HOLD_MAX
+
     while True:
-        job = jobs.get()
+        if held and (due() or stop.is_set()) and jobs.empty():
+            line, held = held, None
+            flush(line)
+        try:
+            job = jobs.get(timeout=0.1 if held else None)
+        except queue.Empty:
+            continue
         if job is None:                          # worker() has stopped and queued everything it had
+            if held:
+                flush(held)
             return
         if stop.is_set():
             ui_q = _Discard                      # nobody shows captions any more
@@ -1063,15 +1144,21 @@ def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker):
                 de, lang = getattr(eng, "transcribe_draft", eng.transcribe)(audio)
                 if uid != seg.uid or not seg.active or not de or is_junk(de, lang=_spoken(eng, lang)):
                     continue
-                if len(audio) / SR >= MIN_SENTENCE and de.rstrip().endswith((".", "?", "!")):
+                if len(audio) / SR >= MIN_SENTENCE and ends_sentence(de):
                     seg.mark_sentence_end(uid, upto)   # final on the next short pause
-                ui_q.put(("draft", de, eng.translate(de, lang), {**meta, "emitted": clock()}))
+                if held and held["lang"] == lang:
+                    de, meta = f"{held['de']} {de}", {**meta, "start": held["start"]}
+                # Whisper is behind the speaker: the German now, no translation for a line about to change
+                en = "" if (seg.samples - upto) / SR > DRAFT_MT_LAG else eng.translate(de, lang)
+                ui_q.put(("draft", de, en, {**meta, "emitted": clock()}))
                 draft_shown = uid
                 continue
             _, u, start, end = job
             de, lang = eng.transcribe(u.audio)
             if u.overlap and de and previous[0] == u.uid - 1:   # only against the part just before the cut
                 de = dedupe_overlap(previous[1], de)
+            for said in {previous[1], getattr(eng, "context", "")}:
+                de = strip_repeat(said, de) if said and de else de
             if de:
                 reason = junk_reason(de, peak_rms(u.audio), _spoken(eng, lang))
             else:
@@ -1081,17 +1168,28 @@ def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker):
                 drop(reason, start, end, de)
                 gone = {"dropped": reason, "start": start, "end": end} if draft_shown == u.uid else {}
                 ui_q.put(("draft", "", "", gone))
+                if held:
+                    show_held()
             else:
                 spk, conf = speaker(u.audio, start, end)
-                en = eng.translate(de, lang)
-                meta = {"id": next(ids), "start": start, "end": end, "emitted": clock(), "lang": lang,
+                line = {"de": de, "lang": lang, "start": start, "end": end, "upto": u.end,
                         "speaker": spk, "speaker_conf": conf}
-                ui_q.put(("final", de, en, meta))
-                tr.add(start, end, de, en, meta=meta)
+                if held:
+                    same = None in (spk, held["speaker"]) or spk == held["speaker"]
+                    if same and held["lang"] == lang and start - held["end"] <= HOLD_MAX:
+                        line.update(de=f"{held['de']} {de}", start=held["start"],
+                                    speaker=spk or held["speaker"], speaker_conf=conf or held["speaker_conf"])
+                    else:
+                        emit(held)
+                    held = None
                 previous = (u.uid, de)
                 if not stop.is_set():                # a new session may already use eng.context
-                    eng.context = de
-                ui_q.put(("draft", "", "", {}))
+                    eng.context = line["de"]
+                if HOLD_MAX and not ends_sentence(line["de"]) and u.reason != "stop" and not stop.is_set():
+                    held = line
+                    show_held()
+                else:
+                    emit(line)
             draft_shown = None
         except Exception as e:                   # one bad buffer must not end the captions
             print(f"Speech recognition failed on one buffer: {e!r}")
