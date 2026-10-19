@@ -1,0 +1,41 @@
+name: UI tests
+
+# Opens every screen of the web UI in headless Edge with a mock bridge (tests/ui/run_ui_tests.py):
+# every Settings section and control, Meetings side by side, no sideways scrolling, no wrapped toggles,
+# at 900x600 and 1360x860, 100 % and 150 % scaling. Standard library only: no pip install needed.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ["src/ui/web/**", "tests/ui/**", ".github/workflows/ui-tests.yml"]
+  push:
+    branches: [main]
+    paths: ["src/ui/web/**", "tests/ui/**", ".github/workflows/ui-tests.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  ui-tests:
+    runs-on: windows-latest     # Edge is preinstalled
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Run the UI tests (screenshots on failure)
+        shell: pwsh
+        run: |
+          python tests/ui/run_ui_tests.py
+          if ($LASTEXITCODE -ne 0) {
+            python tests/ui/run_ui_tests.py --shots ui-shots | Out-Null
+            exit 1
+          }
+
+      - name: Upload screenshots
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ui-screenshots
+          path: ui-shots/
