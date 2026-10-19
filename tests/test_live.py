@@ -154,7 +154,7 @@ def test_new_meeting_file_round_trips(api, tmp_path):
 
 
 def test_old_meeting_file_still_opens(api):
-    shutil.copy(FIXTURES / "meeting_2026-10-09_11-14.md", api._data / "meeting_2026-10-09_11-14.md")
+    shutil.copy(FIXTURES / "old_format_meeting.md", api._data / "meeting_2026-10-09_11-14.md")
     rows = api.read_meeting("meeting_2026-10-09_11-14.md")
     assert [r["ts"] for r in rows] == ["11:35:02", "11:35:06"] and rows[0]["end"] == ""
     assert rows[0]["de"].startswith("Guten Morgen") and rows[0]["en"].startswith("Good morning")
