@@ -18,7 +18,7 @@
     audioDevice:'',audioSource:'speaker',micDevice:'',sourceLabel:{source:'speaker',device:'Default speaker'},
     speechModel:'auto',overlay:true,theme:'paper',listening:false,opacity:.88,font:22,warnSilence:true,barVisible:false,
     engine:'not loaded',engineState:'idle',dataFolder:'C:\\Users\\Test\\Documents\\Dolmi',version:'2.2.0',
-    checkUpdates:true,barLocked:false,shortcutsOn:true,
+    checkUpdates:true,barLocked:false,shortcutsOn:true,speakerLabels:false,
     shortcuts:{toggle_live:'ctrl+alt+shift+s',toggle_bar:'ctrl+alt+shift+b',toggle_source:'ctrl+alt+shift+m',toggle_lock:'ctrl+alt+shift+l'},
     shortcutStatus:{toggle_live:true,toggle_bar:true,toggle_source:true,toggle_lock:false},
     platform:{os:'win',words:WORDS}};
@@ -35,6 +35,9 @@
     {key:'small',name:'Whisper Small',kind:'speech',sizeMb:480,installed:false,downloading:false,fit:'Runs well on your GPU',fitOk:true,fitLevel:'ok',note:'Good balance.',needed:false,loaded:false,selected:false,auto:false},
     {key:'medium',name:'Whisper Medium',kind:'speech',sizeMb:1500,installed:true,downloading:false,fit:'Runs well on your GPU',fitOk:true,fitLevel:'ok',note:'More accurate.',needed:false,loaded:false,selected:false,auto:false},
     {key:'opus-de-en',name:'Opus-MT German → English',kind:'translate',sizeMb:300,installed:true,downloading:false,fit:'Runs well',fitOk:true,fitLevel:'ok',note:'Translator.',needed:true,loaded:false,selected:false,auto:false}];
+  const trx={translator:'local',info:{status:'experimental - not benchmarked yet',timeout:1.5,stats:null,providers:{
+    gemini:{label:'Gemini',cost:'about 0.1 ct per meeting hour',privacy:'Lines go to Google.',hasKey:false},
+    deepl:{label:'DeepL',cost:'about 2 ct per meeting hour',privacy:'Lines go to DeepL.',hasKey:false}}}};
   const canned={
     state:()=>JSON.parse(JSON.stringify(state)),
     set_setting:()=>true,
@@ -71,6 +74,10 @@
     show_overlay:()=>true, hide_overlay:()=>true, toggle_invisible:on=>on, recover:()=>true,
     check_update:()=>({available:true,version:'2.3.0',url:'https://github.com/Zehnix/dolmi/releases/tag/v2.3.0',current:'2.2.0'}),
     open_release:()=>true,
+    translator_state:()=>({translator:trx.translator,...trx.info}),                        // QA-7
+    translator_set:p=>{ trx.translator=p; return {ok:true,translator:p,...trx.info}; },
+    translator_set_key:()=>({ok:true,translator:trx.translator,...trx.info}),
+    speaker_list:()=>[],                                                                   // SPK-4
     pause_shortcuts:on=>({ok:true,status:on?{}:state.shortcutStatus}),
     set_shortcut:(name,combo)=>({ok:true,shortcuts:{...state.shortcuts,[name]:combo||state.shortcuts[name]},status:state.shortcutStatus}),
     set_bar_locked:on=>({locked:!!on,applied:true}), toggle_bar_lock:()=>({locked:true,applied:true}),

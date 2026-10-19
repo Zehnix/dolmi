@@ -93,6 +93,10 @@
     ['about','#sc-toggle_source','rec:ctrl+alt+shift+Digit7','set_shortcut','toggle_source'],
     ['about','#sc-toggle_lock','rec:Backspace','set_shortcut','toggle_lock'],
     ['about','#setDownloadUpdate','click','open_release','https://github.com/Zehnix/dolmi/releases/tag/v2.3.0'],
+    ['captions','#setTranslator','change:deepl','translator_set','deepl'],                 // QA-7
+    ['captions','#setTrxKey','change:mock-key','translator_set_key','deepl'],
+    ['captions','#setTranslator','change:local','translator_set','local'],
+    ['privacy','#swSpeakers','click','set_setting','speaker_labels'],                      // SPK-4
   ];
   window.__uiControls=CONTROLS;   // other checks (new features) push rows here before run() starts
   async function use(el,how){
@@ -124,6 +128,7 @@
       if(!ok(el&&visible(el),`${label}: control ${sel} is missing or hidden in ${sec}`)) continue;
       used.add(el);
       const m=mark(); await use(el,how); await tick(80);
+      const again=q(sel); if(again) used.add(again);   /* a control its own action re-rendered */
       const got=since(m,method);
       if(optional&&!got.length) continue;
       ok(got.length&&(arg0==null||got.some(c=>c.args[0]===arg0)),`${label}: ${sel} (${how}) did not call ${method}(${arg0??''}); got ${calls().slice(m).map(c=>c.name).join(',')||'nothing'}`);
