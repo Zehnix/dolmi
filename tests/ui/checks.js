@@ -54,6 +54,7 @@
     ['captions','#setLang','change:de','set_setting','language'],
     ['captions','#swGerman','click','set_setting','show_german'],
     ['speech','#setModel','change:small','set_setting','model'],
+    ['speech','#swPreload','click','set_setting','preload_models'],
     ['speech','#openModels','click','open_model_folder'],
     ['speech','#modelList [data-use]','click','use_model'],
     ['speech','#modelList [data-download]','click','download_model'],
@@ -154,6 +155,12 @@
       noOverflow(view,`${label} ${v}`);
     }
     nav('live'); await tick();
+    /* APP-4: the status says Ready only once the models are loaded */
+    ok(/^Not loaded/.test(q('#status').textContent),`${label}: status before the models load: ${q('#status').textContent}`);
+    window.dolmi.onEngine('speech and translation models','loading'); await tick();
+    ok(/^Loading/.test(q('#status').textContent),`${label}: status while the models load: ${q('#status').textContent}`);
+    window.dolmi.onEngine('CUDA · large-v3-turbo','ready'); await tick();
+    ok(/^Ready/.test(q('#status').textContent),`${label}: status once loaded: ${q('#status').textContent}`);
     let m=mark(); q('#go').click(); await tick(100);
     ok(since(m,'start_listening').length===1,`${label}: Start does not call start_listening`);
     window.dolmi.onListening(true,'GPU · fake'); await tick();

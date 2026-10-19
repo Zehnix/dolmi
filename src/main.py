@@ -69,6 +69,7 @@ def main():
             pass
         if api._settings.get("invisible"):
             api.toggle_invisible(True)
+        api._start_background()          # APP-4: load the downloaded models now, so Start is instant
         # a system-wide hotkey always brings Dolmi back, even hidden from the taskbar / Dock
         dolmi_platform.start_recover_hotkey(api.recover)
 

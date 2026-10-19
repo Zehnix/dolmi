@@ -8,6 +8,7 @@ All state is held in underscore attributes on purpose: pywebview exposes every *
 the js_api object to page JavaScript (recursively), which would hand the page the window object, the
 Whisper model, the settings with the encrypted keys, and the database handle.
 """
+import gc
 import itertools
 import json
 import numbers
@@ -38,13 +39,17 @@ LAG_WINDOW = 5                                     # the Lag figure is the media
 SPEECH_SOURCES = ("local", *cloud_speech.PROVIDERS)   # Settings → Captions by
 SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_transcripts", "keep_days", "audio_device", "model",
             "overlay", "theme", "ai_length", "ai_context", "opacity", "font",
-            "warn_silence"}                                    # APP-3
-BOOL_SETTINGS = {"warn_silence"}                         # on/off switches that must be true or false
+            "warn_silence",                                    # APP-3
+            "preload_models"}                                  # APP-4
+BOOL_SETTINGS = {"warn_silence", "preload_models"}                         # on/off switches that must be true or false
 # APP-3 'nothing heard' warning: how quiet counts as silence, and how long before Dolmi says so
 HEARD_SILENCE_RMS = live_subs.SILENCE_RMS
 HEARD_AFTER_S = 20.0
 HEARD_TICK_S = 1.0
 HEARD_SOUND_NOW_S = 3.0          # sound in the last 3 s counts as "sound present" (speech has short gaps)
+# APP-4 Instant Start: settings that change which models the next Start needs
+ENGINE_SETTINGS = ("model", "language", "speech_source")
+WARM_DEBOUNCE_S = 0.5            # several setting changes in a row load the models once
 
 
 def _js(v):
@@ -119,6 +124,10 @@ class Api:
     _heard_start = 0.0
     _last_sound = 0.0
     _heard_tick_at = None                # clock time of the last tick (one tick per clock step)
+    # APP-4 Instant Start: the models are loaded in the background and kept; the page shows 'Ready' only
+    # when _engine_state is "ready" (idle | loading | ready | missing)
+    _engine_state = "idle"
+    _settings_gen = 0                    # bumped by every change to ENGINE_SETTINGS (a load in flight is stale)
 
     def __init__(self):
         config.prepare()
@@ -158,6 +167,7 @@ class Api:
         self._ask_q = queue.Queue()
         self._ov_q = queue.Queue()
         self._vocab_lock = threading.Lock()  # a save and the watcher's look at the files never interleave
+        self._warm_req = threading.Event()   # set: load the next Start's models in the background (APP-4)
         for loop in (self._pump, self._answer_loop, self._level_loop, self._overlay_loop, self._vocab_watch_loop):
             threading.Thread(target=loop, daemon=True).start()
 
@@ -331,7 +341,8 @@ class Api:
             "opacity": s.get("opacity", 0.88), "font": s.get("font", 22),
             "warnSilence": bool(s.get("warn_silence", True)),
             "barVisible": bool(self._overlay_visible),
-            "engine": self._engine_label(), "dataFolder": str(self._data), "version": VERSION,
+            "engine": self._engine_label(), "engineState": self._engine_state,
+            "preloadModels": bool(s.get("preload_models", True)), "dataFolder": str(self._data), "version": VERSION,
             "platform": {"os": dolmi_platform.OS, "words": dolmi_platform.WORDS},
         }
 
@@ -353,8 +364,14 @@ class Api:
             self._cap_stop.set()
         if key in ("opacity", "font"):
             self._push_overlay_style()
-        if key in ("model", "language", "speech_source") and not self._session:
-            self._engine = None              # next Start loads the newly chosen model/translator
+        if key in ENGINE_SETTINGS and not self._session:
+            self._drop_engine()              # next Start loads the newly chosen model/translator
+            self._request_warm()
+        if key == "preload_models":
+            if value:
+                self._request_warm()
+            elif not self._session:
+                self._drop_engine()          # off: give the memory back now
         return True
 
     def pc_info(self):
@@ -545,27 +562,21 @@ class Api:
             if not self._alive(token):
                 return
             if not self._engine:
-                self._emit("onEngine", "loading models…")
+                self._set_engine_state("loading", "speech and translation models")
                 watch = self._watch_downloads(self._needed_models())
-                source = self._settings.get("speech_source", "local")
                 try:
-                    if source == "local":
-                        self._engine = live_subs.Engine(self._settings["model"], self._settings["device"],
-                                                        self._settings["language"])
-                    else:
-                        # captions use the provider's fast speech model, not the Assistant's model
-                        self._engine = cloud_speech.CloudEngine(source, self._key_for(source),
-                                                                self._settings["language"])
+                    self._engine = self._new_engine()
                 except Exception as e:
                     watch.set()
                     with self._lock:
                         if self._alive(token):
                             self._session = None
+                    self._set_engine_state("idle", "models load on Start")
                     self._emit("onError", f"Could not start captions: {e}")
                     self._emit("onStopped")
                     return
                 watch.set()
-                self._emit("onEngine", self._engine_label())
+                self._set_engine_state("ready")
         with self._lock:
             if not self._alive(token):                # stopped while the models loaded
                 return
@@ -684,6 +695,107 @@ class Api:
             print(f"open microphone privacy page failed: {e}")
             return False
 
+    # ------------------------------------------------------------------ instant start (APP-4)
+    def _new_engine(self):
+        """The engine the next Start uses: Whisper + translator here, or a cloud speech provider."""
+        source = self._settings.get("speech_source", "local")
+        if source == "local":
+            return live_subs.Engine(self._settings["model"], self._settings["device"], self._settings["language"])
+        # captions use the provider's fast speech model, not the Assistant's model
+        return cloud_speech.CloudEngine(source, self._key_for(source), self._settings["language"])
+
+    def _set_engine_state(self, state, label=None):
+        """idle | loading | ready | missing; the page says 'Ready' only for "ready"."""
+        self._engine_state = state
+        self._emit("onEngine", label or self._engine_label(), state)
+
+    def _drop_engine(self):
+        """Forget the loaded models (a setting changed, or preloading was turned off) and free their memory."""
+        self._settings_gen += 1
+        if self._engine is not None:
+            self._engine = None
+            gc.collect()
+        if self._engine_state != "idle":
+            self._set_engine_state("idle", "models load on Start")
+
+    def _start_background(self):
+        """Called once by main when the window is up: keep the models warm from now on."""
+        threading.Thread(target=self._warm_loop, name="dolmi-warm", daemon=True).start()
+        self._request_warm()
+
+    def _request_warm(self):
+        self._warm_req.set()
+
+    def _warm_loop(self):
+        while True:
+            self._warm_req.wait()
+            time.sleep(WARM_DEBOUNCE_S)
+            self._warm_req.clear()
+            try:
+                self._warm_once()
+            except Exception as e:           # never let a failed load stop later ones
+                print(f"Background model load failed: {e}")
+
+    def _warm_once(self):
+        """Load the models the next Start needs, in the background, and keep them: Start then only opens
+        the audio. Only models already on disk are loaded (a download is always the user's choice), and
+        nothing happens while captions run or when "Load models when Dolmi opens" is off.
+        Returns True when the models are loaded."""
+        if not self._settings.get("preload_models", True) or self._session:
+            return False
+        if self._engine:
+            if self._engine_state != "ready":
+                self._set_engine_state("ready")
+            return True
+        if self._needs_download():
+            self._set_engine_state("missing", "models download on Start")
+            return False
+        with self._engine_lock:              # a Start that comes now waits here, then reuses the engine
+            if self._engine or self._session:
+                return bool(self._engine)
+            gen = self._settings_gen
+            self._set_engine_state("loading", "speech and translation models")
+            try:
+                engine = self._new_engine()
+            except Exception as e:           # e.g. a cloud provider without a key: Start says why
+                print(f"Background model load skipped: {e}")
+                self._set_engine_state("idle", "models load on Start")
+                return False
+            if gen != self._settings_gen:    # a setting changed while it loaded: load the new choice
+                del engine
+                gc.collect()
+                self._request_warm()
+                return False
+            self._prime(engine)
+            self._engine = engine
+        self._set_engine_state("ready")
+        return True
+
+    def _needs_download(self):
+        try:
+            return bool(self.missing_models())
+        except Exception as e:
+            print(f"Could not check the models: {e}")
+            return True
+
+    @staticmethod
+    def _prime(engine):
+        """Run each model once on a little silence, so the first real caption does not pay for the GPU
+        (CUDA) and decoder set-up. Failures only cost that first-caption speed."""
+        try:
+            import numpy as np
+            asr = getattr(engine, "asr", None)
+            if asr is not None:
+                segments, _ = asr.transcribe(np.zeros(live_subs.SR, dtype=np.float32), beam_size=1,
+                                             vad_filter=False, condition_on_previous_text=False,
+                                             language=None if engine.language == "auto" else engine.language)
+                list(segments)
+            lang = engine.language if engine.language != "auto" else "de"
+            engine.translate("Hello everyone." if lang == "en" else "Hallo zusammen.", lang)
+        except Exception as e:
+            print(f"Model warm-up run failed (first caption may be slower): {e}")
+        engine.context = ""
+
     # ------------------------------------------------------------------ models
     def _auto_speech(self):
         return dolmi_platform.auto_speech(self.pc_info()["gpu"])
@@ -730,7 +842,7 @@ class Api:
                 if not m:
                     return
                 mb = models.downloaded_mb(m)
-                self._emit("onEngine", f"downloading {m.name} — {mb:,.0f} of {m.size_mb:,} MB (first start only)")
+                self._emit("onEngine", f"downloading {m.name} — {mb:,.0f} of {m.size_mb:,} MB (first start only)", "loading")
         threading.Thread(target=poll, daemon=True).start()
         return done
 
@@ -788,6 +900,8 @@ class Api:
             stop.set()
             self._dl.discard(key)
             self._emit("onModelDone", key, err)
+            if not err:
+                self._request_warm()         # the next Start's models may all be here now
 
         threading.Thread(target=work, daemon=True).start()
         return True
@@ -801,7 +915,7 @@ class Api:
         if e and (e.model_name == key or key in e.translators):
             if self._session:
                 return {"ok": False, "message": "Stop translating before removing a model in use."}
-            self._engine = None
+            self._drop_engine()
         try:
             models.uninstall(m)
         except Exception as ex:

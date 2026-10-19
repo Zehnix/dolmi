@@ -63,7 +63,7 @@
       <button class="go" id="go" aria-label="Start translating"><span class="ic"><i data-lucide="play"></i></span></button>
       <button class="srcchip" id="srcChip" title="What Dolmi listens to — click to switch between speaker and microphone"><span class="ic" id="srcIc"><i data-lucide="volume-2"></i></span><span><small id="srcKind">Speaker</small><b id="srcDev">Default speaker</b></span></button>
       <div class="track" id="track" aria-hidden="true"></div>
-      <div class="status" id="status">Ready<b>models load on Start</b></div>
+      <div class="status" id="status">Not loaded<b>models load on Start</b></div>
     </div>
   </section>
 
@@ -195,6 +195,7 @@
         </div>
         <div class="card set-page" data-sec="speech"><div class="cardh"><span class="ic"><i data-lucide="cpu"></i></span>Speech models</div>
           <div class="set" id="modelRow" data-kw="speech model whisper tiny base small medium large turbo auto"><div><div class="lab">Speech model</div><div class="ps" id="modelHint" data-wt="Auto picks the best model for this {computer}">Auto picks the best model for this PC</div></div><select class="field" id="setModel"><option value="auto" data-wt="Auto (best for this {computer})">Auto (best for this PC)</option><option value="tiny">Whisper Tiny</option><option value="base">Whisper Base</option><option value="small">Whisper Small</option><option value="medium">Whisper Medium</option><option value="large-v3-turbo">Whisper Large v3 Turbo</option><option value="large-v3">Whisper Large v3</option></select></div>
+          <div class="set" data-kw="preload load models start instant warm fast ready memory gpu"><div><div class="lab">Load models when Dolmi opens</div><div class="ps">Start is then instant. Only models already downloaded; they stay in memory</div></div><button class="sw on" data-sw id="swPreload"></button></div>
           <div class="set-models" id="modelsCard" data-name="Model list" data-kw="models download remove gpu cpu ram this pc mac folder translator">
             <div class="ps" data-wt="Detected on this {computer}, never assumed. You choose which models to download; they download once per {os_user} and run locally.">Detected on this PC, never assumed. You choose which models to download; they download once per Windows user and run locally.</div>
             <div class="chips" id="specs" style="margin-top:10px"><span class="chipt" data-wt="Checking this {computer}…">Checking this PC…</span></div>

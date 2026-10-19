@@ -29,11 +29,14 @@ function applyPlatform(p){ if(!p) return; PLATFORM=p; root.dataset.platform=p.os
 /* ===================== bridge integration ===================== */
 function toast(msg){ let t=document.getElementById('toast'); if(!t){ t=document.createElement('div'); t.id='toast'; t.style.cssText='position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:999px;font-size:13px;font-weight:600;z-index:80;box-shadow:var(--sh);max-width:80vw;transition:opacity .3s'; document.body.append(t); } t.textContent=msg; t.style.opacity='1'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.opacity='0',4200); }
 let currentMeeting=null,currentChat=null,mLoaded=false,vLoaded=false,aLoaded=false;
+/* APP-4: 'Ready' only once the models are loaded (Python loads them in the background when Dolmi opens) */
+let engineState='idle';
+const statusWord=()=>({ready:'Ready',loading:'Loading',missing:'Not downloaded'})[engineState]||'Not loaded';
 
 /* Python -> UI */
 window.dolmi={
   onSource:(lab)=>applyAudioSource(lab),
-  onEngine:(label)=>{ engineLabel=label; $('#status').innerHTML=(listening?'Translating':'Ready')+'<b>'+esc(label)+'</b>'; },
+  onEngine:(label,state)=>{ engineLabel=label; if(state) engineState=state; $('#status').innerHTML=(listening?'Translating':statusWord())+'<b>'+esc(label)+'</b>'; },
   onListening:(on,info)=>{
     if(on){ engineLabel=info||engineLabel; setLive(true,engineLabel); return; }
     setLive(false,engineLabel); if(!lines) showIdle();
@@ -92,7 +95,8 @@ $$('.nav button').forEach(btn=>btn.addEventListener('click',()=>{ const v=btn.da
 async function boot(){ const b=bridge(); if(!b) return; try{ const s=await b.state();
   applyPlatform(s.platform);
   setTheme(s.theme||'paper');
-  engineLabel = s.engine==='not loaded' ? 'models load on Start' : s.engine;
+  engineState = s.engineState||(s.engine==='not loaded'?'idle':'ready');
+  engineLabel = s.engine==='not loaded' ? (engineState==='loading'?'speech and translation models':'models load on Start') : s.engine;
   setSw('#swInv',s.invisible); $('#stealth').classList.toggle('on',s.invisible);
   setSw('#swGerman',s.showGerman); setSw('#swSave',s.saveTranscripts); setSw('#swBar',s.overlay); setBarBtn(s.barVisible);
   applyGerman(s.showGerman);
@@ -101,7 +105,7 @@ async function boot(){ const b=bridge(); if(!b) return; try{ const s=await b.sta
   applySource(s.speechSource||'local');
   applyLang(s.language);
   applyProvider(s);
-  $('#status').innerHTML='Ready<b>'+esc(engineLabel)+'</b>';
+  $('#status').innerHTML=statusWord()+'<b>'+esc(engineLabel)+'</b>';
   setRange('#setFont',s.font); setRange('#setOpacity',Math.round(s.opacity*100));
   applyPc();
   applyAudioSource(s.sourceLabel);

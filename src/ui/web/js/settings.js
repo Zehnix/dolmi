@@ -159,6 +159,7 @@ if($('#setSearch')){ const s=$('#setSearch');
 
 /* rows that only exist since the sections: warning switch, input level, data folder, version, vocabulary link */
 wireSwitch('#swWarnSilence','warn_silence');
+wireSwitch('#swPreload','preload_models');                                    /* APP-4 */
 if($('#setOpenVocab')) $('#setOpenVocab').onclick=()=>{ const n=$('.nav button[data-v="vocab"]'); if(n) n.click(); };
 if($('#setDataOpen')) $('#setDataOpen').onclick=()=>{ const b=bridge(); if(b) b.open_data_folder(); };
 function setLevelMeter(rms){ const e=$('#setLevel'); if(e) e.style.width=Math.min(100,Math.round(Math.sqrt(Math.max(0,rms||0))*400))+'%'; }
@@ -167,6 +168,7 @@ function setLevelMeter(rms){ const e=$('#setLevel'); if(e) e.style.width=Math.mi
   window.dolmi.onListening=(on,info)=>{ onListening(on,info); if(!on) setLevelMeter(0); }; }
 async function settingsBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state();
   setSw('#swWarnSilence',s.warnSilence!==false);
+  setSw('#swPreload',s.preloadModels!==false);
   if($('#setVersion')) $('#setVersion').textContent=s.version||'—';
   if($('#setDataDir')) $('#setDataDir').textContent=s.dataFolder||'—';
 }catch(e){ console.error('settings boot',e); } }
