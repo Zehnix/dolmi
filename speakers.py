@@ -343,7 +343,8 @@ class Diarizer:
         if log is not None and start is not None and end is not None:
             conf = log.you(start, end)
             if conf is not None:           # the user's own voice: not clustered, the others' centroids stay clean
-                return YOU, conf
+                with self._lock:           # You merged into Speaker N (or N into You) follows the merge
+                    return self.clusters.resolve(YOU), conf
         with self._lock:
             c = self.clusters
             if seconds < MIN_SECONDS and c.last is not None:

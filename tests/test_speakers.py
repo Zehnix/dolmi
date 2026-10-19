@@ -456,6 +456,16 @@ def test_mic_dominant_lines_are_you_and_the_rest_are_clustered():
     assert speakers.default_name(speakers.YOU) == "You"
 
 
+def test_new_mic_lines_follow_a_merge_of_you_into_a_speaker():
+    mic = np.concatenate([_tone(2, 0.3), np.zeros(2 * speakers.SR, np.float32)])
+    spk = np.concatenate([np.zeros(2 * speakers.SR, np.float32), _tone(2, 0.5, 330)])
+    _, log = _mixed(mic, spk)
+    d, _ = _diarizer(log)
+    assert d.assign(np.zeros(2 * speakers.SR), 1002.0, 1004.0)[0] == 1
+    assert d.merge(speakers.YOU, 1) == 1                            # user: "You" and Speaker 1 are the same
+    assert d.assign(np.zeros(2 * speakers.SR), 1000.0, 1002.0)[0] == 1
+
+
 def test_echo_of_the_remote_voice_in_the_mic_is_not_you():
     remote = _tone(3, 0.5, 330)
     echo = 0.25 * np.roll(remote, 800)                              # laptop speakers: the remote voice leaks in
