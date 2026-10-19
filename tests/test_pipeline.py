@@ -830,3 +830,57 @@ def test_cloud_overlap_words_are_not_shown_twice():
     submit_now(gem, speech(1), ui_q, tr, meta={"overlap": 0.0})
     submit_now(gem, speech(1), ui_q, tr, meta={"overlap": m.CLOUD_OVERLAP})
     assert tr.rows[1][2:4] == ("nach Hause.", "home.")
+
+
+# ---------------------------------------------------------------- SEG-10: anti-aliased resampling to 16 kHz
+def _tone(freq, rate, seconds=2.0):
+    t = np.arange(int(rate * seconds)) / rate
+    return np.sin(2 * np.pi * freq * t).astype(np.float32)
+
+def _db(y):
+    y = y[400:-400]                                   # skip the filter's start-up edge
+    return 20 * np.log10(np.sqrt(np.mean(y * y)) / np.sqrt(0.5) + 1e-12)
+
+def test_a_9khz_tone_from_48khz_capture_is_filtered_out():
+    for rate in (48000, 44100):
+        assert _db(m.resample(_tone(9000, rate), rate)) < -40
+        assert abs(_db(m.resample(_tone(1000, rate), rate))) < 0.1      # speech band passes unchanged
+    # the old nearest-sample picking folded the 9 kHz tone back to 7 kHz at full level
+    x = _tone(9000, 48000)
+    old = x[np.linspace(0, len(x) - 1, len(x) // 3).astype(np.int64)]
+    assert _db(old) > -3
+
+def test_resampling_in_100ms_chunks_matches_one_call():
+    for rate in (48000, 44100, 22050, 16000, 8000):
+        x = np.random.default_rng(1).standard_normal(rate * 3).astype(np.float32)
+        r = m.Resampler(rate)
+        chunked = np.concatenate([r(x[i:i + rate // 10]) for i in range(0, len(x), rate // 10)])
+        whole = m.resample(x, rate)
+        assert len(chunked) == len(whole)
+        assert abs(len(whole) - 3 * m.SR) <= 2 * m.Resampler.HALF + 2
+        np.testing.assert_allclose(chunked, whole, atol=1e-5)
+
+def test_resampling_costs_little_cpu():
+    x = np.random.default_rng(2).standard_normal(48000 * 10).astype(np.float32)
+    r = m.Resampler(48000)
+    t = time.perf_counter()
+    for i in range(0, len(x), 4800):
+        r(x[i:i + 4800])
+    per_second = (time.perf_counter() - t) / 10
+    print(f"resampling 48 kHz -> 16 kHz: {per_second * 1000:.1f} ms CPU per second of audio")
+    assert per_second < 0.1
+
+
+# ---------------------------------------------------------------- SEG-12: only real loops collapse
+def test_a_phrase_said_twice_in_a_sentence_is_kept():
+    assert m.collapse_repeats("Das ist gut. Das ist gut so") == "Das ist gut. Das ist gut so"
+    assert m.collapse_repeats("Ich glaube, ich glaube das nicht.") == "Ich glaube, ich glaube das nicht."
+    assert m.collapse_repeats("Wir machen das morgen, wir machen das morgen früh.") == \
+        "Wir machen das morgen, wir machen das morgen früh."
+
+def test_three_repeats_or_a_repeated_sentence_still_collapse():
+    assert m.collapse_repeats("Das ist gut, das ist gut, das ist gut so.") == "Das ist gut so."
+    assert m.collapse_repeats("Er ist ein sehr guter Mann. Er ist ein sehr guter Mann. Hallo.") == \
+        "Er ist ein sehr guter Mann. Hallo."
+    assert m.collapse_repeats("We can hear it somewhere We can hear it somewhere") == "We can hear it somewhere"
+    assert m.collapse_repeats("Ja. Ja. Ja.") == "Ja."                       # SEG-14 short loops stay folded
