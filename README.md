@@ -138,6 +138,8 @@ venv\Scripts\python.exe tests/test_webview_bridge.py
 
 The same tests run on a Mac from the repo root with `Mac/venv/bin/python` (one shared code base; OS differences live in `dolmi_platform/`). The helper tests cover the transcript, vocabulary and question-detection logic; `test_platform.py` and `test_packaging.py` check that the Windows and Mac sides offer the same API and that both builds list only files that exist. The bridge tests exercise the webview API headlessly: captions, meetings, vocabulary, chats, archive, settings and model choice (including that Start never downloads without asking). None of them touches the network. New tests go in `tests/test_<area>.py` and use the `api` and `fake_engine` fixtures from `tests/conftest.py`.
 
+Only one Dolmi runs at a time: while the installed app is open, starting the source build only brings the installed window forward. To run both, set `DOLMI_INSTANCE` (letters, digits, `-` or `_`) before starting the source build, for example `set DOLMI_INSTANCE=dev`. Both copies still share the same settings folder.
+
 `installer\test-install.ps1` installs, launches, upgrades and uninstalls a built `setup.exe`. It runs on GitHub's Windows runners for every release (*Actions → Installer test* runs it on demand). On a PC with Smart App Control on, it stops safely, because Windows blocks unsigned installers there.
 
 ---

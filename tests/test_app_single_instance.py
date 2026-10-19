@@ -89,3 +89,14 @@ def test_bring_to_front_shows_the_window(api, monkeypatch):
     api._bring_to_front()
     assert seen == ["show", "restore", "front"]
     assert not api._settings["invisible"]                     # invisible mode is left as it was
+
+
+@pytest.mark.parametrize("value,want", [(None, "Dolmi"), ("", "Dolmi"), ("dev", "Dolmi-dev"), ("my_src-2", "Dolmi-my_src-2"),
+                                        ("a\b", "Dolmi"), ("x" * 33, "Dolmi"), ("dév", "Dolmi")])
+def test_developers_can_run_a_second_copy_with_dolmi_instance(monkeypatch, value, want):
+    import main
+    if value is None:
+        monkeypatch.delenv("DOLMI_INSTANCE", raising=False)
+    else:
+        monkeypatch.setenv("DOLMI_INSTANCE", value)
+    assert main._instance_name() == want

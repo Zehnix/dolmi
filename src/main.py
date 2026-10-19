@@ -41,9 +41,19 @@ def _setup_output():
     print(f"\n--- Dolmi (webview) started {datetime.now():%Y-%m-%d %H:%M:%S}")
 
 
+def _instance_name():
+    """APP-5: the installed Dolmi and a copy run from source share one instance name, so while one runs
+    the other only brings it forward. Developers set DOLMI_INSTANCE (letters, digits, - or _) to run a
+    second copy next to the installed one; both still use the same settings folder."""
+    suffix = os.environ.get("DOLMI_INSTANCE", "").strip()
+    if suffix and len(suffix) <= 32 and all(c.isascii() and (c.isalnum() or c in "-_") for c in suffix):
+        return "Dolmi-" + suffix
+    return "Dolmi"
+
+
 def main():
     _setup_output()
-    instance = dolmi_platform.single_instance()             # APP-5: one Dolmi at a time
+    instance = dolmi_platform.single_instance(_instance_name())   # APP-5: one Dolmi at a time
     if instance is None:
         print("Dolmi is already running: asked it to come to the front")
         return
