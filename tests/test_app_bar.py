@@ -1,6 +1,7 @@
 """APP-8 subtitle bar: click-through lock (Windows style bits checked on a real window; real click-through and
 the Mac are manual checks) and the bar's place remembered per screen (keyed by the screen's geometry)."""
 import sys
+import time
 from types import SimpleNamespace as NS
 
 import pytest
@@ -157,3 +158,15 @@ def test_overlay_page_has_the_lock_mark():
     ROOT = Path(__file__).resolve().parent.parent
     html = (ROOT / "src" / "ui" / "web" / "overlay.html").read_text(encoding="utf-8")
     assert "locked:(on)=>" in html and 'id="lockMark"' in html
+
+
+def test_reshown_bar_gets_the_lock_state_changed_while_hidden(api, lock_calls):
+    api._overlay = FakeOverlay()
+    api._overlay.show = lambda: None
+    api._overlay_ready, api._overlay_visible = True, False
+    api.set_bar_locked(True)                         # hidden: nothing sent to the bar page
+    api.show_overlay()
+    deadline = time.time() + 2
+    while not api._overlay.sent and time.time() < deadline:
+        time.sleep(0.02)
+    assert ("locked", (True,)) in api._overlay.sent

@@ -1607,6 +1607,7 @@ class Api:
             self._overlay.show()
             self._stealth_overlay()
         self._overlay_visible = True
+        self._ov("locked", bool(self._settings.get("bar_locked")))   # it may have changed while hidden
         return True
 
     def hide_overlay(self):
