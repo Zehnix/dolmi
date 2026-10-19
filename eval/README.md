@@ -20,11 +20,12 @@ Common options:
 
 | Option | Meaning |
 |---|---|
-| `--mode component\|stream\|both` | which half to run (default both) |
-| `--set synthetic\|fleurs\|private:<folder>` | test set (default synthetic) |
-| `--model small` / `--device cpu\|cuda\|auto` | speech model and device (an RTX 4060 runs `large-v3-turbo`) |
-| `--translator opus-de` | the app's Opus-MT, or another CTranslate2 Marian model (models.py key or Hugging Face repo) |
-| `--limit N` | component: first N clips; stream: first N sessions |
+| `--mode component\|stream\|both\|mt` | which half to run (default both); `mt` = translation only on the gold German, no Whisper |
+| `--set synthetic\|fleurs\|private:<folder or .json>` | test set (default synthetic); several: `--set synthetic,fleurs` |
+| `--model small` / `--device cpu\|cuda\|auto` | speech model (models.py key or a CTranslate2 folder) and device (an RTX 4060 runs `large-v3-turbo`) |
+| `--translator opus-de` | the app's Opus-MT, another CTranslate2 Marian model (models.py key, Hugging Face repo or folder), or `gemini` / `deepl` (the QA-7 cloud translator with your saved key) |
+| `--limit N` | component/mt: first N clips/lines; stream: first N sessions |
+| `--smoke` | the CI smoke suite (below); exits 1 on a regression |
 | `--no-terms` | run without the fictional glossary/vocabulary |
 | `--comet --comet-python <python>` | add COMET (see below) |
 | `--write-baseline` | store the numbers in `eval/baseline.json` |
@@ -41,6 +42,28 @@ python eval/run_eval.py --model large-v3-turbo --device cuda
 How the Foundation entries were made: a scratch worktree at `d50e5ad` with the `eval/` folder copied on top (the bench is not in that commit), then `--write-baseline`. `git_rev()` records the HEAD of the checkout it runs in, so the `git` field of those entries was set to `d50e5ad` by hand afterwards. Do the same for any later entry that should stand for an older commit. The CPU `small` Foundation entry is still to be measured this way (about 1.5 to 2 hours): `python eval/run_eval.py --model small --device cpu --write-baseline`.
 
 Add `--write-baseline` only when the new numbers should become the reference. Timing numbers (latency, real-time factor) depend on what else the PC is doing; compare them on an idle machine, or look at the quality numbers only.
+
+## Smoke suite (CI, QA-3)
+
+`python eval/run_eval.py --smoke` = 25 FLEURS clips, Whisper small + Opus-MT on the CPU, component mode, compared with the `smoke|small|cpu|opus-de|terms` entry in `baseline.json`. It fails (exit 1) when German WER rises more than 1 point or chrF (on the gold German or on the ASR output) falls more than 1 point. About 3 minutes on a laptop CPU including the model load (run `fetch_public.py` once first). `.github/workflows/eval-smoke.yml` runs the same command on pull requests that touch the speech/translation code, with the models and FLEURS clips cached. `--check-baseline` applies the same limits to any run against its own entry. After an intended quality change, refresh the entry with `--smoke --write-baseline`.
+
+## Translation A/B and cloud translators (QA-4, QA-7)
+
+`--mode mt` scores only the translator, on the gold German of a set (no Whisper, under a minute per set), so candidates are cheap to compare:
+
+```
+python eval/run_eval.py --mode mt --set fleurs --translator %LOCALAPPDATA%\Dolmi-eval\models\<ct2 folder>
+```
+
+`--translator gemini` (or `deepl`) sends each line with the previous three lines (German + accepted English) and the Vocabulary's rules, exactly as the app does, using the key saved in Dolmi (or `DOLMI_GEMINI_KEY` / `DOLMI_DEEPL_KEY`). The local Opus-MT runs on the same lines, and the table adds a "vs local" block: chrF and COMET deltas, term accuracy, known mistakes avoided, the share of lines whose chrF beats local, answer time p50/p95, and how often the app would have kept the local line (failed or slower than 1.5 s). The adoption run (a few cents; it sends the lines to the provider):
+
+```
+python eval/run_eval.py --mode mt --translator gemini --set synthetic,fleurs,private:<private text set .json>
+python eval/ab_blind.py make <that run's .jsonl> --out <folder>     # 100 lines, sides hidden
+python eval/ab_blind.py score <folder>                               # after filling in sheet.csv
+```
+
+Adoption rule (tracker, quality domain): at least +3 COMET and +2 chrF over local, and at least 60 % wins in the blind A/B of 100 sentences. COMET needs the separate venv below; where it cannot run, decide on chrF (+2) and term accuracy and say so.
 
 ## What is measured
 
@@ -103,7 +126,18 @@ Your own recordings, scored without anything entering the repo: put `<name>.wav`
   "text": "corrected German", "en": "reference English or null", "terms": [], "en_terms": [], "tags": []}]}
 ```
 
-Then run `python eval/run_eval.py --set private:D:\path\to\folder`. Results still go to `eval/results/` (git-ignored). Only use meetings whose participants agreed.
+Then run `python eval/run_eval.py --set private:D:\path\to\folder`. Results go to a `results` folder next to your private data, never into the checkout, and `--write-baseline` refuses private sets. Only use meetings whose participants agreed.
+
+### private text sets (no audio)
+
+When only transcripts exist, a text set scores the translation half: `{"kind": "text", "lines": [{"id", "de", "en" (reference or null), "en_terms": [...], "avoid": [known wrong English], "tags": []}], "vocabulary": "...", "glossary": "..."}` (see `translators.py`). `make_private_text.py` builds one from your saved meetings and a vocabulary review (the English each reviewed rule should produce, and the lines the review marked mistranslated):
+
+```
+python eval/make_private_text.py --out <private folder>\meetings.json --transcripts "%USERPROFILE%\Documents\Dolmi" --review <review folder>
+python eval/run_eval.py --set private:<private folder>\meetings.json
+```
+
+It refuses to write inside the checkout and prints counts only. The table shows term accuracy and "known mistakes avoided" (lines where none of the reviewed wrong English comes back).
 
 ## COMET (optional)
 
