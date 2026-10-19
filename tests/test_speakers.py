@@ -273,6 +273,67 @@ def test_live_merge_goes_through_the_diarizer(api):
     assert api.speaker_reassign(1, None)["speaker"] == 3     # the diarizer hands out the new id
 
 
+def test_a_late_merge_of_the_last_meeting_stays_in_that_meeting(api, monkeypatch, tmp_path):
+    """After Stop the old diarizer can still merge while the next meeting is live: it must relabel
+    the old meeting's lines, not the new meeting's (SPK-3 review)."""
+    made = {}
+    monkeypatch.setattr(speakers, "is_installed", lambda: True)
+    monkeypatch.setattr(speakers, "load_diarizer", lambda **k: made.update(k) or "D")
+    monkeypatch.setitem(api._settings, "speaker_labels", True)
+    (tmp_path / "old").mkdir(), (tmp_path / "new").mkdir()
+    old, new = _meeting(tmp_path / "old"), _meeting(tmp_path / "new")
+    old.add(old.t0 + 7, old.t0 + 8, "Und?", "And?", {"id": 4, "speaker": 3, "speaker_conf": 0.9})
+    new.add(new.t0 + 7, new.t0 + 8, "So.", "So.", {"id": 4, "speaker": 3, "speaker_conf": 0.9})
+    assert api._make_diarizer(lambda: old) == "D"
+    api._session = {"token": object(), "stop": threading.Event(), "transcript": new, "diarizer": None}
+    before = api._window.js()
+    made["on_merge"](3, 1)
+    assert old.lines[4]["speaker"] == 1 and new.lines[4]["speaker"] == 3
+    assert "onSpeakerMerge" not in api._window.js()[len(before):]
+    assert "· Speaker 3**" not in old.md.read_text(encoding="utf-8")          # its files were rewritten
+    new.add(new.t0 + 9, new.t0 + 10, "Ok.", "Ok.", {"id": 5, "speaker": 3, "speaker_conf": 0.9})
+    assert new.lines[5]["speaker"] == 3                                      # nothing leaked into the new one
+
+
+def test_new_speaker_after_stop_never_reuses_a_renamed_id(api):
+    t = _meeting(api._data)
+    api._last_transcript = t
+    assert api.speaker_rename(2, "Anna")["ok"]
+    assert api.speaker_reassign(2, 1)["ok"]                    # Anna has no lines left
+    r = api.speaker_reassign(3, None)
+    assert r["ok"] and r["speaker"] == 3 and t.speaker_name(3) == "Speaker 3"
+    t.relabel(3, 1)                                            # a merged-away id is not reused either
+    assert t.next_speaker_id() == 4
+
+
+def test_rename_to_another_speakers_name_is_refused(api):
+    t = _meeting(api._data)
+    api._last_transcript = t
+    r = api.speaker_rename(1, "speaker 2")
+    assert r["ok"] is False and "Same person as" in r["message"] and t.speaker_name(1) == "Speaker 1"
+    assert api.speaker_rename(1, "Lena")["ok"] and api.speaker_rename(1, "LENA")["ok"]  # its own name is fine
+    assert api.speaker_rename(2, "lena")["ok"] is False
+
+
+def test_stale_merge_or_reassign_to_a_merged_id_still_lands(api):
+    t = _meeting(api._data)
+    a, b = voices(2)
+    d = speakers.Diarizer(lambda x: a, on_merge=api._on_speaker_merge)
+    api._session = {"token": object(), "stop": threading.Event(), "transcript": t, "diarizer": d}
+    d.clusters.assign(a, 3, TH), d.clusters.assign(b, 3, TH)
+    d.clusters.alias[2] = 1                                    # merged, but line 2 still says 2
+    assert api.speaker_merge(2, 1)["ok"] and t.lines[2]["speaker"] == 1
+    t.lines[2]["speaker"] = 2                                  # a stale page reassigns to the merged id
+    assert api.speaker_reassign(2, 2)["ok"] and t.lines[2]["speaker"] == 1
+
+
+def test_embedding_times_are_bounded():
+    d = speakers.Diarizer(lambda x: voices(1)[0])
+    for _ in range(600):
+        d.assign(np.zeros(speakers.SR * 2, np.float32))
+    assert len(d.ms) == 500
+
+
 def test_delete_meeting_removes_the_speaker_names(api):
     t = _meeting(api._data)
     t.finish()
