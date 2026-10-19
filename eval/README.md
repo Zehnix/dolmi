@@ -32,7 +32,7 @@ Common options:
 
 ## Comparing with the baseline
 
-`eval/baseline.json` holds numbers only (no text, no audio), one entry per `set|model|device|translator|terms`. The committed entries were measured on the Foundation code (`exon/integration` at `d50e5ad`, before the wave-1 pipeline fixes). To compare after a change, run the same command and read the two tables side by side:
+`eval/baseline.json` holds numbers only (no text, no audio), one entry per `set|model|device|translator|terms`. The `synthetic|large-v3-turbo|cuda` entry was measured after wave 1 (`exon/integration` at `1d1d7e3`; the Foundation `d50e5ad` numbers are in git history), the `smoke` entry on the same commit. To compare after a change, run the same command and read the two tables side by side:
 
 ```
 python eval/run_eval.py --model small --device cpu
