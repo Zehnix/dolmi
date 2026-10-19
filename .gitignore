@@ -35,3 +35,4 @@ design/
 # test bench: audio and results stay local
 eval/data/
 eval/results/
+eval/streaming/results/
