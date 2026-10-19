@@ -1,6 +1,6 @@
 /* Dolmi web UI — Settings view: switches, languages, captions source, AI provider/keys, audio source, this computer & speech models, subtitle bar.
    Classic script (not a module): top-level names are shared with the other js/*.js files.
-   Load order (index.html): core, live, meetings, assistant, vocab, settings, onboarding. */
+   Load order (index.html): core, live, meetings, assistant, vocab, settings, onboarding, heard. */
 let pcSummary=null,modelChip='Speech: auto';   /* what applyPc found; the onboarding shows it */
 
 /* ---- settings wiring ---- */

@@ -262,3 +262,14 @@ html[data-platform="mac"] [data-os="win"],html[data-platform="win"] [data-os="ma
   .set-menu button svg{display:none}
   .set-page .set{flex-wrap:wrap}
 }
+
+/* 'nothing heard' warning on the Live view (APP-3); the Live grid gets one more auto row while it shows */
+.heard-on#v-live.a{grid-template-rows:auto auto minmax(0,1fr) auto}
+.heard-card{margin-top:14px;display:flex;gap:14px;align-items:flex-start;background:var(--card);border:1px solid var(--src);border-radius:20px;box-shadow:var(--sh-sm);padding:12px 14px;animation:rise .4s var(--ease) both}
+.heard-ic{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;background:var(--src-soft);color:var(--src);flex:none}.heard-ic svg{width:19px;height:19px}
+.heard-body{flex:1;min-width:0}
+.heard-body b{font-family:var(--display);font-size:17px;font-weight:600}
+.heard-sub{color:var(--mute);font-size:13px;margin-left:6px}
+.heard-body ul{margin:2px 0 8px 18px;font-size:13px;color:var(--mute);line-height:1.45}
+.heard-fix{display:flex;flex-wrap:wrap;gap:8px}.heard-fix .btn{padding:6px 12px;font-size:12.5px}
+.heard-x{width:30px;height:30px;border-radius:10px;display:grid;place-items:center;color:var(--faint);flex:none;transition:.2s}.heard-x:hover{color:var(--ink);background:var(--panel)}.heard-x svg{width:16px;height:16px}

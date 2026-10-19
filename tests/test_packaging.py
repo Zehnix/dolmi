@@ -93,7 +93,7 @@ def test_one_version_file():
 def test_page_loads_its_css_and_scripts_in_order():
     html = (WEB / "index.html").read_text(encoding="utf-8")
     scripts = re.findall(r'<script src="(js/[^"]+)"></script>', html)
-    assert scripts == [f"js/{n}.js" for n in ("core", "live", "meetings", "assistant", "vocab", "settings", "onboarding")]
+    assert scripts == [f"js/{n}.js" for n in ("core", "live", "meetings", "assistant", "vocab", "settings", "onboarding", "heard")]
     assert sorted(p.name for p in (WEB / "js").glob("*.js")) == sorted(Path(s).name for s in scripts)
     assert '<link href="css/app.css" rel="stylesheet">' in html and (WEB / "css" / "app.css").is_file()
     assert "<style>" not in html and "<script>" not in html          # no inline CSS/JS left

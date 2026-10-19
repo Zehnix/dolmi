@@ -109,6 +109,11 @@ def test_mount_points_are_empty_and_hidden():
     assert "function openSettings(" in JS["settings.js"]
 
 
+def test_heard_mount_is_the_first_thing_in_live():
+    assert re.search(r'<section class="view a" id="v-live">\s*<div id="heardWarn" hidden></div>', HTML)
+    assert '<script src="js/heard.js"></script>' in HTML
+
+
 def test_onboarding_deep_links_to_speech_models():
     js = JS["onboarding.js"]
     assert "scrollIntoView" not in js

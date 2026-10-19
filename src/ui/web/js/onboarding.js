@@ -1,6 +1,6 @@
 /* Dolmi web UI — first-run onboarding and the 'download models first?' dialog.
    Classic script (not a module): top-level names are shared with the other js/*.js files.
-   Load order (index.html): core, live, meetings, assistant, vocab, settings, onboarding. */
+   Load order (index.html): core, live, meetings, assistant, vocab, settings, onboarding, heard. */
 /* onboarding */
 const STEPS=[
  {h:'Welcome to<br>Dolmi.',p:'Dolmi captions your meeting in real time — 27 languages into English, or English into German — with the original underneath — all on this {computer}. Only the optional Assistant chat goes to the AI.',b:''},
