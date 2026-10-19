@@ -45,6 +45,17 @@ window.pywebview={api:new Proxy({
     out.backAtBottom=gap()<=48;
     out.pillHiddenAfterJump=pillEl.hidden;
 
+    // another tab open mid-meeting: the hidden feed cannot scroll, but coming back must still be live
+    const nav=v=>document.querySelector(`.nav button[data-v="${v}"]`).click();
+    nav('meetings'); await tick();
+    for(let i=35;i<45;i++) line(i);
+    await tick();
+    nav('live'); await tick();
+    out.backFromTabAtBottom=gap()<=48;
+    line(45); await tick();
+    out.tabStillFollowing=gap()<=48;
+    out.tabPillHidden=pillEl.hidden;
+
     resetFeed();
     out.lagAfterReset=lag();
 
