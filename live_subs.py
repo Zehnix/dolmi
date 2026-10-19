@@ -43,7 +43,7 @@ CLOUD_SPLIT, CLOUD_BREATH, CLOUD_MAX = 3.0, 0.2, 6.0   # cloud captions: cut lon
 HALLUCINATIONS = [
     "untertitel im auftrag des zdf", "untertitel im auftrag des", "untertitel der amara.org-community",
     "untertitel von", "untertitel", "untertitelung", "amara.org", "zdf", "swr", "wdr",
-    "vielen dank fürs zuschauen", "danke fürs zuschauen", "bis zum nächsten mal", "copyright",
+    "vielen dank fürs zuschauen", "danke fürs zuschauen", "copyright",
     "abonniert", "abonnieren", "thanks for watching", "thank you for watching", "subscribe to",
     "sous-titrage", "sous-titres",
 ]
@@ -215,7 +215,7 @@ def echoes_terms(text: str, terms: set, no_speech_prob=None, avg_logprob=None) -
     sentences = re.split(r"(?<=[.!?])\s+", text.strip())
     return " ".join(x for x in sentences if x and not _is_term_list(x, terms))
 
-_URL = re.compile(r"https?://|www\.\S", re.I)
+_URL = re.compile(r"(?:https?://|www\.)\S*", re.I)
 _W = "A-Za-z0-9À-ɏ"   # Latin letters (with accents): only these mark word edges, as Whisper glues CJK onto "Amara.org"
 _DOMAIN = re.compile(rf"(?<![{_W}.-])[{_W}-]+(?:\.[{_W}-]+)*\.(?:com|org|net|de|io|tv|info|eu|at|ch)(?![{_W}])", re.I)
 _HALLUCINATION = re.compile("|".join(rf"(?<![{_W}]){re.escape(h)}(?![{_W}])" for h in
@@ -232,7 +232,9 @@ def junk_reason(t: str, energy=None, lang=None):
     letters = _letters(t)
     if letters < 2:                                   # '..', '-' (but 'Ja', 'OK' are lines)
         return "no_words"
-    if _URL.search(t) or sum(_letters(m.group()) for m in _DOMAIN.finditer(t)) >= 0.5 * letters:
+    links = [m.span() for m in _URL.finditer(t)]   # a URL in a real sentence is part of the sentence
+    domains = [m.group() for m in _DOMAIN.finditer(t) if not any(a <= m.start() < b for a, b in links)]
+    if sum(_letters(t[a:b]) for a, b in links) + sum(map(_letters, domains)) >= 0.5 * letters:
         return "url"
     covered = sum(_letters(m.group()) for m in _HALLUCINATION.finditer(t))
     if covered >= 0.6 * letters:

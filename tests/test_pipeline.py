@@ -252,7 +252,10 @@ def test_junk_is_dropped_with_its_reason(fake_engine):
 # ---------------------------------------------------------------- SEG-6 / SEG-13: filters
 def test_real_short_lines_and_goodbyes_are_kept():
     for line in ("Tschüss, bis morgen alle!", "Ja.", "OK", "Nein.", "Danke.", "Danke schön.",
-                 "Wir schauen heute ZDF.", "Schau mal auf example.com nach dem Termin."):
+                 "Wir schauen heute ZDF.", "Schau mal auf example.com nach dem Termin.",
+                 "Die Anmeldung läuft über www.firma.de, bitte bis Freitag.",
+                 "Die Folien liegen unter https://example.com/q3, schaut sie euch an.",
+                 "Bis zum nächsten Mal, Leute...", "Bis zum nächsten Mal!"):
         assert not m.is_junk(line, energy=0.1, lang="de"), line
     assert not m.is_junk("Danke.", energy=0.001, lang="de")       # real 'Danke' even when quiet
     assert not m.is_junk("Thank you.", energy=0.1, lang="de")     # said out loud: kept
