@@ -44,6 +44,23 @@ def _spoken_language_ok(code):
     return code == "auto" or code in models.LANGUAGES
 
 
+def _replace_text(path, text, tries=10, wait=0.05):
+    """Write text to path through a temp file, so a reader never sees half a file. On Windows os.replace
+    fails while anyone else has the file open (the engine reloading it, an indexer, antivirus), so it is
+    retried briefly; on a final failure the temp file is removed and the error is raised."""
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    for attempt in range(tries):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == tries - 1:
+                tmp.unlink(missing_ok=True)
+                raise
+            time.sleep(wait)
+
+
 class Api:
     def __init__(self):
         config.prepare()
@@ -80,6 +97,7 @@ class Api:
         self._ui_q = queue.Queue()
         self._ask_q = queue.Queue()
         self._ov_q = queue.Queue()
+        self._vocab_lock = threading.Lock()  # a save and the watcher's look at the files never interleave
         for loop in (self._pump, self._answer_loop, self._level_loop, self._overlay_loop, self._vocab_watch_loop):
             threading.Thread(target=loop, daemon=True).start()
 
@@ -738,14 +756,11 @@ class Api:
         """Write only the files the page actually sent (None = leave that file alone) and apply them from
         the next line. Lines with problems are saved as typed but never applied; they come back in
         "problems" (same shape as validate_vocab)."""
-        for name, text in (("vocabulary.txt", vocabulary), ("glossary.txt", glossary)):
-            if text is None:
-                continue
-            path = config.CONFIG / name
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(str(text).rstrip() + "\n", encoding="utf-8")
-            os.replace(tmp, path)   # the engine and the watcher never see a half-written file
-        self._vocab_seen = self._vocab_mtimes()   # this save is not a hand edit: one reload, not two
+        with self._vocab_lock:
+            for name, text in (("vocabulary.txt", vocabulary), ("glossary.txt", glossary)):
+                if text is not None:
+                    _replace_text(config.CONFIG / name, str(text).rstrip() + "\n")
+            self._vocab_seen = self._vocab_mtimes()   # this save is not a hand edit: one reload, not two
         if self._engine:
             self._engine.reload_terms()
         return {"ok": True, "problems": self.validate_vocab()}
@@ -768,15 +783,17 @@ class Api:
 
     def _vocab_check(self):
         """Reload the engine's rules when either file changed on disk since the last look (hand edits)."""
-        now = self._vocab_mtimes()
-        changed, self._vocab_seen = now != getattr(self, "_vocab_seen", now), now
+        with self._vocab_lock:
+            now = self._vocab_mtimes()
+            changed, self._vocab_seen = now != getattr(self, "_vocab_seen", now), now
         if changed and self._engine:
             print("Vocabulary files changed on disk; reloading")
             self._engine.reload_terms()
         return changed
 
     def _vocab_watch_loop(self):
-        self._vocab_seen = self._vocab_mtimes()
+        with self._vocab_lock:
+            self._vocab_seen = self._vocab_mtimes()
         while True:
             time.sleep(2)
             try:
