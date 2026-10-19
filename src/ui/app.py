@@ -106,6 +106,15 @@ def _replace_text(path, text, tries=10, wait=0.05):
             time.sleep(wait)
 
 
+VOCAB_RECENT = 6   # latest edited terms shown in the Vocabulary summary
+
+
+def _vocab_items(vocabulary, glossary):
+    """Every spelling hint and rule as (group, term, target) in file order; group: gloss/keep/german/english."""
+    return ([("gloss", t, "") for t in live_subs.parse_glossary(glossary)[0]] +
+            [(r.section, r.src, r.dst) for r in live_subs.parse_vocabulary(vocabulary)[0]])
+
+
 class Api:
     # APP-3 watcher state (class defaults; underscore names are never exposed to the page).
     # _clock is the one clock for the watcher and for _last_caption, which the caption pump sets on
@@ -158,6 +167,7 @@ class Api:
         self._ask_q = queue.Queue()
         self._ov_q = queue.Queue()
         self._vocab_lock = threading.Lock()  # a save and the watcher's look at the files never interleave
+        os.environ["DOLMI_VOCAB_PROFILE"] = self._settings.get("vocab_profile", "")   # VOC-11: read by reload_terms
         for loop in (self._pump, self._answer_loop, self._level_loop, self._overlay_loop, self._vocab_watch_loop):
             threading.Thread(target=loop, daemon=True).start()
 
@@ -947,11 +957,16 @@ class Api:
         """Write only the files the page actually sent (None = leave that file alone) and apply them from
         the next line. Lines with problems are saved as typed but never applied; they come back in
         "problems" (same shape as validate_vocab)."""
+        before = set(_vocab_items(self._read_file("vocabulary.txt"), self._read_file("glossary.txt")))
         with self._vocab_lock:
             for name, text in (("vocabulary.txt", vocabulary), ("glossary.txt", glossary)):
                 if text is not None:
                     _replace_text(config.CONFIG / name, str(text).rstrip() + "\n")
             self._vocab_seen = self._vocab_mtimes()   # this save is not a hand edit: one reload, not two
+        changed = [x for x in _vocab_items(self._read_file("vocabulary.txt"), self._read_file("glossary.txt"))
+                   if x not in before]
+        if changed:   # what this save added or changed: the summary's "latest edited terms"
+            self._vocab_recent = changed[-VOCAB_RECENT:]
         if self._engine:
             self._engine.reload_terms()
         return {"ok": True, "problems": self.validate_vocab()}
@@ -962,6 +977,55 @@ class Api:
         g = self._read_file("glossary.txt") if glossary is None else str(glossary)
         res = {"vocabulary": live_subs.parse_vocabulary(v)[1], "glossary": live_subs.parse_glossary(g)[1]}
         return {"ok": not (res["vocabulary"] or res["glossary"]), **res}
+
+    def vocab_summary(self, vocabulary=None, glossary=None, profile=None):
+        """What the vocabulary does right now, for the Vocabulary tab (texts None = the saved files):
+        counts per group, the latest edited terms, how many lines have problems, the Whisper hotword budget
+        of the chosen profile (tokens, which terms get cut), the glossary size warning, and hints likely to
+        over-bias Whisper. profile None = the saved setting."""
+        v = self._read_file("vocabulary.txt") if vocabulary is None else str(vocabulary)
+        g = self._read_file("glossary.txt") if glossary is None else str(glossary)
+        rules, vproblems = live_subs.parse_vocabulary(v)
+        _, profiles, gproblems = live_subs.parse_glossary_profiles(g)
+        profile = self._settings.get("vocab_profile", "") if profile is None else str(profile)
+        profile = next((p for p in profiles if p.lower() == profile.strip().lower()), "")
+        engine_tok = getattr(self._engine, "tokenizer", None)
+        tok = (engine_tok() if engine_tok else None) or live_subs.whisper_tokenizer()
+        terms = live_subs.glossary_terms(g, profile)
+        budget = live_subs.hotword_budget(terms, tok)
+        soft_terms, soft_chars = live_subs.GLOSSARY_SOFT
+        chars = len(", ".join(terms))
+        recent = getattr(self, "_vocab_recent", None)
+        return {
+            "counts": {"gloss": len(live_subs.glossary_terms(g)),
+                       **{s: sum(r.section == s for r in rules) for s in live_subs.VOCAB_SECTIONS}},
+            "problems": len(vproblems) + len(gproblems),
+            "recent": [{"group": k, "term": t} for k, t, _ in (recent or _vocab_items(v, g)[-VOCAB_RECENT:])],
+            "recentFrom": "save" if recent else "files",
+            "profile": profile,
+            "profiles": [{"name": n, "terms": len(live_subs.glossary_terms(g, n))} for n in profiles],
+            "budget": {"tokens": budget["tokens"], "limit": budget["limit"], "exact": budget["exact"],
+                       "terms": len(terms), "chars": chars, "cut": budget["cut"],
+                       "tooLong": len(terms) > soft_terms or chars > soft_chars,
+                       "softTerms": soft_terms, "softChars": soft_chars,
+                       "cloud": self._settings.get("speech_source", "local") != "local"},   # no budget in the cloud
+            "bias": live_subs.bias_warnings(terms),
+        }
+
+    def set_vocab_profile(self, name=""):
+        """Spelling-hint profile for the meeting ('' = every term). Applied from the next line, also mid-meeting."""
+        name = str(name or "").strip()
+        profiles = live_subs.parse_glossary_profiles(self._read_file("glossary.txt"))[1]
+        match = next((p for p in profiles if p.lower() == name.lower()), "")
+        if name and not match:
+            return {"ok": False, "profile": self._settings.get("vocab_profile", "")}
+        with self._settings_lock:
+            self._settings["vocab_profile"] = match
+            config.save_settings(self._settings)
+        os.environ["DOLMI_VOCAB_PROFILE"] = match
+        if self._engine:
+            self._engine.reload_terms()
+        return {"ok": True, "profile": match}
 
     def _vocab_mtimes(self):
         out = {}

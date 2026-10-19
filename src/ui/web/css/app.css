@@ -260,6 +260,25 @@ textarea.voc-raw{font-size:12.5px;white-space:pre;overflow-wrap:normal;overflow-
 .voc-plist button:hover{background:var(--panel)}
 .voc-plist code{font-family:var(--mono);font-size:12px;color:var(--src);overflow-wrap:anywhere}
 .voc-plist span{color:var(--mute);flex-basis:100%}
+/* VOC-2/5/11: saved badge, hotword budget, keep + order buttons on spelling hints, live summary, profile picker */
+.voc-saved[hidden],.voc-budget[hidden],.voc-profile[hidden]{display:none}
+.voc-lock-ic svg{width:12px;height:12px;vertical-align:-1px}
+.voc-budget{font-size:12.5px;color:var(--mute);margin:-2px 0 10px;padding:8px 10px;border-radius:10px;background:var(--panel);border:1px solid var(--line)}
+.voc-budget b{color:var(--ink)}.voc-budget p{margin-top:4px}
+.voc-budget.voc-over{border-color:var(--src);background:var(--src-soft);color:var(--ink)}
+.voc-meter{height:4px;border-radius:999px;background:var(--line);margin:6px 0 2px;overflow:hidden}
+.voc-meter i{display:block;height:100%;max-width:100%;background:var(--ac)}.voc-over .voc-meter i{background:var(--src)}
+.voc-row.voc-gl{grid-template-columns:minmax(0,1fr) auto auto auto auto;gap:2px}
+.voc-row.voc-gl .field{margin-right:4px}
+.voc-tb{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;color:var(--faint);transition:.2s}
+.voc-tb:hover{color:var(--ink);background:var(--panel)}.voc-tb svg{width:14px;height:14px}.voc-tb:disabled{opacity:.3;pointer-events:none}
+.voc-tb.on{color:var(--ac-ink);background:var(--ac-soft)}
+.voc-row.voc-cut .field{color:var(--faint);text-decoration:line-through}
+.voc-prof{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);padding:6px 2px 0}
+.voc-sum{margin-top:14px;font-size:12.5px;color:var(--mute)}.voc-sum:empty{display:none}
+.voc-sum b{display:block;font-size:11px;font-family:var(--mono);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px}
+.voc-sum ul{list-style:none;display:flex;flex-direction:column;gap:4px}.voc-sum li code{font-family:var(--mono);color:var(--src)}
+.voc-profile{max-width:170px;padding:8px 12px;font-size:12.5px;border-radius:999px}
 
 /* Settings sections (APP-2): left menu + one short page per section; the menu becomes a top row under 700 px */
 .set-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden;padding:18px 2px 20px}

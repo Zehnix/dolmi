@@ -80,6 +80,79 @@ def _post_json(url, payload, headers, timeout=30):
         return json.loads(data)
 
 
+PREVIOUS_CHARS = 200     # previous sentence(s) sent as context (SEG-11)
+RULES_CHARS = 4000       # Gemini: at most this much of each rule list per request (the rest: Vocabulary.enforce)
+WHISPER_PROMPT_CHARS = 600   # Whisper-style prompts keep ~223 tokens; terms first, the previous text last
+
+
+def _cap(items, limit):
+    """Leading items whose '; '-joined text stays within limit characters."""
+    out, size = [], 0
+    for x in items:
+        size += len(x) + 2
+        if size > limit:
+            break
+        out.append(x)
+    return out
+
+
+def _spelled(term):
+    """A rule term as a spelling hint: 'toll*' -> 'toll' (the '*' is Dolmi's, not a word)."""
+    return term.replace("*", "").strip()
+
+
+def build_prompt(glossary, vocab, previous, lang, style="gemini"):
+    """The text part of a cloud caption request, from the same files the local path uses.
+
+    style "gemini": hear AND translate. Spelling hints, [keep] as 'never translate', [german] as 'translate
+      X as Y' ([keep] with a target as 'write X as Y'), and the previous sentence as context.
+    style "openai": gpt-4o-mini-transcribe only transcribes but follows a short instruction prompt: the same
+      terms as spellings ([keep] and the German side of [german]) and the previous sentence.
+    style "whisper": Cloudflare's Whisper reads the prompt as text said just before: a plain term list, then
+      the previous sentence, within ~223 tokens.
+    The translation rules of openai/whisper captions apply locally (Engine.translate protects them)."""
+    rules = getattr(vocab, "rules", [])
+    keep = [r for r in rules if r.section == "keep"]
+    german = [r for r in rules if r.section == "german"]
+    previous = (previous or "")[-PREVIOUS_CHARS:].strip()
+    spellings = [t for t in ([x.strip() for x in (glossary or "").split(",")] +
+                             [_spelled(r.src) for r in keep + german]) if t]
+    spellings = list(dict.fromkeys(spellings))   # first spelling wins, no repeats
+    if style == "whisper":
+        text = ", ".join(_cap(spellings, WHISPER_PROMPT_CHARS - len(previous)))
+        return " ".join(x for x in (text + "." if text else "", previous) if x)
+    if style == "openai":
+        if not (spellings or previous):
+            return ""
+        src = models.LANGUAGES.get(lang)
+        out = f"Live meeting{' in ' + src if src else ''}."
+        if spellings:
+            out += " Spell these names and terms exactly like this: " + ", ".join(_cap(spellings, RULES_CHARS)) + "."
+        if previous:
+            out += f' The previous sentence was: "{previous}"'
+        return out
+    src = models.LANGUAGES.get(lang)   # None for Auto-detect
+    dst = models.LANGUAGES[models.SUBTITLES.get(lang, "en")]
+    spoken = f"spoken in {src}" if src else "in any language"
+    out = (f"This is speech from a live meeting, {spoken}; it may end mid-sentence. Transcribe "
+           f"exactly what is said, in the language it is spoken in, then translate it into natural {dst}. Return JSON with the "
+           f'keys "heard" and "translation". If there is no clear speech (silence, music, noise), '
+           f"return empty strings; never invent words.")
+    if glossary:
+        out += f" Names and terms that may come up (spell them like this): {glossary}."
+    kept = [_spelled(r.src) + (" (any ending)" if "*" in r.src else "") for r in keep if not r.dst]
+    if kept:
+        out += (" Never translate these; copy them into the translation exactly as written: "
+                + "; ".join(_cap(kept, RULES_CHARS)) + ".")
+    pairs = [f'"{_spelled(r.src)}"{" (any ending)" if "*" in r.src else ""} as "{r.dst}"'
+             for r in german + [r for r in keep if r.dst]]
+    if pairs:
+        out += " Always translate these terms this way: " + "; ".join(_cap(pairs, RULES_CHARS)) + "."
+    if previous:
+        out += f' The previous sentence was: "{previous}".'
+    return out
+
+
 class CloudEngine(live_subs.Engine):
     """Same interface as live_subs.Engine (translate, reload_terms, translators, ...), but the
     speech recognition (and for Gemini the translation) happens in the cloud."""
@@ -201,17 +274,7 @@ class CloudEngine(live_subs.Engine):
         return heard, (self.translate(heard, self.language) if heard else "")
 
     def _gemini(self, audio):
-        src = models.LANGUAGES.get(self.language)   # None for Auto-detect
-        dst = models.LANGUAGES[models.SUBTITLES.get(self.language, "en")]
-        spoken = f"spoken in {src}" if src else "in any language"
-        prompt = (f"This is speech from a live meeting, {spoken}; it may end mid-sentence. Transcribe "
-                  f"exactly what is said, in the language it is spoken in, then translate it into natural {dst}. Return JSON with the "
-                  f'keys "heard" and "translation". If there is no clear speech (silence, music, noise), '
-                  f"return empty strings; never invent words.")
-        if self.glossary:
-            prompt += f" Names and terms that may come up (spell them like this): {self.glossary}."
-        if self.context:
-            prompt += f' The previous sentence was: "{self.context[-200:]}".'
+        prompt = build_prompt(self.glossary, self.vocab, self.context, self.language)
         body = {"contents": [{"parts": [{"text": prompt}, {"inline_data": {
                     "mime_type": "audio/wav", "data": base64.b64encode(wav_bytes(audio)).decode()}}]}],
                 "generationConfig": {"responseMimeType": "application/json", "temperature": 0}}
@@ -233,7 +296,7 @@ class CloudEngine(live_subs.Engine):
         parts = data["candidates"][0]["content"].get("parts", [])
         out = json.loads("".join(p.get("text", "") for p in parts) or "{}")
         heard = live_subs.collapse_repeats((out.get("heard") or "").strip())
-        return heard, self.vocab.finish((out.get("translation") or "").strip())
+        return heard, self.vocab.enforce(heard, (out.get("translation") or "").strip())
 
     def _openai(self, audio):
         import openai
@@ -241,7 +304,7 @@ class CloudEngine(live_subs.Engine):
         r = client.audio.transcriptions.create(
             model=self.model_name, file=("sentence.wav", wav_bytes(audio), "audio/wav"),
             language=openai.NOT_GIVEN if self.language == "auto" else self.language,
-            prompt=self.glossary or openai.NOT_GIVEN)
+            prompt=build_prompt(self.glossary, self.vocab, self.context, self.language, "openai") or openai.NOT_GIVEN)
         return r.text
 
     def _cloudflare(self, audio):
@@ -249,8 +312,9 @@ class CloudEngine(live_subs.Engine):
         payload = {"audio": base64.b64encode(wav_bytes(audio)).decode()}
         if self.language != "auto":
             payload["language"] = self.language
-        if self.glossary:
-            payload["initial_prompt"] = self.glossary
+        prompt = build_prompt(self.glossary, self.vocab, self.context, self.language, "whisper")
+        if prompt:
+            payload["initial_prompt"] = prompt
         data = _post_json(f"https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{self.model_name}",
                           payload, {"Authorization": f"Bearer {token}"})
         return (data.get("result") or {}).get("text", "")

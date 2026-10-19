@@ -131,10 +131,25 @@ def parse_vocabulary(text: str):
         rules.append(VocabRule(section, src, dst, n))
     return rules, problems
 
-def parse_glossary(text: str):
-    """glossary.txt -> (terms, problems): one spelling hint per line, '#' starts a comment."""
-    terms, problems = [], []
+PROFILE_LINE = re.compile(r"^\s*##\s*profile\s*:(.*)$", re.I)   # '## profile: Name' (a comment to older versions)
+
+def parse_glossary_profiles(text: str):
+    """glossary.txt -> (common, profiles, problems). Terms above the first '## profile: Name' line are used in
+    every meeting; a profile adds the terms of its own block after them. A file without profile lines is one
+    list, as before. profiles: {name: [terms]} in file order."""
+    common, profiles, problems, current = [], {}, [], None
     for n, raw in enumerate(text.splitlines(), 1):
+        head = PROFILE_LINE.match(raw)
+        if head:
+            name = strip_comment(head.group(1))
+            if not name:
+                problems.append(_problem(n, raw, "Give the profile a name: '## profile: Sales calls'."))
+                continue
+            same = next((p for p in profiles if p.lower() == name.lower()), None)
+            if same:
+                problems.append(_problem(n, raw, f"Profile '{name}' appears twice; its terms are joined into one."))
+            current = profiles.setdefault(same or name, [])
+            continue
         line = strip_comment(raw)
         if not line:
             continue
@@ -144,8 +159,92 @@ def parse_glossary(text: str):
             problems.append(_problem(n, raw, "Spelling hints are single terms. Put 'X = Y' rules under "
                                              "German → English or Fix English."))
         else:
-            terms.append(line)
-    return terms, problems
+            (common if current is None else current).append(line)
+    return common, profiles, problems
+
+def parse_glossary(text: str):
+    """glossary.txt -> (terms, problems): one spelling hint per line, '#' starts a comment. All terms, of
+    every profile, in file order (glossary_terms picks one profile)."""
+    common, profiles, problems = parse_glossary_profiles(text)
+    return common + [t for terms in profiles.values() for t in terms], problems
+
+def glossary_terms(text: str, profile: str = ""):
+    """The spelling hints for one meeting: the common terms, then the chosen profile's. No profile (or one
+    that no longer exists) = every term in the file. Duplicates are dropped, the first one wins."""
+    common, profiles, _ = parse_glossary_profiles(text)
+    name = next((p for p in profiles if p.lower() == (profile or "").strip().lower()), None)
+    terms = common + (profiles[name] if name else [t for ts in profiles.values() for t in ts])
+    seen = set()
+    return [t for t in terms if not (t.lower() in seen or seen.add(t.lower()))]
+
+# faster-whisper puts the hotwords in front of the audio and keeps only the first max_length // 2 - 1
+# = 223 tokens of them (transcribe.py get_prompt); everything after that is cut without a word.
+HOTWORD_TOKENS = 223
+CHARS_PER_TOKEN = 3.2      # without a tokenizer: measured 3.3-3.5 on name lists, rounded down to be safe
+GLOSSARY_SOFT = (30, 300)  # terms, characters: above this Whisper tends to read the list back on silence
+_tokenizer = []            # the faster-whisper text tokenizer, once found
+
+def whisper_tokenizer():
+    """faster-whisper's text tokenizer (tokenizer.json of an installed Whisper model), or None when no
+    model is downloaded yet. All multilingual Whisper models share the same text tokens."""
+    if _tokenizer:
+        return _tokenizer[0]
+    try:
+        import tokenizers
+        from huggingface_hub import try_to_load_from_cache
+        for m in models.CATALOG:
+            if m.job != models.SPEECH or not models.is_installed(m):
+                continue
+            path = try_to_load_from_cache(m.repo, "tokenizer.json")
+            if isinstance(path, str):
+                _tokenizer.append(tokenizers.Tokenizer.from_file(path))
+                return _tokenizer[0]
+    except Exception as e:   # a broken cache must never stop the editor: fall back to an estimate
+        print(f"Whisper tokenizer not loaded ({e}); estimating hotword tokens")
+    return None
+
+def hotword_budget(terms, tokenizer=None, limit=HOTWORD_TOKENS):
+    """How the spelling hints fit into Whisper's hotword budget, counted like faster-whisper does
+    (' ' + 'term, term, ...'). Returns {tokens, limit, exact, kept, cut}: kept = the terms that fit whole,
+    cut = the rest (a term cut in the middle counts as cut). exact is False when the tokens are estimated."""
+    text = " " + ", ".join(terms)
+    spans, pos = [], 1
+    for t in terms:
+        spans.append((t, pos + len(t)))
+        pos += len(t) + 2
+    if tokenizer is not None:
+        enc = tokenizer.encode(text, add_special_tokens=False)
+        tokens = len(enc.ids)
+        end = len(text) if tokens <= limit else enc.offsets[limit - 1][1]
+    else:
+        tokens = -(-len(text) // CHARS_PER_TOKEN) if terms else 0
+        end = len(text) if tokens <= limit else int(limit * CHARS_PER_TOKEN)
+    kept = [t for t, stop in spans if stop <= end]
+    return {"tokens": int(tokens), "limit": limit, "exact": tokenizer is not None,
+            "kept": kept, "cut": [t for t, _ in spans[len(kept):]]}
+
+# Everyday words: as hotwords they pull other speech onto themselves ('Cloud' for a name that sounds alike).
+COMMON_WORDS = set("""
+team teams cloud graph agent agents meeting meetings call calls chat mail email app apps server data daten
+test tests update updates release board ticket tickets plan plans project projekt projekte kunde kunden
+sprint sprints review demo code bug bugs feature features task tasks thema themen frage fragen termin
+woche heute morgen gestern montag freitag okay super bitte danke ja nein und oder aber also
+system systeme service services portal tool tools report reports status manager office online
+""".split())
+
+def bias_warnings(terms):
+    """Spelling hints likely to over-bias Whisper: very short all-caps acronyms (pulled onto similar sounds)
+    and everyday words. [{term, reason}] in list order."""
+    out = []
+    for t in terms:
+        letters = re.sub(r"[^\w]", "", t)
+        if " " not in t.strip() and letters.isupper() and len(letters) <= 3:
+            out.append({"term": t, "reason": "Short all-caps acronym: Whisper may force it onto similar sounds "
+                                              "(e.g. 'XYZ' turning into 'XYZTAT'). Keep it only if it is said often."})
+        elif t.strip().lower() in COMMON_WORDS:
+            out.append({"term": t, "reason": "Everyday word: as a hint it makes Whisper write it for other words "
+                                              "that sound alike. Remove it unless it is often misheard."})
+    return out
 
 def term_pattern(src: str):
     """Whole-word, case-insensitive pattern; '*' matches any letters, spaces match any whitespace."""
@@ -159,9 +258,9 @@ class Vocabulary:
     def __init__(self, path=None, text=None):
         if text is None:
             text = path.read_text(encoding="utf-8") if path and path.exists() else ""
-        rules, self.problems = parse_vocabulary(text)
+        self.rules, self.problems = parse_vocabulary(text)   # rules in file order (cloud prompts list them)
         self.lock, self.fix = [], []   # (pattern, english); english None = keep the words as spoken
-        for r in sorted(rules, key=lambda r: -len(r.src)):
+        for r in sorted(self.rules, key=lambda r: -len(r.src)):
             if r.section == "english":
                 self.fix.append((term_pattern(r.src), r.dst))
             else:
@@ -169,20 +268,119 @@ class Vocabulary:
         self._fix_re = re.compile("|".join(f"(?P<f{i}>{pat.pattern})" for i, (pat, _) in enumerate(self.fix)), re.I)
 
     def protect(self, de):
-        slots = []
+        slots, spoken = Slots(), []
         for pat, en in self.lock:
             def slot(m, en=en):
                 slots.append(m.group(0) if en is None else en)
+                spoken.append(m.group(0))
                 return f"X{len(slots) - 1}X"
             de = pat.sub(slot, de)
+        slots.spoken = spoken
+        slots.where = [_slot_place(de, i) for i in range(len(slots))]
         return de, slots
 
-    def finish(self, en, slots=()):
+    def finish(self, en, slots=(), reinsert=True):
+        """The translator's output with each placeholder turned into its term. A placeholder the translator
+        dropped is put back (reinsert): next to a word it stood beside in the source if that word survived,
+        else at the end of the matching clause, so a kept term is never silently lost."""
+        where = getattr(slots, "where", None) or [None] * len(slots)
+        done = lambda w: slots[int(w[1:-1])] if w and re.fullmatch(r"X\d+X", w) and int(w[1:-1]) < i else w
         for i, term in enumerate(slots):
-            en = re.sub(rf"X\s*{i}\s*X", lambda _: term, en)
+            en, found = _put_term(en, i, term)
+            if not found and reinsert:
+                place = where[i] and (done(where[i][0]), done(where[i][1]), *where[i][2:])
+                en = _reinsert(en, term, place)   # a neighbour that was a placeholder is its term by now
         if self.fix:   # one pass: at each spot the longest rule wins and its output is not matched again
             en = self._fix_re.sub(lambda m: self.fix[int(m.lastgroup[1:])][1], en)
         return en
+
+    def enforce(self, heard, en):
+        """A translation made elsewhere (Gemini hears and translates in one step) through the same rules:
+        where a locked term heard in `heard` still shows up in the source spelling, it becomes the wanted
+        English; [english] fixes apply. Nothing is re-inserted: the model may have put the term its own way."""
+        _, slots = self.protect(heard)
+        for i, (term, said) in enumerate(zip(slots, slots.spoken)):
+            if not re.search(rf"(?<!\w){re.escape(term)}(?!\w)", en, re.I):
+                en = re.sub(rf"(?<!\w){re.escape(said)}(?!\w)", f"X{i}X", en, count=1, flags=re.I)
+        return self.finish(en, slots, reinsert=False)
+
+class Slots(list):
+    """protect()'s terms by placeholder number, plus .spoken (the words matched in the source) and .where
+    (each placeholder's surroundings in the source, for finish() to put back a dropped one)."""
+    spoken: list = []
+    where: list = []
+
+_CLAUSE_END = re.compile(r"[,;:.!?](?=\s|$)")
+
+def _clause_ends(text):
+    """Where each clause ends: its closing , ; : . ! ? (or the end of the text for a last open clause)."""
+    ends = [m.start() for m in _CLAUSE_END.finditer(text)]
+    stripped = text.rstrip()
+    if stripped and (not ends or ends[-1] < len(stripped) - 1):
+        ends.append(len(stripped))
+    return ends or [0]
+
+def _bare(word):
+    return re.sub(r"^\W+|\W+$", "", word) or None
+
+def _slot_place(de, i):
+    """(word before, word after, clause number, clause count) of placeholder i in the protected source;
+    a neighbour across a comma or full stop is not counted as one."""
+    m = re.search(rf"X{i}X", de)
+    if not m:
+        return None
+    prev = re.search(r"(\S+)\s+$", de[:m.start()])
+    nxt = re.match(r"\s+(\S+)", de[m.end():])
+    prev = _bare(prev.group(1)) if prev and not re.search(r"[,;:.!?]$", prev.group(1)) else None
+    nxt = _bare(nxt.group(1)) if nxt else None
+    ends = _clause_ends(de)
+    return prev, nxt, sum(e < m.start() for e in ends), len(ends)
+
+def _article(term):
+    """'a' or 'an' before a term: acronyms by their spoken first letter (an MCP, a CRM), words by vowel."""
+    first = (term.split() or [""])[0]
+    if first.isupper() and first.isalpha() and len(first) <= 5:
+        return "an" if first[0] in "AEFHILMNORSX" else "a"
+    w = first.lower()
+    if w.startswith(("uni", "use", "usu", "eu", "one", "once")):
+        return "a"
+    if w.startswith(("hour", "honest", "honou", "heir")):
+        return "an"
+    return "an" if w[:1] in "aeiou" else "a"
+
+def _put_term(en, i, term):
+    """Placeholder i -> term (tolerating 'X 0 X', 'x0x' and glued German endings like 'X0Xn'); a/an before it
+    is matched to the term. Returns (text, found)."""
+    pat = re.compile(rf"[Xx]\s*{i}\s*[Xx](?P<suf>[a-zäöü']*)(?!\w)")
+    out, last, found = [], 0, False
+    for m in pat.finditer(en):
+        found = True
+        head = en[last:m.start()]
+        art = re.search(r"(?<!\w)(a|an|A|An)(\s+)$", head)
+        if art:
+            want = _article(term)
+            want = want.capitalize() if art.group(1)[0] == "A" else want
+            head = head[:art.start()] + want + art.group(2)
+        suf = m.group("suf")
+        out += [head, term + (suf if suf in ("s", "es", "'s") else "")]
+        last = m.end()
+    return "".join(out) + en[last:], found
+
+def _reinsert(en, term, place):
+    """Put a dropped term back: after/before a source neighbour that survived translation (a name, a
+    number, another term), else at the end of the clause at the same place in the sentence."""
+    prev, nxt, clause, clauses = place or (None, None, None, 1)
+    for anchor, after in ((prev, True), (nxt, False)):
+        if not anchor or not (len(anchor) >= 4 or re.search(r"\d", anchor)):
+            continue
+        hits = list(re.finditer(rf"(?<!\w){re.escape(anchor)}(?!\w)", en))
+        if len(hits) == 1:
+            m = hits[0]
+            return en[:m.end()] + " " + term + en[m.end():] if after else en[:m.start()] + term + " " + en[m.start():]
+    ends = _clause_ends(en)
+    k = len(ends) - 1 if clause is None else min(len(ends) - 1, round(clause * (len(ends) - 1) / max(1, clauses - 1)))
+    at = ends[k]
+    return (en[:at].rstrip() + " " + term).lstrip() + en[at:]
 
 class Engine:
     def __init__(self, model, device, language="de"):
@@ -206,21 +404,36 @@ class Engine:
 
         Safe while the ASR thread runs: everything is built first, then each attribute is swapped in one
         assignment, so a line being translated finishes with the objects it already holds. If a file
-        can't be read (e.g. half-written by an editor), the previous rules stay."""
+        can't be read (e.g. half-written by an editor), the previous rules stay.
+
+        Spelling hints: the common terms plus the meeting's profile (DOLMI_VOCAB_PROFILE, set by the app from
+        Settings vocab_profile), and only the terms that fit Whisper's hotword budget whole; the rest would be
+        cut mid-list by faster-whisper anyway. Cloud captions have no such budget and get every term."""
         cfg = Path(os.environ.get("DOLMI_CONFIG") or Path(__file__).parent)
         g = cfg / "glossary.txt"
         try:
-            terms, _ = parse_glossary(g.read_text(encoding="utf-8") if g.exists() else "")
+            terms = glossary_terms(g.read_text(encoding="utf-8") if g.exists() else "",
+                                   os.environ.get("DOLMI_VOCAB_PROFILE", ""))
             vocab = Vocabulary(cfg / "vocabulary.txt")
         except (OSError, UnicodeDecodeError) as e:
             print(f"Vocabulary not reloaded from {cfg} ({e}); keeping the previous rules")
             if hasattr(self, "vocab"):
                 return
             terms, vocab = [], Vocabulary()
+        if not getattr(self, "cloud", False):
+            budget = hotword_budget(terms, self.tokenizer(), HOTWORD_TOKENS)
+            if budget["cut"]:
+                print(f"Spelling hints: {len(budget['cut'])} of {len(terms)} terms are over Whisper's "
+                      f"{budget['limit']}-token budget and not used (Vocabulary tab shows which)")
+            terms = budget["kept"]
         glossary = ", ".join(terms)
         self.vocab = vocab
         self.terms = {w.lower() for w in re.findall(r"\w+", glossary) if len(w) > 2}
         self.glossary = glossary
+
+    def tokenizer(self):
+        """The loaded Whisper model's own tokenizer, else one from the model cache (None: estimate)."""
+        return getattr(getattr(self, "asr", None), "hf_tokenizer", None) or whisper_tokenizer()
 
     def _translator(self, key, download=False):
         """Loaded translator for a model key; never downloads mid-meeting unless asked."""
