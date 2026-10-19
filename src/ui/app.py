@@ -19,7 +19,7 @@ import threading
 import time
 import unicodedata
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import config
@@ -235,6 +235,34 @@ def _title_from_summary(text):
     return ""
 
 
+# APP-12 "Report a problem": what never leaves the computer in a report
+_SECRET_NAME = re.compile(r"key|token|secret|password|passwd|pro$|cf_account|account|auth|credential|salt|hash", re.I)
+# a value that looks like a key: provider prefixes, encrypted keys, or a long run of letters AND digits
+_SECRET_VALUE = re.compile(r"\b(?:sk-|sk_|nvapi-|AIza|xox[abp]-|ghp_|gho_|github_pat_|gAAAA|dpapi:)[\w\-:.=]*"
+                           r"|(?<![\w+-])(?=[\w\-+]*\d)(?=[\w\-+]*[A-Za-z])[\w\-+]{32,}=*")
+REDACTED = "[removed]"
+REPORT_LOG_MAX = 2_000_000      # the last ~2 MB of the log are enough to see what went wrong
+
+
+def redact_text(text):
+    """Text with every key-like value replaced by [removed]."""
+    return _SECRET_VALUE.sub(REDACTED, str(text))
+
+
+def scrub_settings(value, name=""):
+    """A copy of the settings with every key/token removed: values under a secret-sounding name are
+    replaced whole (dicts too, e.g. api_keys), and any other string that looks like a key is redacted."""
+    if name and _SECRET_NAME.search(name):
+        return REDACTED if value not in ("", None, {}, []) else value
+    if isinstance(value, dict):
+        return {k: scrub_settings(v, str(k)) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [scrub_settings(v) for v in value]
+    if isinstance(value, str):
+        return redact_text(value)
+    return value
+
+
 def _spoken_language_ok(code):
     import models
     return code == "auto" or code in models.LANGUAGES
@@ -408,7 +436,7 @@ class Api:
                 elif kind == "sum_chunk":
                     self._emit("onSummaryChunk", a)
                 elif kind == "sum_done":
-                    self._emit("onSummaryDone", a)
+                    self._emit("onSummaryDone", a, b or None)
             except Exception as e:
                 print(f"pump {kind} failed: {e}")
 
@@ -1400,9 +1428,13 @@ class Api:
     def _meeting_title(self, p, rows):
         """(title, source): the user's title ("custom"), else the summary's ("summary"), else the first
         meaningful line ("lines"); ("", "") for an empty meeting."""
-        custom = self._meeting_meta(p).get("title")
+        meta = self._meeting_meta(p)
+        custom = meta.get("title")
         if isinstance(custom, str) and custom.strip():
             return custom.strip()[:TITLE_EDIT_MAX], "custom"
+        from_summary = meta.get("summary_title")           # APP-10: the structured summary's own title
+        if isinstance(from_summary, str) and from_summary.strip():
+            return _shorten(from_summary.strip()), "summary"
         summary = self._data / f"summary_{p.stem.removeprefix('meeting_')}.md"
         try:
             title = _title_from_summary(summary.read_text(encoding="utf-8")) if summary.is_file() else ""
@@ -1834,6 +1866,7 @@ class Api:
                 return {"ok": False, "message": "That meeting has no lines to summarize."}
             lines = [f"[{p['ts']}] {self._english(p['de'], p['en'])}" for p in pairs]
             stamp = str(meeting).removeprefix("meeting_").removesuffix(".md")
+            meeting_md = self._meeting_path(meeting)
         else:
             with self._hist_lock:
                 history = list(self._history)
@@ -1842,6 +1875,7 @@ class Api:
             lines = [f"[{t}] {self._english(heard, sub)}" for t, heard, sub, *_ in history]
             tr = self._last_transcript
             stamp = tr.md.stem.removeprefix("meeting_") if tr and tr.md else f"{datetime.now():%Y-%m-%d_%H-%M}"
+            meeting_md = tr.md if tr and tr.md else None
         if not self._ai_key():
             return {"ok": False, "message": "Add an API key in Settings → Assistant first."}
         transcript = "\n".join(lines)
@@ -1860,15 +1894,92 @@ class Api:
                 err = f"Unexpected error: {e}"
             if not text.strip() and not err:
                 err = "The AI returned an empty summary."
-            if text.strip() and self._settings["save_transcripts"]:
+            notes = None if err else assistant.parse_summary(text)
+            if notes:          # APP-10: structured cards + ready-to-paste texts; else the text as it came
+                notes = {**notes, "email": assistant.summary_email(notes), "teams": assistant.summary_teams(notes)}
+            if text.strip() and not err and self._settings["save_transcripts"]:
                 try:
-                    out_file.write_text(text.strip() + "\n", encoding="utf-8")
+                    out_file.write_text(assistant.summary_markdown(notes) if notes else text.strip() + "\n",
+                                        encoding="utf-8")
+                    if notes and notes["title"] and meeting_md:
+                        self._save_summary_title(meeting_md, notes["title"])
                 except OSError as e:
                     print(f"summary save failed: {e}")
-            self._ui_q.put(("sum_done", err, ""))
+            self._ui_q.put(("sum_done", err, notes))
 
         threading.Thread(target=work, daemon=True).start()
         return {"ok": True}
+
+    def _save_summary_title(self, meeting_md, title):
+        """Keep the summary's title in the meeting's sidecar (APP-9), beside a title the user typed."""
+        meeting_md = Path(meeting_md)
+        meta = self._meeting_meta(meeting_md)
+        meta["summary_title"] = title[:TITLE_EDIT_MAX]
+        side = meeting_md.with_suffix(".json")
+        tmp = side.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, side)
+
+    # ------------------------------------------------------------------ report a problem (APP-12)
+    def _report_files(self, include_transcripts=False, include_vocabulary=False):
+        """{name in the zip: text}: info, scrubbed settings, the log; transcripts/vocabulary only if asked."""
+        import platform
+        s = self._settings
+        info = {"app_version": VERSION, "os": platform.platform(), "python": platform.python_version(),
+                "machine": platform.machine(), "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "speech_model": s.get("model"), "device": s.get("device"), "language": s.get("language"),
+                "speech_source": s.get("speech_source"), "translator": s.get("translator"),
+                "ai_provider": s.get("ai_provider"), "ai_model": self._ai_model(),
+                "included": {"transcripts": bool(include_transcripts), "vocabulary": bool(include_vocabulary)}}
+        files = {"info.json": json.dumps(info, indent=2),
+                 "settings.json": json.dumps(scrub_settings(s), indent=2, ensure_ascii=False)}
+        log = Path(config.LOGS) / "dolmi.log"
+        try:
+            with open(log, "rb") as f:
+                f.seek(max(0, log.stat().st_size - REPORT_LOG_MAX))
+                files["dolmi.log"] = redact_text(f.read().decode("utf-8", "replace"))
+        except OSError:
+            files["dolmi.log"] = "(no log file: Dolmi writes one only when it runs without a console)"
+        if include_transcripts:
+            for p in sorted(self._data.glob("meeting_*.md")) + sorted(self._data.glob("summary_*.md")):
+                try:
+                    files[f"transcripts/{p.name}"] = redact_text(p.read_text(encoding="utf-8"))
+                except OSError as e:
+                    print(f"report: could not read {p.name}: {e}")
+        if include_vocabulary:
+            for name in ("vocabulary.txt", "glossary.txt"):
+                p = Path(config.CONFIG) / name
+                if p.is_file():
+                    files[f"vocabulary/{name}"] = p.read_text(encoding="utf-8")
+        return files
+
+    def report_problem(self, include_transcripts=False, include_vocabulary=False):
+        """Save a zip for a bug report wherever the user picks. Nothing is sent anywhere."""
+        import zipfile
+        try:
+            import webview
+            downloads = Path.home() / "Downloads"
+            chosen = self._window.create_file_dialog(
+                webview.FileDialog.SAVE, directory=str(downloads if downloads.is_dir() else self._data),
+                save_filename=f"dolmi-report-{datetime.now():%Y-%m-%d_%H-%M}.zip")
+        except Exception as e:
+            return {"ok": False, "message": f"Could not open the save dialog: {e}"}
+        if isinstance(chosen, (list, tuple)):
+            chosen = chosen[0] if chosen else None
+        if not chosen:
+            return {"ok": False, "cancelled": True}
+        target = Path(chosen)
+        if target.suffix.lower() != ".zip":
+            target = target.with_name(target.name + ".zip")
+        try:
+            files = self._report_files(bool(include_transcripts), bool(include_vocabulary))
+            with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as z:
+                for name, text in files.items():
+                    z.writestr(name, text)
+        except OSError as e:
+            print(f"report_problem: could not write {target}: {e}")
+            return {"ok": False, "message": f"Could not save the report: {e}"}
+        return {"ok": True, "path": str(target), "files": sorted(files)}
 
     # ------------------------------------------------------------------ global shortcuts (APP-7)
     def _shortcut_map(self):

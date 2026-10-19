@@ -80,6 +80,7 @@
     show_overlay:()=>true, hide_overlay:()=>true, toggle_invisible:on=>on, recover:()=>true,
     check_update:()=>({available:true,version:'2.3.0',url:'https://github.com/Zehnix/dolmi/releases/tag/v2.3.0',current:'2.2.0'}),
     open_release:()=>true,
+    report_problem:()=>({ok:true,path:'C:/Users/me/Downloads/dolmi-report.zip',files:['dolmi.log','info.json','settings.json']}),   // APP-12
     translator_state:()=>({translator:trx.translator,...trx.info}),                        // QA-7
     translator_set:p=>{ trx.translator=p; return {ok:true,translator:p,...trx.info}; },
     translator_set_key:()=>({ok:true,translator:trx.translator,...trx.info}),

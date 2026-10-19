@@ -5,7 +5,7 @@ three are reached through their OpenAI-compatible endpoints, so the openai packa
 signed-in user (Windows DPAPI, or a secret in the macOS login Keychain; see dolmi_platform), so only
 that user on that computer can read them; settings.json never holds a key in plain text.
 """
-import base64, getpass, hashlib, hmac, os, re
+import base64, getpass, hashlib, hmac, json, os, re
 
 import dolmi_platform
 
@@ -66,16 +66,13 @@ SUMMARY_SYSTEM = """You turn a meeting transcript into notes for someone who att
 comes from speech recognition and machine translation, so expect small errors: infer what was meant, \
 but never invent facts, names, numbers or dates.
 
-Write in English, in Markdown, with exactly these four sections:
-## Summary
-3-6 sentences: what the meeting was about and where it ended.
-## Decisions
-Bullet points, or "None recorded."
-## Action items
-One "- [ ] Owner — task (deadline)" per item; leave out owner or deadline if nobody said it. \
-"None recorded." if there are none.
-## Open questions
-Bullet points, or "None."
+Answer with one JSON object only (no Markdown, no code fence), in English, with exactly these keys:
+{"title": "a short title for the meeting, at most 8 words",
+ "summary": "3-6 sentences: what the meeting was about and where it ended",
+ "decisions": ["one decision per item"],
+ "action_items": [{"who": "owner or empty", "what": "the task", "when": "deadline or empty"}],
+ "open_questions": ["one question per item"]}
+Use empty lists when there are none and empty strings for an owner or deadline nobody said.
 Be brief and skip small talk."""
 MAX_TRANSCRIPT_CHARS = 120_000   # ~2-3 hours of speech; older lines are cut beyond this
 
@@ -186,6 +183,85 @@ KNOWN_MODELS = {
 _NOT_CHAT = re.compile(r"embed|tts|whisper|transcribe|audio|realtime|speech|dall-e|image|imagen|veo|sora|lyria|"
                        r"vision|[-_]vl\b|clip|ocr|parse|moderation|guard|safety|reward|rerank|retriev|aqa|"
                        r"davinci|babbage|search|computer-use|deplot|kosmos|fuyu|neva|vila|cosmos", re.I)
+
+SUMMARY_LIST_MAX = 30   # items kept per list; a runaway answer never floods the cards
+
+def _clean(value, limit=600):
+    return re.sub(r"\s+", " ", value).strip()[:limit] if isinstance(value, str) else ""
+
+
+def parse_summary(text):
+    """The model's JSON summary as {title, summary, decisions, action_items [{who, what, when}],
+    open_questions}, every field checked and cleaned; None when the answer is not such an object
+    (the caller then shows the text as it came)."""
+    raw = str(text or "").strip()
+    raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw)
+    start, end = raw.find("{"), raw.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        data = json.loads(raw[start:end + 1])
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("summary"), str):
+        return None
+
+    def strings(key):
+        items = data.get(key)
+        items = items if isinstance(items, list) else []
+        return [c for c in (_clean(x) for x in items) if c][:SUMMARY_LIST_MAX]
+
+    actions = []
+    for item in data.get("action_items") if isinstance(data.get("action_items"), list) else []:
+        if isinstance(item, str):
+            item = {"what": item}
+        if not isinstance(item, dict) or not _clean(item.get("what")):
+            continue
+        actions.append({k: _clean(item.get(k), 200 if k != "what" else 600) for k in ("who", "what", "when")})
+    summary = {"title": _clean(data.get("title"), 120), "summary": _clean(data.get("summary"), 3000),
+               "decisions": strings("decisions"), "action_items": actions[:SUMMARY_LIST_MAX],
+               "open_questions": strings("open_questions")}
+    return summary if summary["summary"] or summary["decisions"] or actions else None
+
+
+def _action_line(a):
+    extra = ", ".join(x for x in (a["who"], a["when"] and f"by {a['when']}") if x)
+    return a["what"] + (f" ({extra})" if extra else "")
+
+
+def summary_markdown(s):
+    """The saved summary file: the title first, so the Meetings list can show it."""
+    out = [f"# {s['title'] or 'Meeting summary'}", "", "## Summary", s["summary"] or "-", "", "## Decisions"]
+    out += [f"- {d}" for d in s["decisions"]] or ["None recorded."]
+    out += ["", "## Action items"]
+    out += [f"- [ ] {_action_line(a)}" for a in s["action_items"]] or ["None recorded."]
+    out += ["", "## Open questions"]
+    out += [f"- {q}" for q in s["open_questions"]] or ["None."]
+    return "\n".join(out) + "\n"
+
+
+def _plain_sections(s, bullet):
+    out = []
+    for head, items in (("Decisions", s["decisions"]), ("Action items", [_action_line(a) for a in s["action_items"]]),
+                        ("Open questions", s["open_questions"])):
+        if items:
+            out += ["", head + ":"] + [f"{bullet} {x}" for x in items]
+    return out
+
+
+def summary_email(s):
+    """Plain text to paste into an email: a Subject line, then the notes."""
+    title = s["title"] or "Meeting summary"
+    out = [f"Subject: Meeting notes: {title}", "", "Hi all,", "", "here are the notes from our meeting.", "",
+           s["summary"]] + _plain_sections(s, "-") + ["", "Best regards"]
+    return "\n".join(out)
+
+
+def summary_teams(s):
+    """Plain text for a Teams chat: short, bold title (Teams renders **...**), bullets."""
+    out = [f"**{s['title'] or 'Meeting summary'}**", s["summary"]] + _plain_sections(s, "•")
+    return "\n".join(out)
+
 
 def list_models(provider, api_key=""):
     """Every chat model the provider offers this key, sorted, default first. NVIDIA's list is public;
