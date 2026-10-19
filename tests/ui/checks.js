@@ -374,6 +374,7 @@
   async function shot(spec){
     const [view,section]=spec.split(':');
     await tick(300);
+    const theme=new URLSearchParams(location.search).get('theme'); if(theme) setTheme(theme);   // APP-15: dark shots
     if(view==='onboarding'){ nav('settings'); await tick(); q('#openOnb').click(); }
     else if(view==='settings'&&section){ openSettings(section); }
     else nav(view);
