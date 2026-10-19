@@ -156,6 +156,25 @@ def test_a_setting_changed_mid_load_discards_the_stale_models(installed, monkeyp
     assert api._warm_once() is True and built[-1][1] == "en"
 
 
+def test_a_setting_changed_while_priming_discards_the_stale_models(installed, engines, monkeypatch):
+    """Priming runs Whisper, the VAD and the translator for seconds; the user often opens Settings then."""
+    api = installed
+    real_prime = api._prime
+    changed = []
+
+    def prime(engine):
+        real_prime(engine)
+        if not changed:
+            changed.append(True)
+            assert api.set_setting("model", "small")
+    monkeypatch.setattr(api, "_prime", prime)
+    api._warm_req.clear()
+    assert api._warm_once() is False and api._engine is None and api._warm_req.is_set()
+    assert api.state()["engineState"] != "ready"
+    assert api._warm_once() is True and api._engine.args[0] == "small"
+    assert api.state()["engineState"] == "ready"
+
+
 def test_no_warm_up_while_captions_run(installed, engines):
     api = installed
     api._session = {"token": object(), "stop": threading.Event(), "transcript": None}

@@ -285,6 +285,7 @@ class Api:
         self._overlay_visible = False
         self._engine = None
         self._engine_lock = threading.Lock() # one engine load at a time
+        self._gen_lock = threading.Lock()    # _settings_gen check + _engine store vs. _drop_engine (short)
         self._session = None                 # {"token", "stop", "transcript"} while starting/listening
         self._lock = threading.Lock()        # guards session transitions
         self._history = []                   # [(hh:mm:ss speech start, de, en, meta)] this session
@@ -853,9 +854,11 @@ class Api:
 
     def _drop_engine(self):
         """Forget the loaded models (a setting changed, or preloading was turned off) and free their memory."""
-        self._settings_gen += 1
-        if self._engine is not None:
-            self._engine = None
+        with self._gen_lock:
+            self._settings_gen += 1
+            dropped, self._engine = self._engine, None
+        if dropped is not None:
+            del dropped
             gc.collect()
         if self._engine_state != "idle":
             self._set_engine_state("idle", "models load on Start")
@@ -903,14 +906,19 @@ class Api:
                 print(f"Background model load skipped: {e}")
                 self._set_engine_state("idle", "models load on Start")
                 return False
-            if gen != self._settings_gen:    # a setting changed while it loaded: load the new choice
+            if gen == self._settings_gen:    # priming takes seconds: skip it for an engine already stale
+                self._prime(engine)
+            with self._gen_lock:             # a setting may also change while priming: re-check, then store
+                fresh = gen == self._settings_gen
+                if fresh:
+                    self._engine = engine
+            if not fresh:                    # load the new choice instead
                 del engine
                 gc.collect()
                 self._request_warm()
                 return False
-            self._prime(engine)
-            self._engine = engine
-        self._set_engine_state("ready")
+        if self._engine is engine:           # not dropped again in the meantime
+            self._set_engine_state("ready")
         return True
 
     def _needs_download(self):
