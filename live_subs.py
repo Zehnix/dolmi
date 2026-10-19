@@ -44,7 +44,7 @@ DRAFT_BEAM = 1             # drafts decode greedily: they are redone a second la
 DRAFT_WINDOW = 6.0         # s, a draft decodes only the end of the sentence (cost stays flat on long ones)
 DRAFT_MT_LAG = 2.0         # s, a draft whose audio is this far behind the capture skips translation
 HOLD_MAX = 4.0             # s, a final without . ? ! waits this long for the next one to join it (0 = off)
-MT_CONTEXT = True          # translate with the previous line as context (synthetic gold: chrF +0.5, BLEU +1.0)
+MT_CONTEXT = True          # translate with the previous line as context (synthetic gold German: chrF +0.4, BLEU +0.8)
 CLOUD_SPLIT, CLOUD_BREATH, CLOUD_MAX = 3.0, 0.2, 6.0   # cloud captions: cut long speech sooner
 CLOUD_MIN = 0.3            # s of speech a cloud utterance needs ("Ja, genau." is ~0.6 s)
 CLOUD_OVERLAP = 0.3        # s carried over (and de-duplicated) when a cloud cut finds no pause
@@ -533,23 +533,10 @@ class Engine:
         mt, sp_src, sp_tgt = t
         vocab = self.vocab   # one set of rules per line, even if reload_terms swaps them meanwhile
         text, slots = vocab.protect(text)
-
-        def run(texts):
-            toks = [sp_src.encode(x, out_type=str)[:400] + ["</s>"] for x in texts]
-            res = mt.translate_batch(toks, beam_size=2, max_decoding_length=256)
-            return [sp_tgt.decode([tok for tok in r.hypotheses[0] if tok not in ("</s>", "<pad>")]) for r in res]
-
-        [en] = run([text])
-        parts = [p for p in _SENTENCE_BREAK.split(text) if p.strip()]
-        if len(parts) > 1:   # Opus-MT can leave out a whole sentence (often the first) of a longer line
-            each = " ".join(run(parts))
-            if len(en.split()) < DROPPED_SENTENCE * len(each.split()):
-                en = each
-        return collapse_repeats(vocab.finish(en, slots))   # Opus-MT loops too
-
-# A sentence ends at . ? ! before a capital (not after a digit: "am 3. März" goes on).
-_SENTENCE_BREAK = re.compile(r"(?<=[^\d\s][.!?])\s+(?=[A-ZÄÖÜ\"„])")
-DROPPED_SENTENCE = 0.8   # whole-line English shorter than this share of the sentence-by-sentence one: use that
+        toks = sp_src.encode(text, out_type=str)[:400] + ["</s>"]
+        res = mt.translate_batch([toks], beam_size=2, max_decoding_length=256)
+        out = [tok for tok in res[0].hypotheses[0] if tok not in ("</s>", "<pad>")]
+        return collapse_repeats(vocab.finish(sp_tgt.decode(out), slots))   # Opus-MT loops too
 
 # German function words that are not English words: one of them in a line Whisper called English
 # means the line is (mostly) German. Left out on purpose: die, was, also, will, war, am, an, so, da.
