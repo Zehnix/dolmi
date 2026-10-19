@@ -57,8 +57,13 @@ function addFinal(ts,de,en,meta){ if(draftEl){draftEl.remove();draftEl=null;} ap
   lines++; words+=en.split(/\s+/).filter(Boolean).length; $('#sLines').textContent=lines; $('#sWords').textContent=words;
   if(!stuck){ unseen++; setPill(); }
   if(meta&&meta.lag_median!=null){ lagLine=meta.lag_median; showLag(); } }
+/* LIVE-4: a draft that ended as nothing usable stays as a dim 'not understood' row (the reason in its tooltip)
+   instead of vanishing; it is not a line and is not counted. resetFeed clears it with the rest of the feed. */
+function markDropped(el,reason){ el.className='pair dropped'; el.style.opacity='.4'; el.title='Not understood: '+reason;
+  el.querySelectorAll('.caret').forEach(c=>c.remove());
+  const en=el.querySelector('.c.en'); if(en) en.insertAdjacentHTML('beforeend',' <i class="nu">(not understood)</i>'); }
 function showDraft(de,en,meta){ if(meta&&meta.lag!=null){ lagDraft=meta.lag; showLag(); }
-  if(!de&&!en){ if(draftEl){draftEl.remove();draftEl=null;} return; } unstickIfScrolled(); clearIdle();
+  if(!de&&!en){ if(draftEl){ if(meta&&meta.dropped) markDropped(draftEl,meta.dropped); else draftEl.remove(); draftEl=null; } return; } unstickIfScrolled(); clearIdle();
   if(!draftEl){ draftEl=document.createElement('div'); draftEl.className='pair cur'; draftEl.style.opacity='.7'; brows.append(draftEl); }
   const t=esc(meta&&typeof meta.start==='number'?stamp('',meta)+' …':'…');
   draftEl.innerHTML=`<div class="c de"><span class="ts">${t}</span>${esc(de)}</div><div class="c en"><span class="ts">${t}</span>${esc(en)}<span class="caret"></span></div>`;
