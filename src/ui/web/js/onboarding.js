@@ -1,11 +1,11 @@
 /* Dolmi web UI — first-run onboarding and the 'download models first?' dialog.
    Classic script (not a module): top-level names are shared with the other js/*.js files.
-   Load order (index.html): core, live, meetings, assistant, vocab, settings, onboarding. */
+   Load order (index.html): core, live, meetings, assistant, vocab, settings, onboarding, heard. */
 /* onboarding */
 const STEPS=[
  {h:'Welcome to<br>Dolmi.',p:'Dolmi captions your meeting in real time — 27 languages into English, or English into German — with the original underneath — all on this {computer}. Only the optional Assistant chat goes to the AI.',b:''},
  {h:'Pick your<br><em>languages.</em>',p:'Choose what\'s being spoken. More languages are in Settings → Spoken language.',b:'<div class="prov"><button data-lang="de"><b>German</b><span>→ English</span></button><button data-lang="en"><b>English</b><span>→ German</span></button><button data-lang="auto"><b>Auto</b><span>detect → English</span></button></div>'},
- {h:'You\'re<br><em>ready.</em>',p:'Dolmi checked this {computer}: {PC}. Pick your speech model in Settings → This {computer} &amp; models, or press Start and Dolmi asks before downloading the one that suits this {computer}.',b:'<div class="chips"><span class="chipt on">{MODEL}</span><span class="chipt on">Invisible on</span><span class="chipt on">Subtitle bar on</span></div>'}
+ {h:'You\'re<br><em>ready.</em>',p:'Dolmi checked this {computer}: {PC}. Pick your speech model in Settings → Speech models, or press Start and Dolmi asks before downloading the one that suits this {computer}.',b:'<div class="chips"><span class="chipt on">{MODEL}</span><span class="chipt on">Invisible on</span><span class="chipt on">Subtitle bar on</span></div>'}
 ];
 let step=0;
 function render(){ const s=STEPS[step];
@@ -29,6 +29,6 @@ function askDownload(missing){
   const total=missing.reduce((a,m)=>a+m.sizeMb,0);
   s.innerHTML=`<div class="onb" style="max-width:480px"><h3 style="font-size:24px">Download models first?</h3><p style="margin-top:10px;color:var(--mute);font-size:14px;line-height:1.55">Dolmi needs these on this ${W('computer')} before it can caption. They download once (${fmtMb(total)}) and then work offline.</p><div class="mlist">${missing.map(m=>`<div class="set" style="padding:6px 0"><b>${esc(m.name)}</b><span class="mtag">${fmtMb(m.sizeMb)}</span></div>`).join('')}</div><div class="foot" style="justify-content:flex-end;gap:8px"><button class="btn ghost" id="dlPick">Choose another model</button><button class="btn pri" id="dlGo">Download &amp; start</button></div></div>`;
   s.hidden=false;
-  s.querySelector('#dlPick').onclick=()=>{ s.hidden=true; const n=$('.nav button[data-v="settings"]'); if(n) n.click(); setTimeout(()=>{ const c=$('#modelsCard'); if(c) c.scrollIntoView({behavior:'smooth'}); },60); };
+  s.querySelector('#dlPick').onclick=()=>{ s.hidden=true; openSettings('speech','modelsCard'); };
   s.querySelector('#dlGo').onclick=()=>{ s.hidden=true; startLive(true); };
 }

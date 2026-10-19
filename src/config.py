@@ -40,6 +40,10 @@ DEFAULTS = {
     "ai_length": "short", "pro": "",
     "save_transcripts": True, "keep_days": 0, "privacy_seen": False, "data_folder": "",
     "invisible": False, "theme": "paper", "cf_account": "", "speech_source": "local",
+    # New keys: each domain adds its own on ONE commented line (ticket id first), and adds the same keys
+    # to SETTABLE in src/ui/app.py if the page may change them, e.g.
+    #   "my_key": 1,                              # APP-99: what it does
+    "warn_silence": True,                         # APP-3: 'Dolmi hears nothing' warning while live
 }
 
 
