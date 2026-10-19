@@ -80,26 +80,26 @@
    }
   },
   "smoke|small|cpu|opus-de|terms": {
-   "date": "2026-10-19T18:20:22Z",
-   "git": "1d1d7e3",
-   "command": "python eval/run_eval.py --smoke --write-baseline --note QA-3 smoke baseline: exon/integration 1d1d7e3",
+   "date": "2026-10-19T19:56:50Z",
+   "git": "ae380d1",
+   "command": "python eval/run_eval.py --smoke --write-baseline --note QA-3 smoke baseline re-recorded at the Wave 2 merge with per-run term files",
    "component": {
     "clips": 25,
-    "wer_de": 10.79,
-    "cer_de": 3.478,
+    "wer_de": 12.139,
+    "cer_de": 3.668,
     "clips_de": 25,
     "detected_de": 100.0,
     "wer_by_tag": {
-     "fleurs": 10.79
+     "fleurs": 12.14
     },
     "term_acc_asr": null,
     "chrf_gold": 62.505,
     "bleu_gold": 32.811,
-    "chrf_cascade": 60.419,
-    "bleu_cascade": 27.969,
+    "chrf_cascade": 59.718,
+    "bleu_cascade": 26.774,
     "term_acc_mt": null,
     "mt_pairs": 25,
-    "asr_rtf": 0.429
+    "asr_rtf": 0.336
    }
   }
  }
