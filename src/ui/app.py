@@ -80,7 +80,7 @@ class Api:
         self._ui_q = queue.Queue()
         self._ask_q = queue.Queue()
         self._ov_q = queue.Queue()
-        for loop in (self._pump, self._answer_loop, self._level_loop, self._overlay_loop):
+        for loop in (self._pump, self._answer_loop, self._level_loop, self._overlay_loop, self._vocab_watch_loop):
             threading.Thread(target=loop, daemon=True).start()
 
     # ------------------------------------------------------------------ plumbing
@@ -735,14 +735,54 @@ class Api:
         return p.read_text(encoding="utf-8") if p.exists() else ""
 
     def save_vocab(self, vocabulary=None, glossary=None):
-        """Write only the files the page actually sent (None = leave that file alone)."""
-        if vocabulary is not None:
-            (config.CONFIG / "vocabulary.txt").write_text(vocabulary.rstrip() + "\n", encoding="utf-8")
-        if glossary is not None:
-            (config.CONFIG / "glossary.txt").write_text(glossary.rstrip() + "\n", encoding="utf-8")
+        """Write only the files the page actually sent (None = leave that file alone) and apply them from
+        the next line. Lines with problems are saved as typed but never applied; they come back in
+        "problems" (same shape as validate_vocab)."""
+        for name, text in (("vocabulary.txt", vocabulary), ("glossary.txt", glossary)):
+            if text is None:
+                continue
+            path = config.CONFIG / name
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(str(text).rstrip() + "\n", encoding="utf-8")
+            os.replace(tmp, path)   # the engine and the watcher never see a half-written file
+        self._vocab_seen = self._vocab_mtimes()   # this save is not a hand edit: one reload, not two
         if self._engine:
             self._engine.reload_terms()
-        return True
+        return {"ok": True, "problems": self.validate_vocab()}
+
+    def validate_vocab(self, vocabulary=None, glossary=None):
+        """Problems ({line, text, message}) in the given texts, or in the saved files for None."""
+        v = self._read_file("vocabulary.txt") if vocabulary is None else str(vocabulary)
+        g = self._read_file("glossary.txt") if glossary is None else str(glossary)
+        res = {"vocabulary": live_subs.parse_vocabulary(v)[1], "glossary": live_subs.parse_glossary(g)[1]}
+        return {"ok": not (res["vocabulary"] or res["glossary"]), **res}
+
+    def _vocab_mtimes(self):
+        out = {}
+        for name in ("vocabulary.txt", "glossary.txt"):
+            try:
+                out[name] = (config.CONFIG / name).stat().st_mtime_ns
+            except OSError:
+                out[name] = None
+        return out
+
+    def _vocab_check(self):
+        """Reload the engine's rules when either file changed on disk since the last look (hand edits)."""
+        now = self._vocab_mtimes()
+        changed, self._vocab_seen = now != getattr(self, "_vocab_seen", now), now
+        if changed and self._engine:
+            print("Vocabulary files changed on disk; reloading")
+            self._engine.reload_terms()
+        return changed
+
+    def _vocab_watch_loop(self):
+        self._vocab_seen = self._vocab_mtimes()
+        while True:
+            time.sleep(2)
+            try:
+                self._vocab_check()
+            except Exception as e:   # keep watching; a bad edit must not stop later reloads
+                print(f"Vocabulary reload failed: {e}")
 
     # ------------------------------------------------------------------ assistant + inbox
     def ask(self, question):

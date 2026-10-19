@@ -169,3 +169,58 @@ def test_reload_terms_keeps_old_rules_when_a_file_cannot_be_read(tmp_path, monke
     (tmp_path / "vocabulary.txt").write_bytes(b"[german]\n\xff\xfe broken")
     eng.reload_terms()
     assert eng.vocab.finish(*eng.vocab.protect("Kalibra")) == "Calibra"
+
+
+def test_watcher_reloads_the_engine_after_a_hand_edit(api, tmp_path, monkeypatch):
+    import config
+    eng = _bare_engine(config.CONFIG, monkeypatch)
+    api._engine = eng
+    vocab = config.CONFIG / "vocabulary.txt"
+    api._vocab_seen = api._vocab_mtimes()
+    vocab.write_text("[german]\nKalibra = Calibra Hand\n", encoding="utf-8")
+    later = time.time() + 5
+    os.utime(vocab, (later, later))
+    deadline = time.time() + 8           # the background watcher polls every ~2 s
+    while time.time() < deadline and "Calibra Hand" not in eng.vocab.finish(*eng.vocab.protect("Kalibra")):
+        api._vocab_check()
+        time.sleep(0.2)
+    assert eng.vocab.finish(*eng.vocab.protect("Kalibra")) == "Calibra Hand"
+
+
+def test_watcher_does_nothing_without_changes(api, fake_engine):
+    api._engine = eng = fake_engine()
+    api._vocab_seen = api._vocab_mtimes()
+    assert api._vocab_check() is False and eng.reloads == 0
+
+
+# ------------------------------------------------------------------ VOC-1: bridge
+def test_save_vocab_writes_both_files_and_reloads(api, fake_engine):
+    import config
+    api._engine = eng = fake_engine()
+    res = api.save_vocab("[keep]\nNordlicht GmbH\n", "Nordlicht GmbH\nKalibra\n")
+    assert res["ok"] is True
+    assert (config.CONFIG / "vocabulary.txt").read_text(encoding="utf-8") == "[keep]\nNordlicht GmbH\n"
+    assert (config.CONFIG / "glossary.txt").read_text(encoding="utf-8") == "Nordlicht GmbH\nKalibra\n"
+    assert eng.reloads == 1
+    assert api._vocab_check() is False            # the save itself does not trigger a second reload
+
+
+def test_save_vocab_reports_problems_it_will_not_apply(api):
+    res = api.save_vocab("[german]\nKalibra\n", None)
+    assert res["ok"] is True and res["problems"]["vocabulary"][0]["line"] == 2
+
+
+def test_validate_vocab_returns_line_numbers_and_writes_nothing(api):
+    import config
+    before = (config.CONFIG / "vocabulary.txt").read_text(encoding="utf-8")
+    res = api.validate_vocab("# top\n[german]\nKalibra\n[english]\nfoo =\n", "Nordlicht\nA = B\n")
+    assert res["ok"] is False
+    assert [p["line"] for p in res["vocabulary"]] == [3, 5]
+    assert [p["line"] for p in res["glossary"]] == [2]
+    assert (config.CONFIG / "vocabulary.txt").read_text(encoding="utf-8") == before
+    assert api.validate_vocab("[keep]\nNordlicht\n", "Kalibra\n") == {"ok": True, "vocabulary": [], "glossary": []}
+
+
+def test_validate_vocab_checks_saved_files_when_nothing_sent(api):
+    res = api.validate_vocab(None, None)
+    assert res["ok"] is True                     # the seeded example files are clean
