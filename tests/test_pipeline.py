@@ -329,6 +329,74 @@ def test_whisper_ghosts_are_junk():
     assert m.junk_reason("Vielen Dank.", energy=0.005) == "silence_ghost"
 
 
+def test_credit_lines_and_broadcaster_ghosts_are_junk():
+    for line in ("Untertitelung des ZDF für funk, 2017", "Untertitelung im Auftrag des ZDF, 2018",
+                 "Untertitel von Stephanie Geiges", "Vielen Dank fürs Zuschauen und bis zum nächsten Mal!",
+                 "Danke fürs Zuschauen und bis zum nächsten Mal.", "SWR 2020", "Copyright WDR 2020/2021",
+                 "Thank you for watching and see you next time!", "Sous-titrage Société Radio-Canada",
+                 "Sous-titres réalisés par la communauté d'Amara.org", "Abonniert den Kanal!"):
+        assert m.junk_reason(line, lang="de") == "hallucination", line
+    for line in ("Tschüss, bis morgen alle!", "Ja.", "OK", "Im Jahr 2020 haben wir angefangen.",
+                 "Wir schauen heute ZDF.", "Bis zum nächsten Mal!"):
+        assert m.junk_reason(line, lang="de") is None, line
+
+
+def test_other_scripts_are_kept_when_auto_detect_hears_them():
+    for line, lang in (("שלום לכולם, נתחיל את הפגישה", "he"), ("Добар дан свима", "sr"),
+                       ("สวัสดีทุกคน", "th"), ("Բարեւ բոլորին", "hy")):
+        assert m.junk_reason(line, energy=0.1, lang=lang) is None, lang
+    assert m.junk_reason("Продолжение следует...", lang="fr") == "non_latin"
+
+
+def test_auto_detect_shows_a_hebrew_line(fake_engine):
+    eng = fake_engine(text="שלום לכולם, נתחיל את הפגישה", lang="he")
+    eng.language = "auto"
+    items, tr = run_worker(eng, np.concatenate([speech(1), silence(1)]), wait=1.5, finals=1)
+    assert [i[1] for i in items if i[0] == "final"] == ["שלום לכולם, נתחיל את הפגישה"] and tr.rows
+
+
+def test_quiet_real_speech_is_not_a_silence_ghost():
+    assert m.junk_reason("Vielen Dank.", energy=0.012, lang="de") is None
+    assert m.junk_reason("Vielen Dank.", energy=0.004, lang="de") == "silence_ghost"
+
+
+def test_dedupe_keeps_a_short_word_said_again():
+    assert m.dedupe_overlap("das ist so", "so ist das") == "so ist das"
+    assert m.dedupe_overlap("wir gehen nach Hause", "Hause und dann") == "und dann"   # a long word still counts
+
+
+def test_overlap_is_not_deduplicated_against_a_dropped_part():
+    class Eng:
+        cloud, language, context = False, "de", ""
+        texts = iter(["Bis heute Abend", "Untertitel im Auftrag des ZDF", "heute Abend gehen wir"])
+
+        def transcribe(self, audio):
+            return next(self.texts), "de"
+
+        def transcribe_draft(self, audio):                  # drafts show nothing here
+            return "", "de"
+
+        def translate(self, text, lang):
+            return text
+
+    audio = np.concatenate([speech(2), silence(1), speech(13), silence(1)])
+    items, _ = run_worker(Eng(), audio, wait=3, finals=2)
+    assert [i[1] for i in items if i[0] == "final"] == ["Bis heute Abend", "heute Abend gehen wir"]
+
+
+def test_mark_sentence_end_and_a_cut_do_not_interleave():
+    seg = m.Segmenter(energy_gap)
+    assert isinstance(seg._lock, type(threading.Lock()))
+    seg.feed(speech(1))
+    with seg._lock:                                         # a cut in progress holds the lock
+        t = threading.Thread(target=seg.mark_sentence_end, args=(seg.uid, seg.samples))
+        t.start()
+        t.join(0.2)
+        assert t.is_alive() and seg.sentence_end is None   # waits for the cut to finish
+    t.join(1)
+    assert seg.sentence_end == seg.samples
+
+
 # ---------------------------------------------------------------- SEG-7: term echoes
 TERMS = {"crm", "alice", "bob", "carol", "acme", "falcon", "dave"}
 ECHO = "CRM, Perketer, Luzer, Erdmann, Kolor, Alice, Alice, Bob, Carol, Michel, Zellow, und Marseille."
@@ -352,6 +420,19 @@ def test_transcribe_drops_the_echo_segment_and_says_so():
             NS(text=ECHO, no_speech_prob=0.6, avg_logprob=-1.1)]
     e._asr = lambda audio, language, retry=False: (segs, NS(language="de"))
     assert e.transcribe(None) == ("Okay, dann fangen wir an.", "de") and e.last_info["echo"]
+
+
+def test_an_echo_split_over_two_segments_is_dropped():
+    e = object.__new__(m.Engine)
+    e.language, e.terms = "de", TERMS
+    for segs in ([NS(text="Acme, Alice, Bob, Carol,"), NS(text="Dave, Falcon, Zeta, Orion.")],
+                 [NS(text="Acme, Alice, Bob,"), NS(text="Carol, Dave, Falcon, Zeta.")]):
+        e._asr = lambda audio, language, retry=False, segs=segs: (segs, NS(language="de"))
+        assert e.transcribe(None) == ("", "de") and e.last_info["echo"]
+    sure = [NS(text="Acme, Alice, Bob,", no_speech_prob=0.05, avg_logprob=-0.2),
+            NS(text="Carol, Dave, Falcon.", no_speech_prob=0.05, avg_logprob=-0.2)]
+    e._asr = lambda audio, language, retry=False: (sure, NS(language="de"))
+    assert e.transcribe(None)[0] == "Acme, Alice, Bob, Carol, Dave, Falcon."   # read out on purpose
 
 
 # ---------------------------------------------------------------- SEG-8: retry before dropping

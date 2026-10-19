@@ -35,23 +35,36 @@ MIN_SENTENCE = 3.0         # s, a draft ending in . ? ! this long may finalize a
 MIN_FLUSH = 0.5            # s of speech a sentence cut off by Stop needs to still be transcribed
 PREROLL = 0.3              # s of audio from before the speech onset kept at the start of a sentence
 SILENCE_RMS = 0.006        # energy threshold (raise if noisy)
-LOW_ENERGY_RMS = 0.015     # loudest 100 ms below this: a lone "Thank you." there is Whisper's ghost
+LOW_ENERGY_RMS = 0.01      # loudest 100 ms below this: a lone "Thank you." there is Whisper's ghost
+                           # (quiet remote speech peaks near 0.018, so this stays well under it)
 ASR_VAD_THRESHOLD = 0.35   # faster-whisper's own VAD: lower than its 0.5 default so soft speech survives
 CLOUD_SPLIT, CLOUD_BREATH, CLOUD_MAX = 3.0, 0.2, 6.0   # cloud captions: cut long speech sooner
 
-# Typical Whisper output on silence / noise. A line is junk only when these phrases (whole words)
-# make up most of it: "Tschüss, bis morgen alle!" is a real line.
+# Typical Whisper output on silence / noise. A line is junk only when these phrases (whole words),
+# broadcaster names and years make up most of it: "Tschüss, bis morgen alle!" is a real line.
 HALLUCINATIONS = [
     "untertitel im auftrag des zdf", "untertitel im auftrag des", "untertitel der amara.org-community",
-    "untertitel von", "untertitel", "untertitelung", "amara.org", "zdf", "swr", "wdr",
+    "untertitel von", "untertitel", "untertitelung", "amara.org",
+    "vielen dank fürs zuschauen und bis zum nächsten mal", "danke fürs zuschauen und bis zum nächsten mal",
     "vielen dank fürs zuschauen", "danke fürs zuschauen", "copyright",
-    "abonniert", "abonnieren", "thanks for watching", "thank you for watching", "subscribe to",
+    "abonniert den kanal", "abonniert unseren kanal", "abonniert", "abonnieren",
+    "thank you for watching and see you next time", "thanks for watching and see you next time",
+    "thanks for watching", "thank you for watching", "subscribe to",
     "sous-titrage", "sous-titres",
 ]
+BROADCASTERS = ["zdf", "swr", "wdr", "ndr", "mdr", "ard", "rbb", "funk", "orf", "srf", "radio-canada"]
+GHOST_STARTS = ("untertitel", "sous-titr", "amara.org")   # a line opening with these is a credit, not speech
 SILENCE_GHOSTS = {         # kept when someone says them; dropped alone on near-silent audio
     "thank you", "thank you very much", "thanks", "vielen dank", "tschüss",
 }
-NON_LATIN_LANGUAGES = {"ru", "uk", "bg", "el", "ar", "fa", "ur", "hi", "zh", "ja", "ko"}
+# Languages written in Latin script: only for these is a line in another script a misheard ghost.
+# (Serbian is left out: it is written in both Latin and Cyrillic.)
+LATIN_LANGUAGES = {
+    "en", "de", "fr", "es", "it", "nl", "pl", "pt", "tr", "sv", "da", "fi", "cs", "hu", "ro", "id", "vi",
+    "no", "nb", "nn", "is", "et", "lv", "lt", "sk", "sl", "hr", "bs", "sq", "ca", "eu", "gl", "ga", "cy",
+    "mt", "lb", "af", "sw", "ms", "tl", "az", "uz", "tk", "ha", "yo", "so", "mi", "haw", "la", "br", "oc",
+    "fo", "ht", "ln", "jw", "su",
+}
 
 # --------------------------------------------------------------- capture
 # Capture is platform code; re-exported here so callers keep using live_subs.loopback_stream etc.
@@ -158,11 +171,10 @@ class Engine:
         retried = retry_empty and not any(s.text.strip() for s in segs)
         if retried:
             segs, info = self._asr(audio, language, retry=True)
-        raw = [s.text.strip() for s in segs]
-        kept = [echoes_terms(t, self.terms, getattr(s, "no_speech_prob", None), getattr(s, "avg_logprob", None))
-                for t, s in zip(raw, segs)]
-        self.last_info = {"retried": retried, "echo": kept != raw}
-        return collapse_repeats(" ".join(t for t in kept if t).strip()), info.language
+        raw = " ".join(t for t in (s.text.strip() for s in segs) if t)
+        text = drop_echoes(segs, self.terms)
+        self.last_info = {"retried": retried, "echo": text != raw}
+        return collapse_repeats(text), info.language
 
     def transcribe_draft(self, audio):
         return self.transcribe(audio, retry_empty=False)
@@ -220,11 +232,33 @@ def echoes_terms(text: str, terms: set, no_speech_prob=None, avg_logprob=None) -
     sentences = re.split(r"(?<=[.!?])\s+", text.strip())
     return " ".join(x for x in sentences if x and not _is_term_list(x, terms))
 
+def _trusted(seg) -> bool:
+    p, lp = getattr(seg, "no_speech_prob", None), getattr(seg, "avg_logprob", None)
+    return p is not None and lp is not None and p < ECHO_TRUSTED[0] and lp > ECHO_TRUSTED[1]
+
+def drop_echoes(segs, terms: set) -> str:
+    """The joined text of Whisper segments without an echoed hint list. Whisper may split one echo over
+    several segments ('Acme, Alice, Bob,' + 'Carol, Dave, ...'), so each run of segments it is not sure
+    about is checked as one text; the segments it is sure about are kept as they are."""
+    out, run = [], []
+    for seg in list(segs) + [None]:
+        if seg is not None and not _trusted(seg):
+            run.append(seg.text.strip())
+            continue
+        if run:
+            out.append(echoes_terms(" ".join(t for t in run if t), terms))
+            run = []
+        if seg is not None:
+            out.append(seg.text.strip())
+    return " ".join(t for t in out if t).strip()
+
 _URL = re.compile(r"(?:https?://|www\.)\S*", re.I)
 _W = "A-Za-z0-9À-ɏ"   # Latin letters (with accents): only these mark word edges, as Whisper glues CJK onto "Amara.org"
 _DOMAIN = re.compile(rf"(?<![{_W}.-])[{_W}-]+(?:\.[{_W}-]+)*\.(?:com|org|net|de|io|tv|info|eu|at|ch)(?![{_W}])", re.I)
-_HALLUCINATION = re.compile("|".join(rf"(?<![{_W}]){re.escape(h)}(?![{_W}])" for h in
-                                     sorted(HALLUCINATIONS, key=len, reverse=True)), re.I)
+# words of a phrase may be separated by any punctuation ("Zuschauen, und bis zum nächsten Mal")
+_HALLUCINATION = re.compile("|".join(
+    rf"(?<![{_W}])" + r"[\s,.!?;:-]+".join(map(re.escape, h.split())) + rf"(?![{_W}])"
+    for h in sorted(HALLUCINATIONS + BROADCASTERS, key=len, reverse=True)) + r"|(?<!\d)(?:19|20)\d\d(?!\d)", re.I)
 
 def _letters(t: str) -> int:
     return sum(c.isalnum() for c in t)
@@ -233,7 +267,8 @@ def junk_reason(t: str, energy=None, lang=None):
     """Why a line is Whisper junk rather than speech (None = keep it).
 
     energy: loudest 100 ms RMS of the audio (None = unknown: lone ghost phrases are kept);
-    lang: the spoken language (None or "auto" = unknown: other scripts are kept)."""
+    lang: the spoken language; a line in another script is junk only for a Latin-script language
+    (None, "auto" or e.g. Hebrew detected on Auto-detect: other scripts are kept)."""
     letters = _letters(t)
     if letters < 2:                                   # '..', '-' (but 'Ja', 'OK' are lines)
         return "no_words"
@@ -241,10 +276,12 @@ def junk_reason(t: str, energy=None, lang=None):
     domains = [m.group() for m in _DOMAIN.finditer(t) if not any(a <= m.start() < b for a, b in links)]
     if sum(_letters(t[a:b]) for a, b in links) + sum(map(_letters, domains)) >= 0.5 * letters:
         return "url"
+    if t.lstrip(" \"'([-–—.,:").lower().startswith(GHOST_STARTS):
+        return "hallucination"
     covered = sum(_letters(m.group()) for m in _HALLUCINATION.finditer(t))
     if covered >= 0.6 * letters:
         return "hallucination"
-    if lang not in (None, "auto") and lang not in NON_LATIN_LANGUAGES:
+    if lang in LATIN_LANGUAGES:
         alpha = [c for c in t if c.isalpha()]
         latin = sum("LATIN" in unicodedata.name(c, "") for c in alpha)
         if alpha and latin < 0.5 * len(alpha):        # Cyrillic, Hangul, CJK, Arabic ... on German audio
@@ -265,11 +302,13 @@ def peak_rms(audio, window=STEP) -> float:
     return float(np.sqrt((audio[:n].reshape(-1, window) ** 2).mean(axis=1)).max())
 
 def dedupe_overlap(previous: str, text: str, max_words=8) -> str:
-    """`text` without its first words when they repeat the last words of `previous` (audio overlap)."""
+    """`text` without its first words when they repeat the last words of `previous` (audio overlap).
+    A single repeated word counts only when it is long: 'das ist so' + 'so ist das' is real speech."""
     norm = lambda w: re.sub(r"\W", "", w.lower())
     prev, words = previous.split(), text.split()
     for k in range(min(max_words, len(prev), len(words)), 0, -1):
-        if [norm(w) for w in prev[-k:]] == [norm(w) for w in words[:k]] and any(norm(w) for w in words[:k]):
+        head = [norm(w) for w in words[:k]]
+        if [norm(w) for w in prev[-k:]] == head and any(head) and (k > 1 or len(head[0]) >= 5):
             return " ".join(words[k:])
     return text
 
@@ -375,6 +414,7 @@ class Segmenter:
         self.recent = np.zeros(0, np.float32)    # last 1 s: VAD context and pre-roll source
         self.used = 0                            # samples before this belong to an earlier utterance
         self.uid = 0                             # number of the newest utterance
+        self._lock = threading.Lock()            # mark_sentence_end (ASR thread) vs. a cut (worker)
         self._clear()
 
     def _clear(self):
@@ -394,14 +434,17 @@ class Segmenter:
 
     def mark_sentence_end(self, uid, upto):
         """A draft of utterance `uid` that heard the audio up to sample `upto` ended with . ? !"""
-        if uid == self.uid and self.active:
-            self.sentence_end = upto
+        with self._lock:
+            if uid == self.uid and self.active:
+                self.sentence_end = upto
 
     def feed(self, chunk):
         """Feed captured audio; returns the utterances it completed (usually none)."""
         out = []
         for i in range(0, len(chunk), STEP):
-            out += self._step(np.asarray(chunk[i:i + STEP], np.float32))
+            piece = np.asarray(chunk[i:i + STEP], np.float32)
+            with self._lock:
+                out += self._step(piece)
         return out
 
     def _step(self, piece):
@@ -581,7 +624,8 @@ def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker):
     """Whisper side of worker(): finals in the order spoken; a draft only while nothing else waits.
     After Stop it still transcribes the finals already queued, into the transcript file only: that
     speech was captured, so it must not be lost because the CPU was behind."""
-    ids, previous, draft_shown = itertools.count(1), "", None
+    ids, draft_shown = itertools.count(1), None
+    previous = (None, "")                        # (uid, text) of the last utterance; "" when it was dropped
     while True:
         job = jobs.get()
         if job is None:                          # worker() has stopped and queued everything it had
@@ -606,13 +650,14 @@ def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker):
                 continue
             _, u, start, end = job
             de, lang = eng.transcribe(u.audio)
-            if u.overlap and de:
-                de = dedupe_overlap(previous, de)
+            if u.overlap and de and previous[0] == u.uid - 1:   # only against the part just before the cut
+                de = dedupe_overlap(previous[1], de)
             if de:
                 reason = junk_reason(de, peak_rms(u.audio), _spoken(eng, lang))
             else:
                 reason = "echo" if (getattr(eng, "last_info", None) or {}).get("echo") else "empty"
             if reason:
+                previous = (u.uid, "")               # its words were not shown: none to de-duplicate
                 drop(reason, start, end, de)
                 gone = {"dropped": reason, "start": start, "end": end} if draft_shown == u.uid else {}
                 ui_q.put(("draft", "", "", gone))
@@ -623,7 +668,7 @@ def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker):
                         "speaker": spk, "speaker_conf": conf}
                 ui_q.put(("final", de, en, meta))
                 tr.add(start, end, de, en, meta=meta)
-                previous = de
+                previous = (u.uid, de)
                 if not stop.is_set():                # a new session may already use eng.context
                     eng.context = de
                 ui_q.put(("draft", "", "", {}))
