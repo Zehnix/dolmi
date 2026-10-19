@@ -334,6 +334,86 @@ def needs_log_file():
     return sys.stdout is None or sys.stderr is None or not sys.stdout.isatty()
 
 
+# ------------------------------------------------------------------ one Dolmi at a time (APP-5)
+class _Instance:
+    """Held by the running Dolmi: an flock on <config>/<name>.lock (so a second launch can tell) and a
+    Unix socket <config>/<name>.sock a second launch connects to, to ask for the window."""
+
+    def __init__(self, lock, sock_path):
+        self._lock, self._path, self._server = lock, sock_path, None
+
+    def listen(self, on_activate):
+        import socket
+        try:
+            self._path.unlink(missing_ok=True)       # a stale socket from a crashed run
+            srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            srv.bind(str(self._path))
+            srv.listen(4)
+            self._server = srv
+        except OSError as e:
+            print(f"Dolmi: cannot listen for a second launch ({e})")
+            return self
+
+        def run():
+            while True:
+                try:
+                    conn, _ = srv.accept()
+                except OSError:
+                    return                            # closed
+                with conn:
+                    try:
+                        conn.recv(16)
+                        on_activate()
+                    except Exception as e:
+                        print(f"Dolmi: could not bring the window to the front ({e})")
+        threading.Thread(target=run, name="dolmi-single-instance", daemon=True).start()
+        return self
+
+    def close(self):
+        if self._server:
+            self._server.close()
+            self._path.unlink(missing_ok=True)
+        self._lock.close()                          # releases the flock
+
+
+def single_instance(name="Dolmi"):
+    """The first Dolmi gets a guard to keep (and .listen(on_activate) on); a second launch gets None after
+    asking the first one to show its window, and should exit. (Dolmi.app is also single-instance through
+    Launch Services; this covers runs from source and a second copy of the app.)"""
+    import fcntl
+    import socket
+    d = config_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    lock = open(d / f"{name}.lock", "a+")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        lock.close()
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(2)
+                s.connect(str(d / f"{name}.sock"))
+                s.sendall(b"show")
+        except OSError as e:
+            print(f"Dolmi is already running but did not answer ({e})")
+        return None
+    return _Instance(lock, d / f"{name}.sock")
+
+
+def bring_to_front(win):
+    """Show the main window and make Dolmi the active app."""
+    nswindow = _native(win)
+    if nswindow is None:
+        return False
+
+    def run():
+        import AppKit
+        AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+        nswindow.makeKeyAndOrderFront_(None)
+    stealth._main(run)
+    return True
+
+
 # ------------------------------------------------------------------ global hotkey
 def start_recover_hotkey(on_press):
     """⌃⌥⇧D: a system-wide hotkey that always brings Dolmi back, even hidden from the Dock."""

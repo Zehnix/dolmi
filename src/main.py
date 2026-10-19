@@ -43,6 +43,10 @@ def _setup_output():
 
 def main():
     _setup_output()
+    instance = dolmi_platform.single_instance()             # APP-5: one Dolmi at a time
+    if instance is None:
+        print("Dolmi is already running: asked it to come to the front")
+        return
     os.chdir(ROOT)                                            # core resolves relative paths from here
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
     dolmi_platform.register_app()                             # Windows: own taskbar entry + icon
@@ -70,6 +74,7 @@ def main():
         if api._settings.get("invisible"):
             api.toggle_invisible(True)
         api._start_background()          # APP-4: load the downloaded models now, so Start is instant
+        instance.listen(api._bring_to_front)   # APP-5: a second launch brings this window forward
         # a system-wide hotkey always brings Dolmi back, even hidden from the taskbar / Dock
         dolmi_platform.start_recover_hotkey(api.recover)
 

@@ -14,6 +14,8 @@ Both modules import on any OS (OS libraries load lazily inside functions), so te
     keys      protect(bytes) -> bytes  unprotect(bytes) -> bytes   (DPAPI / Keychain secret)
     folders   config_dir()  log_dir()  documents_folder()  needs_log_file()
     hotkey    start_recover_hotkey(on_press)
+    instance  single_instance(name="Dolmi") -> guard (.listen(on_activate), .close()) | None if one runs
+              bring_to_front(window)
     words     OS ("win" | "mac")  WORDS {key: user-visible word}  MODEL_NOTES {speech model key: note}
 """
 import sys
@@ -27,6 +29,7 @@ API = (
     "protect", "unprotect",
     "config_dir", "log_dir", "documents_folder", "needs_log_file",
     "start_recover_hotkey",
+    "single_instance", "bring_to_front",
 )
 
 if sys.platform == "darwin":

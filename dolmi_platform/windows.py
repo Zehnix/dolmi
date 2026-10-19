@@ -366,6 +366,88 @@ def needs_log_file():
     return sys.stdout is None or sys.stderr is None
 
 
+# ------------------------------------------------------------------ one Dolmi at a time (APP-5)
+ERROR_ALREADY_EXISTS = 183
+ASFW_ANY = -1                  # AllowSetForegroundWindow: whichever process comes next may take the focus
+SW_RESTORE = 9
+INFINITE = 0xFFFFFFFF
+
+
+def _kernel32():
+    from ctypes import wintypes
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+    k.CreateMutexW.restype = wintypes.HANDLE
+    k.CreateEventW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+    k.CreateEventW.restype = wintypes.HANDLE
+    k.SetEvent.argtypes = [wintypes.HANDLE]
+    k.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    k.WaitForSingleObject.restype = wintypes.DWORD
+    k.CloseHandle.argtypes = [wintypes.HANDLE]
+    return k
+
+
+class _Instance:
+    """Held by the running Dolmi: the named mutex (so a second launch can tell) and the event a second
+    launch sets to ask for the window."""
+
+    def __init__(self, k32, mutex, event):
+        self._k32, self._mutex, self._event = k32, mutex, event
+        self._closed = False
+
+    def listen(self, on_activate):
+        """Call on_activate() (on a background thread) each time another launch asks for the window."""
+        def run():
+            while not self._closed and self._k32.WaitForSingleObject(self._event, INFINITE) == 0:
+                if self._closed:
+                    return
+                try:
+                    on_activate()
+                except Exception as e:
+                    print(f"Dolmi: could not bring the window to the front ({e})")
+        threading.Thread(target=run, name="dolmi-single-instance", daemon=True).start()
+        return self
+
+    def close(self):
+        self._closed = True
+        self._k32.SetEvent(self._event)          # wake the listener so it ends
+        self._k32.CloseHandle(self._event)
+        self._k32.CloseHandle(self._mutex)
+
+
+def single_instance(name="Dolmi"):
+    """The first Dolmi gets a guard to keep (and .listen(on_activate) on); a second launch gets None after
+    asking the first one to show its window, and should exit. Per Windows user session ("Local\\")."""
+    k32 = _kernel32()
+    mutex = k32.CreateMutexW(None, False, "Local\\" + name + ".SingleInstance")
+    already = ctypes.get_last_error() == ERROR_ALREADY_EXISTS
+    event = k32.CreateEventW(None, False, False, "Local\\" + name + ".Activate")   # auto-reset
+    if not mutex or not event:                   # cannot tell: never block Dolmi from starting
+        print(f"Dolmi: single-instance check unavailable (error {ctypes.get_last_error()})")
+        return _Instance(k32, mutex or event, event or mutex)
+    if already:
+        try:
+            ctypes.windll.user32.AllowSetForegroundWindow(ASFW_ANY)   # the running one may take the focus
+        except Exception:
+            pass
+        k32.SetEvent(event)
+        k32.CloseHandle(event)
+        k32.CloseHandle(mutex)
+        return None
+    return _Instance(k32, mutex, event)
+
+
+def bring_to_front(win):
+    """Restore the main window if minimised and give it the keyboard focus."""
+    hwnd = _native_hwnd(win, "Dolmi")
+    if not hwnd:
+        return False
+    u = _user32()
+    if u.IsIconic(hwnd):
+        u.ShowWindow(hwnd, SW_RESTORE)
+    return bool(u.SetForegroundWindow(hwnd))
+
+
 # ------------------------------------------------------------------ global hotkey (always-works escape hatch)
 WM_HOTKEY = 0x0312
 MOD_ALT, MOD_CONTROL, MOD_SHIFT = 0x0001, 0x0002, 0x0004

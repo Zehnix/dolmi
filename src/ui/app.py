@@ -1317,6 +1317,18 @@ class Api:
         dolmi_platform.apply_invisible(self, on)
         return on
 
+    def _bring_to_front(self):
+        """A second Dolmi was launched (APP-5): show this window instead (invisible mode stays as it is)."""
+        w = self._window
+        if not w:
+            return
+        try:
+            w.show()
+            w.restore()
+        except Exception as e:
+            print(f"show window: {e}")
+        dolmi_platform.bring_to_front(w)
+
     def recover(self):
         """Global-hotkey escape hatch: invisible off, window back, page switches in sync."""
         self.toggle_invisible(False)
