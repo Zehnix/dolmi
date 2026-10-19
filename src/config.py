@@ -48,6 +48,7 @@ DEFAULTS = {
     "vocab_profile": "",                          # VOC-11: spelling-hint profile for meetings ('' = every term)
     "translator": "local", "translator_timeout": 1.5,   # QA-7: cloud subtitles for finals (local|gemini|deepl), s to wait
     "preload_models": True,                       # APP-4: load downloaded models when Dolmi opens, keep them
+    "ui_text_size": "normal",                     # APP-14: Appearance > Larger UI text (normal|large)
     "check_updates": True,                        # APP-6: ask GitHub for a newer release when Dolmi opens
     "shortcuts_on": True, "shortcuts": {},       # APP-7: global shortcuts on/off; {action: combo} (empty = defaults)
     "bar_locked": False, "bar_positions": {}, "bar_screen": "",  # APP-8: click-through lock; bar place per screen
