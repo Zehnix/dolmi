@@ -461,7 +461,8 @@ class Engine:
 
         People switch to English mid-meeting, so a non-English setting still lets Whisper
         detect: the chosen language or English is kept; anything else is a misdetection
-        (usually a short clip) and is transcribed again in the chosen language.
+        (usually a short clip) and is transcribed again in the chosen language. A German line
+        detected as English (German function words in it) is reported as German.
         Nothing heard: tried once more without Whisper's own VAD before the buffer is given up
         (finals only: transcribe_draft skips the retry, a draft is redone a moment later anyway).
         `last_info` says what happened ({'retried', 'echo'}) so the worker can log why a line is empty."""
@@ -477,7 +478,10 @@ class Engine:
         raw = " ".join(t for t in (s.text.strip() for s in segs) if t)
         text = drop_echoes(segs, self.terms)
         self.last_info = {"retried": retried, "echo": text != raw}
-        return collapse_repeats(text), info.language
+        lang = info.language
+        if lang == "en" and self.language == "de" and looks_german(text):
+            lang = "de"
+        return collapse_repeats(text), lang
 
     def transcribe_draft(self, audio):
         return self.transcribe(audio, retry_empty=False)
@@ -495,7 +499,9 @@ class Engine:
 
     def translate(self, text, lang):
         if lang == "en" and self.language != "en":
-            return self.vocab.finish(text)   # English speech, English subtitles: nothing to translate
+            if not looks_german(text):
+                return self.vocab.finish(text)   # English speech, English subtitles: nothing to translate
+            lang = "de"                          # Whisper called a German line English: translate it
         if lang not in models.LANGUAGES:
             lang = self.language
         key = models.translator_key(lang)
@@ -507,14 +513,58 @@ class Engine:
         mt, sp_src, sp_tgt = t
         vocab = self.vocab   # one set of rules per line, even if reload_terms swaps them meanwhile
         text, slots = vocab.protect(text)
-        toks = sp_src.encode(text, out_type=str)[:400] + ["</s>"]
-        res = mt.translate_batch([toks], beam_size=2, max_decoding_length=256)
-        out = [tok for tok in res[0].hypotheses[0] if tok not in ("</s>", "<pad>")]
-        return vocab.finish(sp_tgt.decode(out), slots)
+
+        def run(texts):
+            toks = [sp_src.encode(x, out_type=str)[:400] + ["</s>"] for x in texts]
+            res = mt.translate_batch(toks, beam_size=2, max_decoding_length=256)
+            return [sp_tgt.decode([tok for tok in r.hypotheses[0] if tok not in ("</s>", "<pad>")]) for r in res]
+
+        [en] = run([text])
+        parts = [p for p in _SENTENCE_BREAK.split(text) if p.strip()]
+        if len(parts) > 1:   # Opus-MT can leave out a whole sentence (often the first) of a longer line
+            each = " ".join(run(parts))
+            if len(en.split()) < DROPPED_SENTENCE * len(each.split()):
+                en = each
+        return collapse_repeats(vocab.finish(en, slots))   # Opus-MT loops too
+
+# A sentence ends at . ? ! before a capital (not after a digit: "am 3. März" goes on).
+_SENTENCE_BREAK = re.compile(r"(?<=[^\d\s][.!?])\s+(?=[A-ZÄÖÜ\"„])")
+DROPPED_SENTENCE = 0.8   # whole-line English shorter than this share of the sentence-by-sentence one: use that
+
+# German function words that are not English words: one of them in a line Whisper called English
+# means the line is (mostly) German. Left out on purpose: die, was, also, will, war, am, an, so, da.
+GERMAN_STOPWORDS = frozenset("""
+und oder aber nicht ist sind bin bist hat haben habe hatte hatten wird werden wurde kann können
+muss müssen soll sollen sollten möchte ich wir ihr sie es er uns euch mir mich dich sich der den dem
+des das dass ein eine einen einem einer kein keine nichts mit auf für über unter von vom zum zur bei
+beim nach seit bis auch noch nur schon jetzt dann wenn weil wie warum wo hier dort heute morgen gestern
+sehr doch mal ja nein genau eigentlich vielleicht gerade immer bitte danke diese dieser dieses
+""".split())
+
+def looks_german(text: str) -> bool:
+    """True when German function words make up a real part of `text` (two of them, or 30 % of a short line)."""
+    words = re.findall(r"[^\W\d_]+", text.lower())
+    hits = sum(w in GERMAN_STOPWORDS for w in words)
+    return hits >= 2 or (hits == 1 and hits >= 0.3 * len(words))
+
+_LOOP_LONG = re.compile(r"(\b.{8,}?)(?:[\s,.!?;]+\1\b)+", re.I)
+# a short loop starts with a letter and its repeats are spaced ('Version 1.1.1' is not a loop)
+_LOOP_SHORT = re.compile(r"(?<!\w)([^\W\d_](?:[\w' -]{0,5}\w)?)(?:[,.!?;]*\s+\1(?!\w)){2,}", re.I)
 
 def collapse_repeats(text: str) -> str:
-    """Whisper sometimes loops: 'He's a good man. He's a good man.' -> said once."""
-    return re.sub(r"(\b.{8,}?)(?:[\s,.!?]+\1\b)+", r"\1", text, flags=re.I)
+    """Whisper and Opus-MT sometimes loop: 'He's a good man. He's a good man.' -> said once, and a short
+    one said three or more times ('Ja. Ja. Ja.') -> once ('sehr sehr gut' stays). A loop the model cut
+    off mid-repeat at the end ('..., I'm going to do that, I'm going to') loses that tail too."""
+    text = _LOOP_SHORT.sub(r"\1", text)
+    out, pos = [], 0
+    for m in _LOOP_LONG.finditer(text):
+        out.append(text[pos:m.start()] + m.group(1))
+        pos = m.end()
+        tail = text[pos:].strip(" ,;.!?")
+        if len(tail.split()) >= 2 and m.group(1).lower().startswith(tail.lower()):
+            pos = len(text)                       # the rest of the line is an unfinished repeat
+            break
+    return "".join(out) + text[pos:]
 
 ECHO_TRUSTED = (0.2, -0.5)   # no_speech_prob below and avg_logprob above: Whisper is sure it heard speech
 
