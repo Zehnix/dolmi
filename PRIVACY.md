@@ -23,6 +23,17 @@ If you set *Settings → Captions by* to Gemini, OpenAI or Cloudflare, Dolmi sen
 
 When you press **Download** in *Settings → This PC & speech models* (*This Mac & speech models* on a Mac), or agree to download when Start needs a model you don't have yet, Dolmi downloads its models from [Hugging Face](https://huggingface.co): the Whisper speech model and the Opus-MT translator for your language. This happens once per model. The download sends no personal data, only what any download sends, such as your IP address.
 
+## Speaker labels (beta, off by default)
+
+If you turn on *Settings → Privacy & data → Speaker labels*, Dolmi marks who said each line ("Speaker 1", "Speaker 2" …, which you can rename). To do that it turns the audio of each line into a **voice embedding** — a list of numbers describing how the voice sounds — and compares it with the voices it has heard earlier in the same meeting. A voice embedding can identify a person, so it counts as **biometric data** (GDPR Art. 9):
+
+- It is computed **on your computer** by a small speech model; no audio or embedding is sent anywhere.
+- Embeddings are kept **in memory only, for the current meeting**, and are gone when you press Stop or close Dolmi. Dolmi never saves them, so it cannot recognise a voice in a later meeting.
+- What is saved (only when *Save transcripts* is on): the label on each line of the transcript, and `meeting_<date>.speakers.json` next to it with each label's name and colour. Names are whatever you type; delete the meeting to remove them.
+- The first time you start with it on, Dolmi downloads the speaker model (~30 MB) once from the sherpa-onnx project's release page on [GitHub](https://github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-recongition-models) into `.cache\huggingface\dolmi-speakers` (`~/.cache/huggingface/dolmi-speakers` on a Mac). Like any download, this sends only your IP address.
+
+Labelling who said what is processing personal data about the other participants: tell them, and turn it off if they object. *(This is not legal advice.)*
+
 ## 3. GPU add-on (optional, Windows) — downloaded from PyPI
 
 If you tick **GPU speech recognition** in the installer, it downloads NVIDIA's CUDA libraries from [PyPI](https://pypi.org) once, during setup.
@@ -34,7 +45,7 @@ If you tick **GPU speech recognition** in the installer, it downloads NVIDIA's C
 | Settings, API keys, vocabulary, glossary | `%APPDATA%\Dolmi` (keys encrypted with Windows DPAPI) | `~/Library/Application Support/Dolmi` (keys encrypted with a secret in your login Keychain) |
 | Transcripts, summaries, saved lines, Assistant chats | `Documents\Dolmi` (change it in Settings) | `~/Documents/Dolmi` (change it in Settings) |
 | Log file | `%LOCALAPPDATA%\Dolmi\dolmi.log` | `~/Library/Logs/Dolmi/dolmi.log` |
-| Speech and translation models | `%USERPROFILE%\.cache\huggingface` | `~/.cache/huggingface` |
+| Speech and translation models (and the speaker model, if used) | `%USERPROFILE%\.cache\huggingface` | `~/.cache/huggingface` |
 
 - To stop saving, turn off **Save transcripts** in Settings.
 - To delete old files and chats automatically, use **Delete after**.

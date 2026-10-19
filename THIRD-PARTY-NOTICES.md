@@ -43,6 +43,7 @@ The full licence texts are inside each package's folder in `runtime\Lib\site-pac
 | idna | 3.20 | BSD-3-Clause | https://github.com/kjd/idna |
 | Jinja2 | 3.1.6 | BSD License | https://github.com/pallets/jinja/ |
 | jiter | 0.17.0 | MIT | https://github.com/pydantic/jiter/ |
+| kaldi-native-fbank | 1.22.3 | Apache-2.0 | https://github.com/csukuangfj/kaldi-native-fbank |
 | markdown-it-py | 4.2.0 | MIT License | https://github.com/executablebooks/markdown-it-py |
 | MarkupSafe | 3.0.3 | BSD-3-Clause | https://github.com/pallets/markupsafe/ |
 | mdurl | 0.1.2 | MIT License | https://github.com/executablebooks/mdurl |
@@ -86,6 +87,12 @@ The full licence texts are inside each package's folder in `runtime\Lib\site-pac
 - **Whisper** speech models (OpenAI, MIT) in CTranslate2 format via faster-whisper — from Hugging Face.
 - **Opus-MT** translation models (Helsinki-NLP, CC-BY 4.0) in CTranslate2 format — from Hugging Face.
 - Optional GPU add-on: **NVIDIA cuBLAS / cuDNN** wheels, NVIDIA software license — from PyPI.
+- Only with *Speaker labels* (beta) on: the **CAM++ speaker-verification model** (`speech_campplus_sv_en_voxceleb_16k`) from
+  [3D-Speaker](https://github.com/modelscope/3D-Speaker) by Alibaba's Tongyi Lab, Apache-2.0
+  ([model card](https://www.modelscope.cn/models/iic/speech_campplus_sv_en_voxceleb_16k)), in the ONNX export published by
+  [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-recongition-models) (Apache-2.0) — from GitHub.
+  It was trained on **VoxCeleb1 and VoxCeleb2** (A. Nagrani, J. S. Chung, W. Xie, A. Zisserman, University of Oxford),
+  licensed CC BY 4.0 — https://www.robots.ox.ac.uk/~vgg/data/voxceleb/ . No changes were made to the model.
 
 # macOS (Dolmi.app)
 
@@ -125,6 +132,7 @@ downloaded models are the same as on Windows (above).
 | jaraco.context | 6.1.2 | MIT | https://github.com/jaraco/jaraco.context |
 | jaraco.functools | 4.6.0 | MIT | https://github.com/jaraco/jaraco.functools |
 | jiter | 0.17.0 | MIT | https://github.com/pydantic/jiter/ |
+| kaldi-native-fbank | 1.22.3 | Apache-2.0 | https://github.com/csukuangfj/kaldi-native-fbank |
 | keyring | 25.7.0 | MIT | https://github.com/jaraco/keyring |
 | more-itertools | 11.1.0 | MIT | https://more-itertools.readthedocs.io/en/stable/ |
 | numpy | 2.5.3 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 | https://numpy.org |
