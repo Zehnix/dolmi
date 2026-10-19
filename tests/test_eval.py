@@ -377,3 +377,11 @@ def test_baseline_numbers_hold_no_text():
     out = run_eval.numbers_only({"wer_de": 1.23456, "clips": 3, "note": "Satz", "by": {"B": 1.0}, "_rows": [1]})
     assert out == {"wer_de": 1.235, "clips": 3, "by": {"B": 1.0}}
 
+
+def test_data_folder_can_live_outside_the_checkout(tmp_path, monkeypatch):
+    import paths
+    monkeypatch.setenv("DOLMI_EVAL_DATA", str(tmp_path))
+    wav = tmp_path / "synthetic" / "s01.wav"
+    assert paths.resolve("data/synthetic/s01.wav") == wav
+    assert paths.name_of(wav) == "data/synthetic/s01.wav"
+    assert paths.resolve("manifest.json") == EVAL / "manifest.json"

@@ -14,6 +14,7 @@ python eval/run_eval.py              # synthetic set, component + stream mode, W
 
 `run_eval.py` prints a summary table and writes `eval/results/<run>.md` and `eval/results/<run>.jsonl`. Both folders, `eval/data/` and `eval/results/`, are git-ignored: audio and per-line output never go into git.
 
+The audio folder can live outside the checkout, so a worktree or a fresh clone does not have to rebuild it. The bench looks in this order: `DOLMI_EVAL_DATA` (any folder), `eval/data/` if it exists, `%LOCALAPPDATA%\dolmi-eval\data` if it exists, else it builds into `eval/data/`. The manifest names files `data/...` either way, so the hashes and the baseline stay comparable.
 
 Common options:
 

@@ -22,7 +22,10 @@ import wave
 from pathlib import Path
 
 EVAL = Path(__file__).resolve().parent
-OUT = EVAL / "data" / "fleurs" / "de_de" / "test"
+sys.path.insert(0, str(EVAL))
+import paths  # noqa: E402
+
+OUT = paths.data_dir() / "fleurs" / "de_de" / "test"
 MANIFEST = EVAL / "manifest.json"
 REPO = "google/fleurs"
 FILES = ["data/de_de/test.tsv", "data/de_de/audio/test.tar.gz", "data/en_us/test.tsv"]
@@ -147,7 +150,7 @@ def main(argv=None):
             continue
         with wave.open(str(wav), "rb") as w:
             dur = w.getnframes() / w.getframerate()
-        rows.append({"id": f"fleurs-{r[0]}-{Path(r[1]).stem}", "file": wav.relative_to(EVAL).as_posix(),
+        rows.append({"id": f"fleurs-{r[0]}-{Path(r[1]).stem}", "file": paths.name_of(wav),
                      "text": r[2], "en": en.get(r[0]), "duration": round(dur, 2)})
     (OUT / "index.jsonl").write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in rows), encoding="utf-8")
 
@@ -158,7 +161,7 @@ def main(argv=None):
         "files": [{"path": f, "bytes": local[f].stat().st_size, "sha256": sha256(local[f])} for f in FILES],
         "clips": len(rows), "with_english": sum(1 for x in rows if x["en"]),
         "hours": round(sum(x["duration"] for x in rows) / 3600, 2),
-        "index": (OUT / "index.jsonl").relative_to(EVAL).as_posix(),
+        "index": paths.name_of(OUT / "index.jsonl"),
         "note": "references come from the TSVs at run time (index.jsonl is built locally, not committed)",
     }
     man["sets"]["covost2"] = {"status": "skipped",

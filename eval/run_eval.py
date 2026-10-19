@@ -40,6 +40,7 @@ for _p in (str(EVAL), str(ROOT)):
         sys.path.insert(0, _p)
 
 import metrics  # noqa: E402
+import paths  # noqa: E402
 
 SR = 16000
 CHUNK_S = 0.1
@@ -97,7 +98,7 @@ def load_sessions(set_name, warnings):
         raise SystemExit(f"Set '{set_name}' has no sessions in eval/manifest.json: {reason}")
     out = []
     for s in listed["sessions"]:
-        wav = EVAL / s["file"]
+        wav = paths.resolve(s["file"])
         side = wav.with_suffix(".json")
         if not wav.exists():
             raise SystemExit(f"{wav} is missing: run  python eval/make_synthetic.py")
@@ -112,13 +113,13 @@ def load_sessions(set_name, warnings):
 def load_clips(set_name, warnings, limit=None):
     """[{'id', 'audio' (loader), 'text', 'lang', 'en', 'terms', 'en_terms', 'tags'}] for component mode."""
     if set_name == "fleurs":
-        index = EVAL / "data" / "fleurs" / "de_de" / "test" / "index.jsonl"
+        index = paths.data_dir() / "fleurs" / "de_de" / "test" / "index.jsonl"
         if not index.exists():
             raise SystemExit(f"{index} is missing: run  python eval/fetch_public.py")
         clips = []
         for line in index.read_text(encoding="utf-8").splitlines():
             row = json.loads(line)
-            path = EVAL / row["file"]
+            path = paths.resolve(row["file"])
             clips.append({"id": row["id"], "load": (lambda p=path: read_wav(p)), "text": row["text"],
                           "lang": "de", "en": row.get("en"), "terms": [], "en_terms": [], "tags": ["fleurs"]})
             if limit and len(clips) >= limit:
@@ -170,7 +171,7 @@ def term_files(folder, terms):
 
 def make_engine(args, terms):
     """The app's real live_subs.Engine with the fictional term files and the chosen translator."""
-    cfg = EVAL / "data" / "config"
+    cfg = paths.data_dir() / "config"
     if args.no_terms:
         cfg.mkdir(parents=True, exist_ok=True)
         for name in ("glossary.txt", "vocabulary.txt"):

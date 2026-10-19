@@ -30,7 +30,10 @@ import numpy as np
 
 SR = 16000
 EVAL = Path(__file__).resolve().parent
-DATA = EVAL / "data"
+sys.path.insert(0, str(EVAL))
+import paths  # noqa: E402
+
+DATA = paths.data_dir()
 MANIFEST = EVAL / "manifest.json"
 SEED = 7
 
@@ -539,7 +542,7 @@ def build_session(rng, sess, lines, cache, out_dir):
     path = out_dir / f"{sess['id']}.wav"
     write_wav(path, audio)
     entry = {
-        "id": sess["id"], "file": path.relative_to(EVAL).as_posix(), "sha256": sha256(path),
+        "id": sess["id"], "file": paths.name_of(path), "sha256": sha256(path),
         "duration": round(len(audio) / SR, 2), "sr": SR, "voices": sess["voices"],
         "conditions": {"snr_db": sess["snr_db"], "opus_kbps": sess["opus_kbps"],
                        "level_variation": sess["level_var"], "notes": notes},
