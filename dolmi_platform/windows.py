@@ -128,6 +128,13 @@ def mic_stream(out_q: queue.Queue, stop: threading.Event, device=None, on_level=
         pa.terminate()
 
 
+def dual_stream(out_q: queue.Queue, stop: threading.Event, mic_device=None, speaker_device=None,
+                on_level=None, log=None):
+    """SPK-5 (beta): the microphone and the speaker at once, mixed into out_q; each 100 ms block's
+    energy per source goes to log.add(time, mic_rms, speaker_rms) (speakers.SourceLog)."""
+    from ._dual import dual
+    dual(mic_stream, loopback_stream, out_q, stop, mic_device, speaker_device, on_level, log)
+
 # ------------------------------------------------------------------ compute (NVIDIA GPU or CPU)
 def prepare_gpu():
     """Make pip-installed CUDA libs (nvidia-cublas-cu12 / nvidia-cudnn-cu12) discoverable, so the GPU
