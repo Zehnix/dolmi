@@ -1151,8 +1151,14 @@ class Api:
         return {"ok": not left, "left": left}
 
     def english_only_state(self):
-        """For Settings > Audio: the switch, the speakers to pick from, and why it fell back (if it did)."""
+        """For Settings > Audio: the switch, the speakers to pick from, and why it fell back (if it did).
+        mode: "route" on Windows (VOICE-5, a second speaker), "tap" on a Mac that can mute the meeting app
+        while it taps it (VOICE-6, macOS 14.2+; no speaker to pick, nothing to restore)."""
         on, win = bool(self._settings.get("english_only")), dolmi_platform.OS == "win"
+        if dolmi_platform.OS == "mac":
+            from dolmi_platform import mac
+            return {"on": on, "available": mac.english_only_supported(), "active": False, "notice": "",
+                    "device": "", "devices": [], "pending": False, "mode": "tap"}
         r, devices = getattr(self, "_router", None), []
         if win:
             r = r or self._routing()
@@ -1163,7 +1169,7 @@ class Api:
                 print(f"routing: cannot list speakers ({e})")
         return {"on": on, "available": win and r is not None, "active": bool(r and r.active),
                 "notice": r.notice if r else "", "device": self._settings.get("english_only_device", ""),
-                "devices": devices, "pending": self._routing_pending()}
+                "devices": devices, "pending": self._routing_pending(), "mode": "route"}
 
     def _cloud_submit(self, de, en, meta):
         """Send a final (never a draft) to the cloud translator, with the previous lines as context."""

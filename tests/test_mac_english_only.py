@@ -107,3 +107,13 @@ def test_swift_helper_has_the_muted_process_tap():
                    "ticks % 20", ".unmuted"):
         assert needle in src, needle
     assert src.count('write("DOLMI-AUDIO') == 2     # header once per mode, before any samples
+
+
+@pytest.mark.parametrize("supported", [True, False])
+def test_settings_switch_shows_on_a_mac_that_can_mute(api, monkeypatch, supported):
+    import dolmi_platform
+    monkeypatch.setattr(dolmi_platform, "OS", "mac")
+    monkeypatch.setattr(mac, "english_only_supported", lambda: supported)
+    s = api.english_only_state()
+    assert s["available"] is supported and s["mode"] == "tap" and s["devices"] == [] and not s["on"]
+    assert api.set_setting("english_only", True) and api.english_only_state()["on"]

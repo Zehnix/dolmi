@@ -312,7 +312,7 @@ async function voiceBoot(){ const b=bridge(); if(!b) return; try{ const s=await 
   if($('#voiceHoldKey')&&s.shortcuts&&s.shortcuts.hold_original) $('#voiceHoldKey').textContent=fmtCombo(s.shortcuts.hold_original);
   voiceHint(); voiceSetup(); }catch(e){ console.error('voice boot',e); } }
 document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) voiceBoot(); else window.addEventListener('pywebviewready',voiceBoot); });
-/* ---- VOICE-5 (Windows, experimental, off by default): 'English only' sends Teams/Zoom/Chrome/Edge to a
+/* ---- VOICE-5 (Windows) / VOICE-6 (Mac 14.2+, process tap), experimental, off by default: 'English only' sends Teams/Zoom/Chrome/Edge to a
    second speaker that Dolmi mutes, captures them from there, and puts everything back on Stop/exit,
    after a crash at the next start, or with Restore audio. Without a second speaker it falls back. ---- */
 { const m=settingsMount('audio.voice');
@@ -321,11 +321,13 @@ document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) voiceBoot(); els
     <div class="set" data-kw="restore audio routing undo speaker meeting" id="eoRestoreRow" hidden><div><div class="lab">Restore audio</div><div class="ps" id="eoRestoreHint">Puts the meeting apps and the speaker back the way they were</div></div><button class="btn ghost" id="eoRestore">Restore audio</button></div>`); } }
 async function englishOnlyRefresh(){ const b=bridge(); if(!b||!b.english_only_state) return;
   try{ const v=await b.english_only_state(); if(!v.available) return;
-    $('#eoRow').hidden=false; $('#eoDevRow').hidden=!v.on; $('#eoRestoreRow').hidden=!(v.on||v.pending);
+    const tap=v.mode==='tap';            // VOICE-6 Mac: the meeting app is muted while tapped, no speaker to pick
+    $('#eoRow').hidden=false; $('#eoDevRow').hidden=tap||!v.on; $('#eoRestoreRow').hidden=tap||!(v.on||v.pending);
     setSw('#swEnglishOnly',v.on);
     const sel=$('#setEoDevice'); sel.innerHTML='<option value="">Pick a speaker</option>'+v.devices.map(d=>`<option value="${esc(d.id)}">${esc(d.name)}${d.default?' (default)':''}</option>`).join('');
     sel.value=v.device||'';
-    $('#eoHint').textContent=v.notice||'Sends the meeting apps to the speaker below and mutes it, so you hear only the English voice. Dolmi still listens to the meeting';
+    $('#eoHint').textContent=v.notice||(tap?'Mutes the meeting apps while Dolmi listens to them, so you hear only the English voice. Their sound comes back when you stop'
+      :'Sends the meeting apps to the speaker below and mutes it, so you hear only the English voice. Dolmi still listens to the meeting');
   }catch(e){ console.error('english only state',e); } }
 if($('#swEnglishOnly')) $('#swEnglishOnly').onclick=async()=>{ const sw=$('#swEnglishOnly'), on=!sw.classList.contains('on'), b=bridge(); sw.classList.toggle('on',on);
   if(b&&!await b.set_setting('english_only',on)){ sw.classList.toggle('on',!on); return; }
