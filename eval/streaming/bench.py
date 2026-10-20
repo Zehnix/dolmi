@@ -7,7 +7,9 @@ Each config is one `eval/run_eval.py --mode stream` run in its own process (so t
 DOLMI_STABLE_DRAFTS and the device take effect cleanly). From its results file this script adds the
 streaming numbers the harness does not summarise itself:
   committed rewrites  a draft whose committed words do not extend the previous ones (a front trimmed
-                      out of the STR-1 window and an empty reset do not count)
+                      out of the STR-1 window and an empty reset do not count). A lower bound: any
+                      suffix of the old words is accepted as a trimmed front, so "a b c" -> "c x"
+                      passes as a trim.
   tail churn          tentative words changed between consecutive drafts, per draft
 and the GPU memory peak (nvidia-smi polled every 0.5 s; whole-GPU, so other apps count too).
 Reference projects (WhisperLiveKit, SimulStreaming) are not run here: they need torch in a separate venv.
@@ -48,7 +50,8 @@ def extends(prev, cur):
 
 
 def draft_flicker(events):
-    """(committed rewrites, mean tail churn) from the draft stream_events of one run."""
+    """(committed rewrites, mean tail churn, drafts compared) from the draft stream_events of one run.
+    Rewrites and churn are None when no draft carried the committed/tentative split (nothing measured)."""
     rewrites = churn = n = 0
     prev_c, prev_t, prev_u = None, None, None
     for e in events:
@@ -71,7 +74,9 @@ def draft_flicker(events):
             churn += sum(1 for a, b in zip(prev_t, t) if a != b) + abs(len(prev_t) - len(t))
             n += 1
         prev_c, prev_t = c, t
-    return rewrites, (churn / n if n else None)
+    if not n:
+        return None, None, 0
+    return rewrites, churn / n, n
 
 
 class GpuPeak:
@@ -116,12 +121,12 @@ def run_one(name, args):
         return {"config": name, "error": " | ".join(tail) or f"exit {proc.returncode}"}
     rows = [json.loads(line) for line in new[-1].read_text(encoding="utf-8").splitlines() if line.strip()]
     stream = next((r["stream"] for r in rows if r.get("kind") == "summary"), {}) or {}
-    rewrites, churn = draft_flicker([r for r in rows if r.get("kind") == "stream_event"])
+    rewrites, churn, drafts = draft_flicker([r for r in rows if r.get("kind") == "stream_event"])
     return {"config": name, "model": model, "device": device, "str1": stable == "1",
             "stream_wer": stream.get("stream_wer"), "missed": stream.get("missed_rate"),
             "first_p50": stream.get("first_text_latency_p50"), "first_p95": stream.get("first_text_latency_p95"),
             "final_p50": stream.get("final_latency_p50"), "final_p95": stream.get("final_latency_p95"),
-            "rtf": stream.get("rtf"), "rewrites": rewrites, "churn": churn,
+            "rtf": stream.get("rtf"), "rewrites": rewrites, "drafts": drafts, "churn": churn,
             "vram_peak_mb": gpu.peak if device == "cuda" else None, "wall_s": round(time.time() - t0)}
 
 
@@ -131,6 +136,13 @@ def fmt(v, nd=2):
     if isinstance(v, bool):
         return "yes" if v else "no"
     return f"{v:.{nd}f}" if isinstance(v, float) else str(v)
+
+
+def rewrites_cell(r):
+    """Rewrites only mean something with STR-1 on (without it nothing is committed) and with drafts measured."""
+    if not r.get("str1") or r.get("rewrites") is None:
+        return "-"
+    return f"{r['rewrites']} / {r.get('drafts', 0)} drafts"
 
 
 def table(results, args):
@@ -145,7 +157,7 @@ def table(results, args):
         lines.append("| " + " | ".join([
             r["config"], fmt(r["str1"]), fmt(r["stream_wer"]), fmt(r["missed"], 1),
             f"{fmt(r['first_p50'])}/{fmt(r['first_p95'])}", f"{fmt(r['final_p50'])}/{fmt(r['final_p95'])}",
-            fmt(r["rtf"]), fmt(r["rewrites"]), fmt(r["churn"]), fmt(r["vram_peak_mb"])]) + " |")
+            fmt(r["rtf"]), rewrites_cell(r), fmt(r["churn"]), fmt(r["vram_peak_mb"])]) + " |")
     return "\n".join(lines) + "\n"
 
 
