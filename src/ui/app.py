@@ -64,6 +64,7 @@ SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_tran
             "bar_time",                                        # LIVE-5
             "capture_both",                                    # SPK-5
             "voice_readout",                                   # VOICE-1
+            "english_only", "english_only_device",             # VOICE-5
             "ui_text_size",                                    # APP-14
             "local_only",                                      # STR-7
             "unsure_marks",                                    # STR-8
@@ -71,7 +72,7 @@ SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_tran
 UI_TEXT_SIZES = ("normal", "large")                      # APP-14: Appearance > Larger UI text
 BOOL_SETTINGS = {"warn_silence", "preload_models", "check_updates", "shortcuts_on",
                  "speaker_labels", "clarify_queue", "bar_time",
-                 "capture_both", "voice_readout", "local_only",
+                 "capture_both", "voice_readout", "english_only", "local_only",
                  "unsure_marks", "cloud_failover"}        # on/off switches that must be true or false
 SPEAKER_NAME_MAX = 40                                    # SPK-4: longest speaker name
 # APP-3 'nothing heard' warning: how quiet counts as silence, and how long before Dolmi says so
@@ -601,6 +602,8 @@ class Api:
             return False
         if key == "ui_text_size" and value not in UI_TEXT_SIZES:
             return False
+        if key == "english_only_device" and not isinstance(value, str):
+            return False
         with self._settings_lock:
             self._settings[key] = value
             config.save_settings(self._settings)
@@ -619,6 +622,8 @@ class Api:
             self._request_warm()
         if key == "voice_readout" and not value:
             self._voice_stop()
+        if key == "english_only" and not value:
+            self._routing_end()
         if key == "shortcuts_on" and self._shortcuts is not None:
             self._start_shortcuts()
         if key == "preload_models":
@@ -814,6 +819,92 @@ class Api:
                 "backend": getattr(backend, "name", ""), "spoken": r.spoken if r else 0,
                 "skipped": r.skipped if r else 0}
 
+    # ------------------------------------------------------------------ English only routing (VOICE-5)
+    def _routing(self):
+        """The Router (voice/routing_win.py), created on first use; None off Windows or in a build without
+        voice/. Tests set _routing_policy to a fake policy class."""
+        r = getattr(self, "_router", None)
+        if r is None and dolmi_platform.OS == "win":
+            try:
+                from voice import routing_win
+                policy = getattr(self, "_routing_policy", None) or routing_win.WinPolicy
+                r = self._router = routing_win.Router(policy(), config.CONFIG)
+            except (ImportError, OSError) as e:
+                print(f"routing: not available ({e})")
+                return None
+        return r
+
+    def _routing_pending(self):
+        try:
+            from voice import routing_win
+        except ImportError:
+            return False
+        return (Path(config.CONFIG) / routing_win.JOURNAL).exists()
+
+    def _routing_recover(self):
+        """Next launch after a crash: undo a route that was left behind (journal in the config folder)."""
+        if self._routing_pending():
+            r = self._routing()
+            if r:
+                r.restore()
+
+    def _english_only_capture(self, audio_q, cap):
+        """Speaker capture with English only on: route the meeting apps away, capture them with process
+        loopback until `cap` is set. False = off or fell back (the caller then captures the speaker)."""
+        if not self._settings.get("english_only"):
+            return False
+        r = self._routing()
+        if r is None:
+            return False
+        from voice import routing_win
+        if not r.apply(self._settings.get("english_only_device", "")):
+            self._emit("onRouting", r.notice)
+            return False
+        old = getattr(self, "_route_watch", None)        # a source switch reopens capture: one watcher
+        if old:
+            old.stop()
+        self._route_watch = routing_win.Watcher(r).start()
+        try:
+            routing_win.process_loopback_stream(audio_q, cap, r.capture_pids, on_level=self._on_level)
+            return True
+        except OSError as e:
+            print(f"routing: process loopback failed ({e}); audio restored, capturing the speaker")
+            self._routing_end()
+            r.notice = routing_win.FALLBACK_ERROR
+            self._emit("onRouting", r.notice)
+            return False
+
+    def _routing_end(self):
+        w, self._route_watch = getattr(self, "_route_watch", None), None
+        if w:
+            w.stop()
+        r = getattr(self, "_router", None)
+        if r and (r.active or r.pending()):
+            r.restore()
+
+    def restore_audio(self):
+        """Settings > Audio > Restore audio: undo every routing change now. left = apps that must run once
+        more before Windows lets Dolmi restore them (retried automatically)."""
+        self._routing_end()
+        r = getattr(self, "_router", None) or (self._routing() if self._routing_pending() else None)
+        left = bool(r and not r.restore())
+        return {"ok": not left, "left": left}
+
+    def english_only_state(self):
+        """For Settings > Audio: the switch, the speakers to pick from, and why it fell back (if it did)."""
+        on, win = bool(self._settings.get("english_only")), dolmi_platform.OS == "win"
+        r, devices = getattr(self, "_router", None), []
+        if win:
+            r = r or self._routing()
+            try:
+                devices = [{"id": d["id"], "name": d["name"], "default": bool(d.get("default"))}
+                           for d in (r.policy.devices() if r else [])]
+            except OSError as e:
+                print(f"routing: cannot list speakers ({e})")
+        return {"on": on, "available": win and r is not None, "active": bool(r and r.active),
+                "notice": r.notice if r else "", "device": self._settings.get("english_only_device", ""),
+                "devices": devices, "pending": self._routing_pending()}
+
     def _cloud_submit(self, de, en, meta):
         """Send a final (never a draft) to the cloud translator, with the previous lines as context."""
         if meta.get("id") is None or not de:
@@ -1008,7 +1099,7 @@ class Api:
                     elif self._source() == "mic":
                         live_subs.mic_stream(audio_q, cap, self._settings.get("mic_device") or None,
                                              on_level=self._on_level)
-                    else:
+                    elif not self._english_only_capture(audio_q, cap):
                         live_subs.loopback_stream(audio_q, cap, self._settings["audio_device"] or None,
                                                   on_level=self._on_level)
             except Exception as e:
@@ -1028,6 +1119,7 @@ class Api:
             self._emit("onBar", True)
 
     def stop_listening(self):
+        self._routing_end()
         with self._lock:
             s, self._session = self._session, None
         if s and s.get("stop"):
@@ -1242,6 +1334,7 @@ class Api:
         """Called once by main when the window is up: keep the models warm from now on."""
         threading.Thread(target=self._warm_loop, name="dolmi-warm", daemon=True).start()
         self._request_warm()
+        threading.Thread(target=self._routing_recover, name="dolmi-route-recover", daemon=True).start()
 
     def _request_warm(self):
         self._warm_req.set()

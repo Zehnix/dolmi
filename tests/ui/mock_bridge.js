@@ -42,6 +42,8 @@
     state:()=>JSON.parse(JSON.stringify(state)),
     set_setting:()=>true,
     voice_state:()=>({on:false,available:true,backend:'windows',spoken:0,skipped:0}),   // VOICE-1
+    english_only_state:()=>({on:false,available:true,active:false,notice:'',device:'',devices:[{id:'{spk}',name:'Speakers',default:false}],pending:false}),   // VOICE-5
+    restore_audio:()=>({ok:true,left:false}),   // VOICE-5
     pc_info:()=>({ram_gb:32,cores:16,gpu:true,gpu_name:'NVIDIA GeForce RTX 4060',model_dir:'C:\\Users\\Test\\.cache\\huggingface\\hub',data_dir:state.dataFolder}),
     devices:()=>['Speakers (Realtek Audio)','Headset (USB)'],
     mic_devices:()=>['Microphone (USB)','Microphone Array'],
