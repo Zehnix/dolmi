@@ -6,7 +6,7 @@ Dolmi listens to whatever plays through your speakers (Teams, Zoom, Meet, Slack,
 
 > **On a Mac?** [Download the `.dmg`](https://github.com/Zehnix/dolmi/releases/latest): the same app for macOS 14.2+ (Apple Silicon). Details in [Mac/](Mac/README.md).
 
-> Windows 10 (2004+) / 11. MIT licence. [Download the installer](https://github.com/Zehnix/dolmi/releases) — no admin rights needed.
+> Windows 10 (2004+) / 11. Open source (AGPL-3.0) with a [commercial licence](COMMERCIAL-LICENSE.md) for closed-source use. [Download the installer](https://github.com/Zehnix/dolmi/releases) — no admin rights needed.
 
 ![Dolmi live view: German on the left, English on the right](assets/screenshots/live.png)
 
@@ -146,4 +146,9 @@ Only one Dolmi runs at a time: while the installed app is open, starting the sou
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Dolmi is © 2026 Zehnix (Annas Mustafa) and contributors, **dual-licensed**:
+
+- **[GNU AGPL-3.0](LICENSE)** — free to use, change and share. Keep the credits, and if you distribute Dolmi or a changed version (or run a changed version as an online service), publish your source code under the AGPL too.
+- **[Commercial licence](COMMERCIAL-LICENSE.md)** — USD 2,000 per product, for building Dolmi into a paid or closed-source product without publishing your code.
+
+Details in [LICENSING.md](LICENSING.md). Versions up to 2.2.0 were released under MIT. Contributions: [CONTRIBUTING.md](CONTRIBUTING.md).
