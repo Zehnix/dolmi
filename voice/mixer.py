@@ -198,6 +198,11 @@ class Mixer:
         with self._lock:
             return self._tts.size > 0
 
+    def tts_left(self):
+        """Seconds of English voice queued and not played yet (the reader starts the next line early)."""
+        with self._lock:
+            return self._tts.size / SR
+
     def stop_tts(self):
         """Cut the voice now (reader stop)."""
         with self._lock:

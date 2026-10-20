@@ -34,20 +34,21 @@ class Clock:
 
 
 # ------------------------------------------------------------------ reader (backlog control)
-def test_queue_keeps_only_the_newest_lines():
+def test_every_line_is_kept_in_order_however_many_wait():
     r = reader.Reader(FakeTTS(), clock=Clock())
-    for t in ("one", "two", "three"):
+    lines = [f"line {n}" for n in range(12)]
+    for t in lines:
         r.offer(t)
-    assert r.skipped == 2 and r.next_line(wait=0) == "three"
+    assert [r.next_line(wait=0) for _ in lines] == lines and r.skipped == 0
     assert r.next_line(wait=0) is None
 
 
-def test_lines_older_than_max_age_are_skipped():
+def test_old_lines_are_still_spoken():
     clock = Clock()
     r = reader.Reader(FakeTTS(), clock=clock)
-    r.offer("old", end=clock.t - reader.MAX_AGE - 0.1)
+    r.offer("old", end=clock.t - 60)
     r.offer("fresh", end=clock.t - 1)
-    assert r.next_line(wait=0) == "fresh" and r.skipped == 1
+    assert r.next_line(wait=0) == "old" and r.next_line(wait=0) == "fresh" and r.skipped == 0
 
 
 def test_empty_lines_and_lines_after_stop_are_ignored():
@@ -68,7 +69,7 @@ def test_the_worker_speaks_and_a_failing_voice_does_not_stop_it():
             raise RuntimeError("voice broke")
         fake.done.set()
     fake.speak = speak
-    r = reader.Reader(fake, max_queue=2).start()
+    r = reader.Reader(fake).start()
     r.offer("bad")
     r.offer("good")
     assert fake.done.wait(5) and calls == ["bad", "good"]

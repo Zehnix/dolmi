@@ -181,11 +181,24 @@ def test_resample_keeps_duration():
 
 
 # ------------------------------------------------------------------ reader: speed-up + fallback chain
-def test_catch_up_speed_starts_after_three_seconds_and_stays_gentle():
-    assert reader.catch_up_speed(2.9) == 1.0 and reader.catch_up_speed(None) == 1.0
-    assert reader.catch_up_speed(3.01) == pytest.approx(1.05, abs=0.01)
-    assert reader.catch_up_speed(4.0) == pytest.approx(1.085, abs=0.01)
-    assert reader.catch_up_speed(6.5) == 1.12
+def test_target_speed_follows_the_backlog_within_the_cap():
+    assert reader.target_speed(0) == reader.target_speed(None) == reader.BASE_SPEED
+    assert reader.target_speed(reader.RELAXED_S) == reader.BASE_SPEED
+    mid = reader.target_speed((reader.RELAXED_S + reader.FULL_S) / 2)
+    assert reader.BASE_SPEED < mid < reader.SPEED_MAX
+    assert reader.target_speed(60) == reader.SPEED_MAX == pytest.approx(1.4)
+
+
+def test_speed_is_smoothed_up_and_back_down():
+    s, ups = reader.BASE_SPEED, []
+    for _ in range(8):                     # far behind: rises step by step, never past the cap
+        s = reader.smooth_speed(s, reader.target_speed(30))
+        ups.append(s)
+    assert ups == sorted(ups) and ups[0] - reader.BASE_SPEED <= reader.MAX_STEP + 1e-9
+    assert ups[-1] == pytest.approx(reader.SPEED_MAX, abs=0.02)
+    for _ in range(10):                    # caught up: back to the normal pace
+        s = reader.smooth_speed(s, reader.target_speed(0.5))
+    assert s == pytest.approx(reader.BASE_SPEED, abs=0.01)
 
 
 class SpeedTTS:
@@ -209,24 +222,63 @@ class SpeedTTS:
         self.closed = True
 
 
-def test_late_lines_are_spoken_faster_and_too_old_lines_still_skipped():
-    clock = Clock(1000.0)
+def test_a_backlog_speeds_the_voice_up_and_no_line_is_dropped():
     tt = SpeedTTS()
-    r = reader.Reader(tt, clock=clock, max_queue=2)
-    r.offer("late", end=996.5)          # 3.5 s behind
-    r.offer("on time", end=1000.0)
+    r = reader.Reader(tt, clock=Clock(1000.0))
+    lines = [f"Line {n} has a few more words in it to read." for n in range(8)]
+    for t in lines:
+        r.offer(t, end=900.0)               # very late: still spoken
+    while (item := r.next_item(0)) is not None:
+        r._say(*item)
+    speeds = [sp for _, sp in tt.said]
+    assert [t for t, _ in tt.said] == lines and r.skipped == 0 and r.spoken == len(lines)
+    assert speeds[0] > reader.BASE_SPEED and max(speeds) <= reader.SPEED_MAX
+    assert speeds[-1] < max(speeds)         # the queue emptied: slowing back down
+    r.offer("Caught up.")
+    for _ in range(10):
+        r._say(*r.next_item(0))
+        r.offer("Caught up.")
+    assert tt.said[-1][1] == pytest.approx(reader.BASE_SPEED, abs=0.01)
+
+
+class LeftMix:
+    """A headphone mix stand-in that reports how much voice is still queued."""
+
+    def __init__(self, left):
+        self.left, self.played = left, []
+
+    def tts_left(self):
+        return self.left
+
+    def play(self, pcm, sr):
+        self.played.append(len(pcm))
+
+    def wait_tts(self, timeout=60.0):
+        raise AssertionError("gapless reading must not wait for the mix to run dry")
+
+
+def test_next_line_is_synthesized_while_the_current_one_still_plays():
+    mix = LeftMix(reader.LOOKAHEAD_S - 0.1)
+    tt = PcmTTS()
+    r = reader.Reader(tt, clock=Clock(), mixer=mix)
+    r.offer("One.")
+    r.offer("Two.")
     r._say(*r.next_item(0))
     r._say(*r.next_item(0))
-    assert tt.said == [("late", pytest.approx(1.068, abs=0.01)), ("on time", 1.0)]
-    r.offer("ancient", end=990.0)
-    assert r.next_item(0) is None and r.skipped == 1
+    assert [t for t, _ in tt.said] == ["One.", "Two."] and len(mix.played) == 4
+
+
+def test_audio_still_playing_counts_as_backlog():
+    r = reader.Reader(SpeedTTS(), clock=Clock(), mixer=LeftMix(7.0))
+    r.offer("Hi.")
+    assert r.next_item(0)[1] > 7.0
 
 
 def test_a_failing_natural_voice_falls_back_to_the_os_voice_for_the_same_line():
     broken, os_voice = SpeedTTS(fail=True), SpeedTTS()
     r = reader.Reader(broken, clock=Clock(), fallbacks=[os_voice]).start()
     r.offer("Hello.")
-    assert os_voice.done.wait(5) and os_voice.said == [("Hello.", 1.0)]
+    assert os_voice.done.wait(5) and os_voice.said == [("Hello.", reader.BASE_SPEED)]
     assert r.backend is os_voice and broken.closed and r.spoken == 1
     r.stop()
 
@@ -253,7 +305,7 @@ def test_pcm_voices_play_through_the_mix():
             break
         done.join(0.01)
     done.join(2)
-    assert not done.is_alive() and tt.said == [("Hi.", 1.0)] and r.spoken == 1
+    assert not done.is_alive() and tt.said == [("Hi.", reader.BASE_SPEED)] and r.spoken == 1
 
 
 def test_natural_chain_is_kokoro_then_the_os_voice():
@@ -454,3 +506,11 @@ def test_settings_page_has_the_voice_setup_controls():
     for needle in ("swVoiceNatural", "swVoiceMix", "setVoiceOut", "setVoiceSafety", 'max="30"', "swVoiceSplit",
                    "setVoiceNames", "voiceTest", "download_voice_model", "hold_original"):
         assert needle in js, needle
+
+
+def test_kokoro_runs_fp32_when_downloaded_and_the_older_int8_file_otherwise():
+    both = lambda repo, f: "x"
+    only_int8 = lambda repo, f: None if f == kokoro.MODEL_FILE else "x"
+    assert kokoro.model_file(both) == kokoro.MODEL_FILE == "onnx/model.onnx"
+    assert kokoro.model_file(only_int8) == kokoro.INT8_FILE
+    assert kokoro.model_file(lambda repo, f: None) is None
