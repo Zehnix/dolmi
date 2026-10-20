@@ -67,7 +67,7 @@ def _edge(exe, profile, size, extra):
     w, h, scale = size
     return [exe, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
             "--hide-scrollbars", "--allow-file-access-from-files", f"--user-data-dir={profile}", f"--window-size={w},{h}",
-            f"--force-device-scale-factor={scale}", "--virtual-time-budget=20000", *extra]
+            f"--force-device-scale-factor={scale}", "--virtual-time-budget=30000", *extra]
 
 
 def _run(cmd, tries=3):

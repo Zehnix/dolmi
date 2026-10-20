@@ -292,6 +292,24 @@
   }
 
   window.__uiExtra=window.__uiExtra||[];   // async (label, h) => {} checks for newer features
+  /* final QA 2026-10-20: the Live view with everything the strip can show (spelling-hint picker, unsure words,
+     the model names in the status) still fits the smallest window, and finished lines end fully opaque in
+     both themes (the pop-in fade must not leave them dim) */
+  window.__uiExtra.push(async(label,{ok,tick,q,qa,nav,noOverflow})=>{
+    nav('live'); await tick();
+    const sel=q('#vocabProfile'), clar=q('#clarLink'), theme=document.documentElement.dataset.theme;
+    sel.innerHTML='<option>All spelling hints</option>'; sel.hidden=false;
+    clar.hidden=false; q('#clarLinkN').textContent='1 unsure';
+    window.dolmi.onEngine('Whisper large-v3-turbo · Opus-MT','ready');
+    setTheme('ink');
+    for(let i=0;i<3;i++) window.dolmi.onLine('09:3'+i,'Wir sollten die Migration bis Ende der Woche abschließen.',
+      'We should finish the migration by the end of the week.',{start:Date.now()/1000,end:Date.now()/1000});
+    await tick(650);
+    const dim=qa('#brows .pair:not(.dropped)').filter(p=>getComputedStyle(p).opacity!=='1');
+    ok(!dim.length,`${label}: ${dim.length} finished line(s) still faded after the pop-in`);
+    noOverflow(q('#v-live'),`${label} live with a full strip`);
+    sel.hidden=true; clar.hidden=true; setTheme(theme);
+  });
   /* APP-7/8: a global shortcut does what the button on screen does; the lock switch follows Python */
   window.__uiExtra.push(async(label,{ok,tick,q,mark,since,visible})=>{
     openSettings('about'); await tick();

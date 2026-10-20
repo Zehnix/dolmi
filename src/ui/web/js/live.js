@@ -53,7 +53,10 @@ function appendPair(ts,de,en,meta){ unstickIfScrolled(); clearIdle(); $$('.pair.
   const p=document.createElement('div'), t=esc(stamp(ts,meta)); p.className='pair cur pop';
   p.innerHTML=`<div class="c de"><span class="ts">${t}</span>${esc(de)}</div><div class="c en"><span class="ts">${t}</span>${esc(en)}</div>`;
   spkAttach(p,meta);
-  brows.append(p); follow(); }
+  brows.append(p); follow();
+  // the fade-in is decoration: drop it once it should be over, so a stalled animation clock (a hidden or
+  // throttled window) can never leave a finished line half transparent
+  setTimeout(()=>p.classList.remove('pop'),600); }
 function addFinal(ts,de,en,meta){ if(draftEl){draftEl.remove();draftEl=null;} appendPair(ts,de,en,meta);
   lines++; words+=en.split(/\s+/).filter(Boolean).length; $('#sLines').textContent=lines; $('#sWords').textContent=words;
   if(!stuck){ unseen++; setPill(); }
