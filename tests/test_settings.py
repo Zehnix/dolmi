@@ -136,7 +136,7 @@ def test_every_key_the_page_saves_is_whitelisted_and_saves(api):
     assert {"warn_silence", "show_german", "save_transcripts", "overlay", "theme", "opacity", "font"} <= keys
     assert sorted(keys - app_mod.SETTABLE) == []
     sample = {"keep_days": 7, "opacity": 0.6, "font": 28, "language": "en", "speech_source": "local",
-              "theme": "ink", "model": "small", "ui_text_size": "large"}
+              "theme": "ink", "model": "small", "ui_text_size": "large", "voice_safety": 0.2}
     for k in keys:
         switch = k in app_mod.BOOL_SETTINGS | {"show_german", "save_transcripts", "overlay"}
         v = sample.get(k, False if switch else "")
