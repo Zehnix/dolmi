@@ -35,3 +35,8 @@ def test_table_shows_failed_configs():
     text = bench.table([{"config": "cuda-small-old", "error": "no CUDA"}],
                        type("A", (), {"set": "synthetic", "limit": 1})())
     assert "cuda-small-old" in text and "failed: no CUDA" in text
+
+
+def test_trimmed_window_front_is_not_a_rewrite():
+    events = [draft("a b c d", "e"), draft("c d e f", ""), draft("", "neu")]
+    assert bench.draft_flicker(events)[0] == 0

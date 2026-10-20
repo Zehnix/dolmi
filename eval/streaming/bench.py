@@ -6,7 +6,8 @@
 Each config is one `eval/run_eval.py --mode stream` run in its own process (so the environment switch
 DOLMI_STABLE_DRAFTS and the device take effect cleanly). From its results file this script adds the
 streaming numbers the harness does not summarise itself:
-  committed rewrites  a draft whose committed prefix is not an extension of the previous one
+  committed rewrites  a draft whose committed words do not extend the previous ones (a front trimmed
+                      out of the STR-1 window and an empty reset do not count)
   tail churn          tentative words changed between consecutive drafts, per draft
 and the GPU memory peak (nvidia-smi polled every 0.5 s; whole-GPU, so other apps count too).
 Reference projects (WhisperLiveKit, SimulStreaming) are not run here: they need torch in a separate venv.
@@ -38,6 +39,14 @@ CONFIGS = {
 DEFAULT = "cpu-small-old,cpu-small-str1,cuda-small-old,cuda-small-str1,cuda-turbo-old,cuda-turbo-str1"
 
 
+def extends(prev, cur):
+    """cur keeps prev's committed words: prev (minus a front that STR-1 trimmed out of the window) is
+    a prefix of cur. An empty cur is a reset (new window), not a rewrite."""
+    if not prev:
+        return True
+    return any(cur[:len(prev) - d] == prev[d:] for d in range(len(prev)) if len(prev) - d <= len(cur))
+
+
 def draft_flicker(events):
     """(committed rewrites, mean tail churn) from the draft stream_events of one run."""
     rewrites = churn = n = 0
@@ -57,7 +66,7 @@ def draft_flicker(events):
             prev_c = prev_t = None
             prev_u = meta.get("utt")
         if prev_c is not None:
-            if c[:len(prev_c)] != prev_c:
+            if c and not extends(prev_c, c):
                 rewrites += 1
             churn += sum(1 for a, b in zip(prev_t, t) if a != b) + abs(len(prev_t) - len(t))
             n += 1
