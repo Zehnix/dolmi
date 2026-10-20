@@ -64,6 +64,7 @@ SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_tran
             "bar_time",                                        # LIVE-5
             "capture_both",                                    # SPK-5
             "voice_readout",                                   # VOICE-1
+            "english_only",                                    # VOICE-6 (Mac)
             "ui_text_size",                                    # APP-14
             "local_only",                                      # STR-7
             "unsure_marks",                                    # STR-8
@@ -71,7 +72,7 @@ SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_tran
 UI_TEXT_SIZES = ("normal", "large")                      # APP-14: Appearance > Larger UI text
 BOOL_SETTINGS = {"warn_silence", "preload_models", "check_updates", "shortcuts_on",
                  "speaker_labels", "clarify_queue", "bar_time",
-                 "capture_both", "voice_readout", "local_only",
+                 "capture_both", "voice_readout", "english_only", "local_only",
                  "unsure_marks", "cloud_failover"}        # on/off switches that must be true or false
 SPEAKER_NAME_MAX = 40                                    # SPK-4: longest speaker name
 # APP-3 'nothing heard' warning: how quiet counts as silence, and how long before Dolmi says so
@@ -1010,7 +1011,8 @@ class Api:
                                              on_level=self._on_level)
                     else:
                         live_subs.loopback_stream(audio_q, cap, self._settings["audio_device"] or None,
-                                                  on_level=self._on_level)
+                                                  on_level=self._on_level,
+                                                  english_only=bool(self._settings.get("english_only")))
             except Exception as e:
                 # no audio means no captions: end the session instead of sitting on "Translating"
                 self._emit("onError", f"Can't record audio: {e}")

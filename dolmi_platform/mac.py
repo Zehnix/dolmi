@@ -101,28 +101,41 @@ def mic_stream(out_q: queue.Queue, stop: threading.Event, device=None, on_level=
             on_level(float(np.sqrt(np.mean(a * a))) if len(a) else 0.0)
     _sd_capture(device or None, out_q, stop, feed)
 
-def loopback_stream(out_q: queue.Queue, stop: threading.Event, device=None, on_level=None):
-    """Capture everything the Mac plays (device None) or one input device by name.
-    on_level(rms) is called about 10x a second so the UI can show that audio is arriving."""
+# VOICE-6 "English only": bundle ID prefixes of the meeting apps the helper taps with .mutedWhenTapped.
+# Browsers play through helper processes (Chrome Helper, com.apple.WebKit.GPU), so whole families match.
+# com.apple.webkit also covers other WebKit apps' sound while English only is on (Dolmi's own voice is
+# the 'say' process, so it is never muted).
+MEETING_APPS = (
+    "com.microsoft.teams",       # new Teams (com.microsoft.teams2) + its WebView helpers, classic Teams
+    "us.zoom",                   # zoom.us, CptHost while screen sharing
+    "com.google.chrome",         # Chrome + Google Chrome Helper (web meetings)
+    "com.microsoft.edgemac",     # Edge + helpers
+    "com.apple.safari", "com.apple.webkit",
+    "com.cisco.webexmeetingsapp", "com.webex",
+)
+MUTE_TAP_MACOS = (14, 2)     # CATapDescription.muteBehavior needs macOS 14.2
+
+def _macos_version():
+    try:
+        return tuple(int(x) for x in platform.mac_ver()[0].split(".")[:2])
+    except ValueError:
+        return ()
+
+def english_only_supported():
+    """True when this Mac can mute the meeting app while Dolmi taps it (VOICE-6)."""
+    v = _macos_version()
+    return bool(v) and (v + (0,))[:2] >= MUTE_TAP_MACOS
+
+def _run_helper(args, feed, stop, label):
+    """Start the dolmi-audio helper with args and feed its PCM until stop is set."""
     import numpy as np
-    from live_subs import Resampler
-    resamplers = {}
-
-    def feed(a, rate):
-        out_q.put(resamplers.setdefault(rate, Resampler(rate))(a))   # anti-aliased, keeps state
-        if on_level:
-            on_level(float(np.sqrt(np.mean(a * a))) if len(a) else 0.0)
-
-    if device:
-        return _sd_capture(device, out_q, stop, feed)
-
-    proc = subprocess.Popen([str(_audio_helper())], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen([str(_audio_helper()), *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         header = proc.stdout.readline().decode(errors="replace").split()
         if len(header) != 3 or header[0] != "DOLMI-AUDIO":
             raise RuntimeError(proc.stderr.read().decode(errors="replace").strip() or "audio helper failed")
         rate = int(header[1])
-        print(f"🎧 Capturing: all Mac audio  ({rate} Hz, mono)")
+        print(f"🎧 Capturing: {label}  ({rate} Hz, mono)")
         block = int(rate * 0.1) * 4            # 100 ms of float32
         while not stop.is_set():
             data = proc.stdout.read(block)
@@ -135,6 +148,36 @@ def loopback_stream(out_q: queue.Queue, stop: threading.Event, device=None, on_l
             proc.wait(2)
         except subprocess.TimeoutExpired:
             proc.kill()
+
+def loopback_stream(out_q: queue.Queue, stop: threading.Event, device=None, on_level=None, english_only=False):
+    """Capture everything the Mac plays (device None) or one input device by name.
+    on_level(rms) is called about 10x a second so the UI can show that audio is arriving.
+    english_only (VOICE-6, off by default): tap only the meeting apps and mute them while Dolmi listens.
+    Older macOS, or a helper that cannot mute, falls back to the normal capture (subtitles only; the
+    meeting stays audible - a user-installed BlackHole device picked in Settings also still works)."""
+    import numpy as np
+    from live_subs import Resampler
+    resamplers = {}
+
+    def feed(a, rate):
+        out_q.put(resamplers.setdefault(rate, Resampler(rate))(a))   # anti-aliased, keeps state
+        if on_level:
+            on_level(float(np.sqrt(np.mean(a * a))) if len(a) else 0.0)
+
+    if device:
+        return _sd_capture(device, out_q, stop, feed)
+
+    if english_only:
+        if not english_only_supported():
+            print("English only needs macOS 14.2 or newer: showing subtitles only, the meeting stays audible")
+        else:
+            try:
+                return _run_helper(["--mute-apps", ",".join(MEETING_APPS)], feed, stop, "meeting apps (muted)")
+            except RuntimeError as e:
+                if stop.is_set():
+                    raise
+                print(f"English only could not mute the meeting ({e}): showing subtitles only")
+    return _run_helper([], feed, stop, "all Mac audio")
 
 def dual_stream(out_q: queue.Queue, stop: threading.Event, mic_device=None, speaker_device=None,
                 on_level=None, log=None):

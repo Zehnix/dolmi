@@ -91,8 +91,9 @@ def _capture(pa, dev, out_q, stop, on_level):
     stop.wait()
     s.stop_stream(); s.close()
 
-def loopback_stream(out_q: queue.Queue, stop: threading.Event, device=None, on_level=None):
+def loopback_stream(out_q: queue.Queue, stop: threading.Event, device=None, on_level=None, english_only=False):
     """Capture whatever Windows plays on a speaker (WASAPI loopback); default speaker if device is None.
+    english_only (muting the meeting app) is Mac-only for now (VOICE-6); Windows waits on VOICE-5.
     on_level(rms) is called about 10x a second so the UI can show that audio is arriving."""
     import pyaudiowpatch as pyaudio
     pa = pyaudio.PyAudio()
