@@ -865,7 +865,7 @@ class Api:
             old.stop()
         self._route_watch = routing_win.Watcher(r).start()
         try:
-            routing_win.process_loopback_stream(audio_q, cap, r.capture_pids(), on_level=self._on_level)
+            routing_win.process_loopback_stream(audio_q, cap, r.capture_pids, on_level=self._on_level)
             return True
         except OSError as e:
             print(f"routing: process loopback failed ({e}); audio restored, capturing the speaker")

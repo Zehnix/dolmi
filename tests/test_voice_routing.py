@@ -76,7 +76,7 @@ def test_apply_journals_first_routes_and_mutes_then_restore_puts_everything_back
     assert p.routes == {"ms-teams.exe": SPK, "msedgewebview2.exe": SPK, "chrome.exe": SPK}
     assert p.ep[SPK]["muted"] and p.ep[HEAD] == {"muted": False, "level": 0.6}   # headphones untouched
     j = json.loads((tmp_path / rw.JOURNAL).read_text(encoding="utf-8"))
-    assert j["apps"]["chrome.exe"]["original"] == "{user-choice}" and j["endpoint"]["muted"] is False
+    assert j["apps"]["chrome.exe"]["original"] == "{user-choice}" and j["endpoints"][SPK]["muted"] is False
     assert sorted(r.capture_pids()) == [10, 20]       # one process-loopback tree per app
     assert r.restore() and not r.active
     assert assert_untouched(p) and not (tmp_path / rw.JOURNAL).exists()
@@ -156,6 +156,52 @@ def test_process_loopback_stream_mixes_trees_to_float():
     assert chunk.dtype == np.float32 and np.allclose(chunk, 1.0)        # 0.5 + 0.5, clipped at 1
     with pytest.raises(OSError):
         rw.process_loopback_stream(q, stop, [], loopback_cls=FakeCap)
+
+
+def test_process_loopback_stream_follows_roots_that_start_or_exit_after_start():
+    opened, closed = [], []
+
+    class FakeCap:
+        def __init__(self, pid, include_tree, rate, channels):
+            self.pid = pid
+            opened.append(pid)
+
+        def read(self, timeout):
+            return np.full(160, 1000, dtype=np.int16).tobytes()
+
+        def close(self):
+            closed.append(self.pid)
+    roots = [[10], [10, 30], [30]]
+    t = [0.0]
+    q, stop = queue.Queue(), threading.Event()
+
+    def clock():
+        t[0] += 1.0
+        return t[0]
+
+    def get():
+        return roots[0] if t[0] < 4 else roots[1] if t[0] < 8 else roots[2]
+
+    def on_level(_):
+        if t[0] > 12:
+            stop.set()
+    rw.process_loopback_stream(q, stop, get, on_level=on_level, loopback_cls=FakeCap,
+                               recheck_s=1.0, clock=clock)
+    assert opened == [10, 30] and closed[0] == 10 and set(closed) == {10, 30}
+
+
+def test_switching_speaker_after_a_crash_saves_and_restores_both(tmp_path):
+    p = FakePolicy()
+    r = rw.Router(p, tmp_path, log=lambda m: None)
+    assert r.apply(SPK)
+    other = "{tv}"
+    p.devs.append({"id": other, "name": "TV", "default": False})
+    p.ep[other] = {"muted": False, "level": 0.9}
+    r2 = rw.Router(p, tmp_path, log=lambda m: None)      # "crash": journal left, user picks the TV
+    before = dict(p.ep[other])
+    assert r2.apply(other)
+    assert r2.restore()
+    assert p.ep[other] == before and assert_untouched(p)
 
 
 # ------------------------------------------------------------------ app (bridge)

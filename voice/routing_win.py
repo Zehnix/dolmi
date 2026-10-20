@@ -23,6 +23,7 @@ import json
 import os
 import queue
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -150,10 +151,14 @@ class Router:
                 return self._fallback(FALLBACK_NO_DEVICE)
             if target == listen:
                 return self._fallback(FALLBACK_SAME_DEVICE)
-            j = self._load() or {"version": 1, "saved_utc": utc_now(), "apps": {}, "endpoint": None}
+            j = self._load() or {"version": 1, "saved_utc": utc_now(), "apps": {}, "endpoints": {}, "endpoint": None}
             try:
-                if j.get("endpoint") is None:
-                    j["endpoint"] = {"id": target, **self.policy.endpoint(target)}
+                eps = j.setdefault("endpoints", {})
+                if j.get("endpoint"):        # journal from before one entry per speaker
+                    eps.setdefault(j["endpoint"]["id"], j["endpoint"])
+                j["endpoint"] = None
+                if target not in eps:        # each speaker's own original mute/volume
+                    eps[target] = {"id": target, **self.policy.endpoint(target)}
                 self._save(j)                # before anything changes
                 self.target, self.active, self.notice = target, True, ""
                 self._route_new(j)
@@ -211,14 +216,19 @@ class Router:
                     del j["apps"][exe]
                 except OSError as e:
                     self.log(f"routing: restore of {exe} failed ({e})")
-            ep = j.get("endpoint")
-            if ep:
+            eps = j.get("endpoints") or {}
+            if j.get("endpoint"):
+                eps.setdefault(j["endpoint"]["id"], j["endpoint"])
+            j["endpoint"] = None
+            for dev in list(eps):
+                ep = eps[dev]
                 try:
                     self.policy.set_endpoint(ep["id"], muted=ep["muted"], level=ep["level"])
-                    j["endpoint"] = None
+                    del eps[dev]
                 except OSError as e:
                     self.log(f"routing: restore of speaker {ep['id']} failed ({e})")
-            if j.get("apps") or j.get("endpoint"):
+            j["endpoints"] = eps
+            if j.get("apps") or eps:
                 self._save(j)
                 self.log(f"routing: still to restore: {sorted(j.get('apps', {}))}")
                 return False
@@ -243,7 +253,7 @@ class Router:
                 self.restore()
                 self._fallback(FALLBACK_LOST)
                 return
-            j = self._load() or {"version": 1, "saved_utc": utc_now(), "apps": {}, "endpoint": None}
+            j = self._load() or {"version": 1, "saved_utc": utc_now(), "apps": {}, "endpoints": {}, "endpoint": None}
             try:
                 self._route_new(j)
                 if not self.policy.endpoint(self.target)["muted"]:
@@ -261,18 +271,55 @@ class Router:
 
 
 def process_loopback_stream(out_q: queue.Queue, stop: threading.Event, pids, on_level=None,
-                            loopback_cls=None):
+                            loopback_cls=None, recheck_s=TICK_S, clock=time.monotonic):
     """Capture the given process trees (WASAPI process loopback), mix them and put 16 kHz mono float32
-    chunks (numpy) into out_q until stop is set, like dolmi_platform.loopback_stream."""
+    chunks (numpy) into out_q until stop is set, like dolmi_platform.loopback_stream.
+    `pids` is a list or a callable returning the current roots (Router.capture_pids). With a callable the
+    roots are re-read every `recheck_s` and the captures rebuilt when they change, so a meeting app that
+    starts (or restarts) after Start - and is routed to the muted speaker by the Watcher - is heard too."""
     import numpy as np
     if loopback_cls is None:
         from voice.win_audio import ProcessLoopback as loopback_cls
-    if not pids:
+    get = pids if callable(pids) else (lambda: list(pids))
+    roots = sorted(get())
+    if not roots:
         raise OSError("no meeting app is running")
-    caps = [loopback_cls(pid, include_tree=True, rate=16000, channels=1) for pid in pids]
+    caps = {}
+
+    def rebuild(new_roots):
+        for pid in [p for p in caps if p not in new_roots]:
+            caps.pop(pid).close()
+        for pid in new_roots:
+            if pid not in caps:
+                try:
+                    caps[pid] = loopback_cls(pid, include_tree=True, rate=16000, channels=1)
+                except OSError:      # exited between listing and opening; retried on the next recheck
+                    pass
+    rebuild(roots)
+    if not caps:
+        raise OSError("no meeting app could be captured")
+    last = clock()
     try:
         while not stop.is_set():
-            parts = [np.frombuffer(c.read(0.1 / len(caps)), dtype=np.int16) for c in caps]
+            if callable(pids) and clock() - last >= recheck_s:
+                last = clock()
+                try:
+                    now = sorted(get())
+                except OSError:
+                    now = roots
+                if now != roots:
+                    roots = now
+                    rebuild(roots)
+            if not caps:
+                stop.wait(0.1)
+                continue
+            parts = []
+            for pid, c in list(caps.items()):
+                try:
+                    parts.append(np.frombuffer(c.read(0.1 / len(caps)), dtype=np.int16))
+                except OSError:          # that process exited; dropped, re-added if it comes back
+                    caps.pop(pid).close()
+                    roots = [p for p in roots if p != pid]
             n = max((len(p) for p in parts), default=0)
             if not n:
                 continue
@@ -284,7 +331,7 @@ def process_loopback_stream(out_q: queue.Queue, stop: threading.Event, pids, on_
             if on_level:
                 on_level(float(np.sqrt(np.mean(mix * mix))))
     finally:
-        for c in caps:
+        for c in caps.values():
             c.close()
 
 
