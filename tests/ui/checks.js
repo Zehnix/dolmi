@@ -49,6 +49,7 @@
     ['audio','#setMic','change:Microphone (USB)','set_setting','mic_device'],
     ['audio','#swWarnSilence','click','set_setting','warn_silence'],
     ['audio','#swVoice','click','set_setting','voice_readout'],                           // VOICE-1
+    ['audio','#swEnglishOnly','click','set_setting','english_only'],                    // VOICE-5
     ['captions','#setSource','change:gemini','set_setting','speech_source'],
     ['captions','#setSource','change:local','set_setting','speech_source'],
     ['captions','#setLang','change:en','set_setting','language'],

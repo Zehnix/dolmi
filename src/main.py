@@ -6,6 +6,7 @@ the core modules at the repo root (live_subs, assistant, inbox, models, dolmi_pl
 Run:  venv\\Scripts\\pythonw.exe src\\main.py   (Windows; or python for a console)
       Mac/start.command                         (macOS; or Mac/venv/bin/python src/main.py)
 """
+import atexit
 import os
 import sys
 from datetime import datetime
@@ -89,6 +90,9 @@ def main():
         # a system-wide hotkey always brings Dolmi back, even hidden from the taskbar / Dock
         dolmi_platform.start_recover_hotkey(api.recover)
         api._start_shortcuts()           # APP-7: start/stop, bar, source, lock from any app (after the recover key)
+
+    window.events.closed += api._routing_end   # VOICE-5: never leave the meeting apps rerouted
+    atexit.register(api._routing_end)
 
     icon = dolmi_platform.app_icon(ROOT)
     webview.start(on_start, gui=dolmi_platform.WEBVIEW_GUI, private_mode=False, icon=str(icon))

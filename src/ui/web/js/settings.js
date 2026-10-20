@@ -273,6 +273,30 @@ if($('#swVoice')) $('#swVoice').onclick=async()=>{ const sw=$('#swVoice'), on=!s
   toast(on?'Reading translations aloud (experimental)':'Reading aloud off'); voiceHint(); };
 async function voiceBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state(); setSw('#swVoice',!!s.voiceReadout); voiceHint(); }catch(e){ console.error('voice boot',e); } }
 document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) voiceBoot(); else window.addEventListener('pywebviewready',voiceBoot); });
+/* ---- VOICE-5 (Windows, experimental, off by default): 'English only' sends Teams/Zoom/Chrome/Edge to a
+   second speaker that Dolmi mutes, captures them from there, and puts everything back on Stop/exit,
+   after a crash at the next start, or with Restore audio. Without a second speaker it falls back. ---- */
+{ const m=settingsMount('audio.voice');
+  if(m){ m.insertAdjacentHTML('beforeend',`<div class="set" data-kw="english only mute meeting german original route speaker experimental" id="eoRow" hidden><div><div class="lab">English only <span class="mtag">experimental</span></div><div class="ps" id="eoHint">Sends the meeting apps to the speaker below and mutes it, so you hear only the English voice. Dolmi still listens to the meeting</div></div><button class="sw" id="swEnglishOnly" aria-label="English only"></button></div>
+    <div class="set" data-kw="english only speaker unheard device route" id="eoDevRow" hidden><div><div class="lab">Speaker for the meeting</div><div class="ps">Not the one you listen on. Dolmi mutes it while English only is on</div></div><select class="field" id="setEoDevice" aria-label="Speaker for the meeting"><option value="">Pick a speaker</option></select></div>
+    <div class="set" data-kw="restore audio routing undo speaker meeting" id="eoRestoreRow" hidden><div><div class="lab">Restore audio</div><div class="ps" id="eoRestoreHint">Puts the meeting apps and the speaker back the way they were</div></div><button class="btn ghost" id="eoRestore">Restore audio</button></div>`); } }
+async function englishOnlyRefresh(){ const b=bridge(); if(!b||!b.english_only_state) return;
+  try{ const v=await b.english_only_state(); if(!v.available) return;
+    $('#eoRow').hidden=false; $('#eoDevRow').hidden=!v.on; $('#eoRestoreRow').hidden=!(v.on||v.pending);
+    setSw('#swEnglishOnly',v.on);
+    const sel=$('#setEoDevice'); sel.innerHTML='<option value="">Pick a speaker</option>'+v.devices.map(d=>`<option value="${esc(d.id)}">${esc(d.name)}${d.default?' (default)':''}</option>`).join('');
+    sel.value=v.device||'';
+    $('#eoHint').textContent=v.notice||'Sends the meeting apps to the speaker below and mutes it, so you hear only the English voice. Dolmi still listens to the meeting';
+  }catch(e){ console.error('english only state',e); } }
+if($('#swEnglishOnly')) $('#swEnglishOnly').onclick=async()=>{ const sw=$('#swEnglishOnly'), on=!sw.classList.contains('on'), b=bridge(); sw.classList.toggle('on',on);
+  if(b&&!await b.set_setting('english_only',on)){ sw.classList.toggle('on',!on); return; }
+  toast(on?'English only on: takes effect at the next Start':'English only off: audio restored'); englishOnlyRefresh(); };
+if($('#setEoDevice')) $('#setEoDevice').onchange=async()=>{ const b=bridge(); if(b) await b.set_setting('english_only_device',$('#setEoDevice').value); };
+if($('#eoRestore')) $('#eoRestore').onclick=async()=>{ const b=bridge(); if(!b) return;
+  try{ const r=await b.restore_audio(); toast(r.ok?'Audio restored':'Restored what is running now; the rest is restored when those apps start'); }catch(e){ console.error('restore_audio',e); toast('Could not restore the audio'); }
+  englishOnlyRefresh(); };
+window.dolmi=window.dolmi||{}; window.dolmi.onRouting=msg=>{ if(msg) toast(msg); englishOnlyRefresh(); };
+document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) englishOnlyRefresh(); else window.addEventListener('pywebviewready',englishOnlyRefresh); });
 /* STR-7: local-only mode switch and the "Local only" chip; STR-9: the "Using this PC" (cloud down) chip */
 function statusChips(){ const t=$('.top'); if(t) t.classList.toggle('has-status',!!$('#chipLocal:not([hidden]),#chipCloud:not([hidden])')); }
 function applyLocalOnly(on){ setSw('#swLocalOnly',on); const c=$('#chipLocal'); if(c) c.hidden=!on; statusChips(); }
