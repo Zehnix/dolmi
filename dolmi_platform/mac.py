@@ -441,6 +441,16 @@ class _Instance:
         self._lock.close()                          # releases the flock
 
 
+def _sock_path(d, name):
+    """<config>/<name>.sock, or a short /tmp path when that is over the ~104-byte AF_UNIX limit."""
+    from pathlib import Path
+    p = d / f"{name}.sock"
+    if len(str(p).encode()) < 100:
+        return p
+    import hashlib
+    return Path("/tmp") / f"dolmi-{hashlib.sha1(str(p).encode()).hexdigest()[:12]}.sock"
+
+
 def single_instance(name="Dolmi"):
     """The first Dolmi gets a guard to keep (and .listen(on_activate) on); a second launch gets None after
     asking the first one to show its window, and should exit. (Dolmi.app is also single-instance through
@@ -457,12 +467,12 @@ def single_instance(name="Dolmi"):
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
                 s.settimeout(2)
-                s.connect(str(d / f"{name}.sock"))
+                s.connect(str(_sock_path(d, name)))
                 s.sendall(b"show")
         except OSError as e:
             print(f"Dolmi is already running but did not answer ({e})")
         return None
-    return _Instance(lock, d / f"{name}.sock")
+    return _Instance(lock, _sock_path(d, name))
 
 
 def bring_to_front(win):
