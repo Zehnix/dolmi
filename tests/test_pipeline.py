@@ -521,6 +521,39 @@ def test_a_draft_decodes_only_the_last_seconds_greedily():
     assert seen == [(m.DRAFT_WINDOW, m.DRAFT_BEAM), (11.0, m.FINAL_BEAM)]
 
 
+def test_cpu_finals_decode_greedily_and_gpu_finals_keep_the_beam():
+    """SEG-5 decision: beam 5 kept CPU Whisper at real-time factor ~1.0 (first text p50 17.2 s)."""
+    seen = []
+
+    class FakeWhisper:
+        def transcribe(self, audio, **kw):
+            seen.append(kw["beam_size"])
+            return iter([NS(text="Hallo")]), NS(language="de")
+
+    e = object.__new__(m.Engine)
+    e.asr, e.glossary, e.context = FakeWhisper(), [], ""
+    for beam in (m.CPU_FINAL_BEAM, m.FINAL_BEAM):
+        e.final_beam = beam
+        e._asr(None, "de")
+        e._asr(None, "de", retry=True)
+        e._asr(None, "de", beam=m.DRAFT_BEAM)
+    assert m.CPU_FINAL_BEAM == 1 and m.FINAL_BEAM == 5
+    assert seen == [1, 1, m.DRAFT_BEAM, 5, 5, m.DRAFT_BEAM]
+
+
+def test_the_engine_picks_the_final_beam_from_its_device(monkeypatch):
+    import sys, types
+    monkeypatch.setattr(m.dolmi_platform, "prepare_gpu", lambda: None)
+    monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=lambda *a, **k: object()))
+    monkeypatch.setattr(m.Engine, "_translator", lambda self, *a, **k: None)
+    monkeypatch.setattr(m.Engine, "reload_terms", lambda self: None)
+    beams = {}
+    for device in ("cpu", "cuda"):
+        monkeypatch.setattr(m.dolmi_platform, "compute_device", lambda d, dev=device: (dev, "int8"))
+        beams[device] = m.Engine("small", device).final_beam
+    assert beams == {"cpu": m.CPU_FINAL_BEAM, "cuda": m.FINAL_BEAM}
+
+
 class SlowDrafts:
     """Drafts take longer than the speaker needs for the next words (a busy CPU)."""
     cloud, language, context = False, "de", ""

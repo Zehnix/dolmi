@@ -1676,11 +1676,12 @@ class Api:
                 list(asr.transcribe(silence, beam_size=1, vad_filter=False, condition_on_previous_text=False,
                                     language=language)[0])
                 # the first real caption still paid ~4 s (bench, RTX 4060) for the Silero VAD (the
-                # segmenter's speech_gap and Whisper's vad_filter) and the beam-5 decoder: load them too
+                # segmenter's speech_gap and Whisper's vad_filter) and the finals' beam decoder: load them too
                 quiet = (np.random.default_rng(0).standard_normal(live_subs.SR)
                          * live_subs.SILENCE_RMS * 4).astype(np.float32)
                 live_subs.speech_gap(quiet)
-                list(asr.transcribe(silence, beam_size=5, vad_filter=True, condition_on_previous_text=False,
+                beam = getattr(engine, "final_beam", live_subs.FINAL_BEAM)
+                list(asr.transcribe(silence, beam_size=beam, vad_filter=True, condition_on_previous_text=False,
                                     language=language)[0])
             lang = engine.language if engine.language != "auto" else "de"
             engine.translate("Hello everyone." if lang == "en" else "Hallo zusammen.", lang)

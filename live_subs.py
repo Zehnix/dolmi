@@ -43,7 +43,9 @@ SILENCE_RMS = 0.006        # energy threshold (raise if noisy)
 LOW_ENERGY_RMS = 0.01      # loudest 100 ms below this: a lone "Thank you." there is Whisper's ghost
                            # (quiet remote speech peaks near 0.018, so this stays well under it)
 ASR_VAD_THRESHOLD = 0.35   # faster-whisper's own VAD: lower than its 0.5 default so soft speech survives
-FINAL_BEAM = 5             # Whisper beam for finals
+FINAL_BEAM = 5             # Whisper beam for finals on the GPU
+CPU_FINAL_BEAM = 1         # SEG-5: on the CPU finals decode greedily too (bench syn-s1, small: first text
+                           # p50 17.2 -> 13.6 s, stream WER 8.5 -> 8.6 %); the beam there kept Whisper at RTF ~1.0
 DRAFT_BEAM = 1             # drafts decode greedily: they are redone a second later anyway
 DRAFT_WINDOW = 6.0         # s, a draft decodes only the end of the sentence (cost stays flat on long ones)
 DRAFT_MT_LAG = 2.0         # s, a draft whose audio is this far behind the capture skips translation
@@ -469,6 +471,7 @@ class Engine:
         # until STR-10 measured the word-timestamp cost there (DOLMI_STABLE_DRAFTS=0 turns it off anywhere)
         flag = os.environ.get("DOLMI_STABLE_DRAFTS")
         self.stable_drafts = flag == "1" if flag in ("0", "1") else device == "cuda"
+        self.final_beam = FINAL_BEAM if device == "cuda" else CPU_FINAL_BEAM
         self.reload_terms()
 
     def reload_terms(self):
@@ -526,7 +529,7 @@ class Engine:
         print(f"📥 Translator {m.name}")
         return self.translators[key]
 
-    def transcribe(self, audio, retry_empty=True, beam=FINAL_BEAM):
+    def transcribe(self, audio, retry_empty=True, beam=None):
         """Speech -> (text in the spoken language, language code).
 
         People switch to English mid-meeting, so a non-English setting still lets Whisper
@@ -535,10 +538,12 @@ class Engine:
         detected as English (German function words in it) is reported as German.
         Nothing heard: tried once more without Whisper's own VAD before the buffer is given up
         (finals only: transcribe_draft skips the retry, a draft is redone a moment later anyway).
-        `last_info` says what happened ({'retried', 'echo'}) so the worker can log why a line is empty."""
+        `last_info` says what happened ({'retried', 'echo'}) so the worker can log why a line is empty.
+        `beam` None = a final (decoded with the engine's final beam); a number = a draft with that beam."""
         mixed = self.language not in ("auto", "en")
         language = None if self.language == "auto" or mixed else self.language
-        opts = {} if beam == FINAL_BEAM else {"beam": beam}
+        final = beam is None
+        opts = {} if final else {"beam": beam}
         segs, info = self._asr(audio, language, **opts)
         if mixed and info.language not in (self.language, "en"):
             language = self.language
@@ -549,9 +554,9 @@ class Engine:
         raw = " ".join(t for t in (s.text.strip() for s in segs) if t)
         text = drop_echoes(segs, self.terms)
         self.last_info = {"retried": retried, "echo": text != raw,
-                          "uncertainty": uncertainty.line_uncertainty(segs) if beam == FINAL_BEAM else None}   # STR-8
+                          "uncertainty": uncertainty.line_uncertainty(segs) if final else None}   # STR-8
         q = getattr(self, "clarify", None)   # VOC-9: unsure words of finals, for "Did they say ...?" after Stop
-        if q is not None and beam == FINAL_BEAM and text:
+        if q is not None and final and text:
             q.add([(w.word, w.probability) for s in segs for w in (getattr(s, "words", None) or [])], text)
         lang = info.language
         if lang == "en" and self.language == "de" and looks_german(text):
@@ -583,12 +588,15 @@ class Engine:
             lang = "de"
         return words, lang
 
-    def _asr(self, audio, language, retry=False, beam=FINAL_BEAM):
+    def _asr(self, audio, language, retry=False, beam=None):
         """Whisper segments (each with no_speech_prob and avg_logprob) and the detection info.
         Our own VAD already found speech, so Whisper's VAD only trims (at a lower threshold than its
-        default); the retry skips it entirely."""
+        default); the retry skips it entirely. `beam` None = a final, decoded with the engine's final beam."""
+        final = beam is None
+        if final:
+            beam = getattr(self, "final_beam", FINAL_BEAM)
         vad = {"vad_filter": False} if retry else {"vad_filter": True, "vad_parameters": {"threshold": ASR_VAD_THRESHOLD}}
-        if getattr(self, "clarify", None) is not None and beam == FINAL_BEAM:
+        if getattr(self, "clarify", None) is not None and final:
             vad["word_timestamps"] = True    # VOC-9: word probabilities, finals only (they cost time)
         segs, info = self.asr.transcribe(
             audio, language=language, beam_size=beam, condition_on_previous_text=False, **vad,
