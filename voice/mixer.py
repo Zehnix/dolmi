@@ -324,7 +324,8 @@ class PyAudioSink:
 
     def __init__(self, device="", rate=SR):
         import pyaudiowpatch as pyaudio
-        self._pa = pyaudio.PyAudio()
+        from dolmi_platform.windows import pa_open
+        self._pa = pa_open()
         index = None
         if device:
             for i in range(self._pa.get_device_count()):
@@ -344,7 +345,8 @@ class PyAudioSink:
             self._stream.stop_stream()
             self._stream.close()
         finally:
-            self._pa.terminate()
+            from dolmi_platform.windows import pa_close
+            pa_close(self._pa)
 
 
 class SoundDeviceSink:
@@ -386,7 +388,8 @@ def headphone_devices():
         import pyaudiowpatch as pyaudio
     except ImportError:
         return []
-    pa = pyaudio.PyAudio()
+    from dolmi_platform.windows import pa_open, pa_close
+    pa = pa_open()
     try:
         try:
             wasapi = pa.get_host_api_info_by_type(pyaudio.paWASAPI)["index"]
@@ -399,4 +402,4 @@ def headphone_devices():
                 out.append(d["name"])
         return out
     finally:
-        pa.terminate()
+        pa_close(pa)

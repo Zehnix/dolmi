@@ -46,26 +46,42 @@ MODEL_NOTES = {
 }
 
 
+
+# PortAudio's init and terminate are not thread-safe: two UI calls listing devices at once
+# (mic list + headphone list on Settings open) crashed Dolmi with an access violation.
+_PA_LOCK = threading.Lock()
+
+def pa_open():
+    """Create a PyAudio instance under the shared lock."""
+    import pyaudiowpatch as pyaudio
+    with _PA_LOCK:
+        return pyaudio.PyAudio()
+
+def pa_close(pa):
+    """Terminate a PyAudio instance under the shared lock."""
+    with _PA_LOCK:
+        pa.terminate()
+
 # ------------------------------------------------------------------ capture (WASAPI loopback)
 def output_devices():
     """Names of speakers/headphones Dolmi can listen to (any meeting app playing there works)."""
     import pyaudiowpatch as pyaudio
-    pa = pyaudio.PyAudio()
+    pa = pa_open()
     try:
         return [d["name"].removesuffix(" [Loopback]") for d in pa.get_loopback_device_info_generator()]
     finally:
-        pa.terminate()
+        pa_close(pa)
 
 def input_devices():
     """Names of microphones Dolmi can listen to (for in-person meetings)."""
     import pyaudiowpatch as pyaudio
-    pa = pyaudio.PyAudio()
+    pa = pa_open()
     try:
         wasapi = pa.get_host_api_info_by_type(pyaudio.paWASAPI)["index"]
         return [d["name"] for d in map(pa.get_device_info_by_index, range(pa.get_device_count()))
                 if d["hostApi"] == wasapi and d["maxInputChannels"] > 0 and not d.get("isLoopbackDevice")]
     finally:
-        pa.terminate()
+        pa_close(pa)
 
 def _capture(pa, dev, out_q, stop, on_level):
     """Stream one PyAudio input device as 16 kHz mono into out_q until stop is set."""
@@ -97,7 +113,7 @@ def loopback_stream(out_q: queue.Queue, stop: threading.Event, device=None, on_l
     with process loopback before this is called (Api._english_only_capture); this is the fallback.
     on_level(rms) is called about 10x a second so the UI can show that audio is arriving."""
     import pyaudiowpatch as pyaudio
-    pa = pyaudio.PyAudio()
+    pa = pa_open()
     try:
         wasapi = pa.get_host_api_info_by_type(pyaudio.paWASAPI)
         spk = pa.get_device_info_by_index(wasapi["defaultOutputDevice"])
@@ -110,12 +126,12 @@ def loopback_stream(out_q: queue.Queue, stop: threading.Event, device=None, on_l
                     break
         _capture(pa, spk, out_q, stop, on_level)
     finally:
-        pa.terminate()
+        pa_close(pa)
 
 def mic_stream(out_q: queue.Queue, stop: threading.Event, device=None, on_level=None):
     """Capture a microphone (people in the room); the Windows default microphone if device is None."""
     import pyaudiowpatch as pyaudio
-    pa = pyaudio.PyAudio()
+    pa = pa_open()
     try:
         wasapi = pa.get_host_api_info_by_type(pyaudio.paWASAPI)
         mics = [d for d in map(pa.get_device_info_by_index, range(pa.get_device_count()))
@@ -127,7 +143,7 @@ def mic_stream(out_q: queue.Queue, stop: threading.Event, device=None, on_level=
             raise RuntimeError("no microphone found - plug one in, or check Windows Settings > Privacy > Microphone")
         _capture(pa, mic, out_q, stop, on_level)
     finally:
-        pa.terminate()
+        pa_close(pa)
 
 
 def dual_stream(out_q: queue.Queue, stop: threading.Event, mic_device=None, speaker_device=None,
