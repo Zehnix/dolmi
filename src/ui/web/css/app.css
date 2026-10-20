@@ -48,6 +48,7 @@ input,textarea,select{font:inherit;color:inherit}
 .mrow .mact .btn{padding:6px 12px;font-size:12.5px}.mrow .mact .mbar{width:110px;margin:0}
 .mrow .inst{display:inline-flex;align-items:center;gap:4px;font-size:12.5px;font-weight:600;color:var(--ac-ink);margin-right:4px}.mrow .inst svg{width:14px;height:14px}
 .btn[disabled]{opacity:.45;cursor:not-allowed}
+.btn[hidden]{display:none}   /* .btn is inline-flex, which beat the hidden attribute (#voiceDl stayed after the download) */
 .mfoot{display:flex;align-items:center;gap:8px;margin-top:14px;font-size:12.5px;color:var(--mute);overflow-wrap:anywhere}.mfoot .ic svg{width:15px;height:15px}
 .chipt.warn{color:var(--src);border-color:var(--src)}
 @media (max-width:1000px){.mrow{grid-template-columns:minmax(0,1fr) auto}.mrow .msize{text-align:left}}
@@ -191,6 +192,7 @@ textarea.field{width:100%;font-family:var(--mono);line-height:1.7;resize:vertica
 .sw{width:46px;height:28px;border-radius:999px;background:var(--line-dash);position:relative;flex:none;transition:.2s}
 .sw::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:var(--card);box-shadow:0 2px 5px rgba(0,0,0,.2);transition:.25s var(--ease)}
 .sw.on{background:var(--ac)}.sw.on::after{transform:translateX(18px)}
+.sw[disabled]{opacity:.45;cursor:not-allowed}
 .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chipt{font-size:12.5px;font-weight:600;color:var(--mute);background:var(--panel);border:1px solid var(--line);padding:6px 12px;border-radius:999px}
 .chipt.on{color:var(--ac-ink);border-color:var(--ac)}

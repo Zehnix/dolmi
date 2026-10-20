@@ -292,6 +292,19 @@
   }
 
   window.__uiExtra=window.__uiExtra||[];   // async (label, h) => {} checks for newer features
+  /* VOICE-8: a build without the natural-voice packages offers no switch and no download that would do nothing */
+  window.__uiExtra.push(async(label,{ok,tick,q,mark,since,visible})=>{
+    const canned=window.__canned, orig=canned.voice_setup;
+    canned.voice_setup=()=>Object.assign(orig(),{natural:{installed:false,deps:false,downloading:false,sizeMb:94,mb:0}});
+    openSettings('audio'); voiceSetup(); await tick(150);
+    const sw=q('#swVoiceNatural');
+    ok(sw.disabled&&!visible(q('#voiceDl')),`${label}: natural voice switch/download offered without the voice packages`);
+    ok(/Not available/.test(q('#voiceNatHint').textContent),`${label}: natural voice hint does not say it is unavailable`);
+    const m=mark(); sw.click(); await tick();
+    ok(!since(m,'set_setting').length,`${label}: the disabled natural voice switch still changes the setting`);
+    canned.voice_setup=orig; voiceSetup(); await tick(150);
+    ok(!sw.disabled&&visible(q('#voiceDl')),`${label}: natural voice switch/download missing with the voice packages`);
+  });
   /* final QA 2026-10-20: the Live view with everything the strip can show (spelling-hint picker, unsure words,
      the model names in the status) still fits the smallest window, and finished lines end fully opaque in
      both themes (the pop-in fade must not leave them dim) */

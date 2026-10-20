@@ -282,10 +282,14 @@ async function voiceSetup(){ const b=bridge(); if(!b||!b.voice_setup) return;
     if(sel){ const cur=s.voiceOutDevice||''; sel.innerHTML='<option value="">Default output</option>'+(v.devices||[]).map(d=>`<option value="${esc(d)}">${esc(d)}</option>`).join('');
       if(cur&&!(v.devices||[]).includes(cur)) sel.insertAdjacentHTML('beforeend',`<option value="${esc(cur)}">${esc(cur)}</option>`); sel.value=cur; }
     const c=$('#voiceCheck'); if(c){ c.textContent=v.check.message; c.style.color=v.check.level==='ok'?'':'var(--danger)'; }
-    const n=v.natural||{}, dl=$('#voiceDl'), nh=$('#voiceNatHint');
-    if(dl){ dl.hidden=!!n.installed; dl.disabled=!!n.downloading; dl.textContent=n.downloading?`Downloading… ${n.mb||0} MB`:`Download (${n.sizeMb||94} MB)`; }
-    if(nh) nh.textContent=!n.installed?'A more human English voice that runs on this computer. Download it once; until then the system voice speaks'
-      :!n.deps?'Downloaded, but this build cannot run it yet, so the system voice speaks':'A more human English voice that runs on this computer. Falls back to the system voice if it fails';
+    const n=v.natural||{}, dl=$('#voiceDl'), nh=$('#voiceNatHint'), sw=$('#swVoiceNatural');
+    // VOICE-8: without the voice packages (not in the default build yet) the switch and the download would do
+    // nothing, so both are put away and the hint says why
+    if(sw){ sw.disabled=!n.deps; sw.title=n.deps?'':'Not available in this version yet'; }
+    if(dl){ dl.hidden=!!n.installed||!n.deps; dl.disabled=!!n.downloading; dl.textContent=n.downloading?`Downloading… ${n.mb||0} MB`:`Download (${n.sizeMb||94} MB)`; }
+    if(nh) nh.textContent=!n.deps?'Not available in this version of Dolmi yet. The system voice reads the translations'
+      :!n.installed?'A more human English voice that runs on this computer. Download it once; until then the system voice speaks'
+      :'A more human English voice that runs on this computer. Falls back to the system voice if it fails';
   }catch(e){ console.error('voice setup',e); } }
 if($('#swVoice')) $('#swVoice').onclick=async()=>{ const sw=$('#swVoice'), on=!sw.classList.contains('on'), b=bridge(); sw.classList.toggle('on',on);
   if(b&&!await b.set_setting('voice_readout',on)){ sw.classList.toggle('on',!on); return; }
