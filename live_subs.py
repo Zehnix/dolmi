@@ -51,6 +51,8 @@ DRAFT_BEAM = 1             # drafts decode greedily: they are redone a second la
 DRAFT_WINDOW = 6.0         # s, a draft decodes only the end of the sentence (cost stays flat on long ones)
 DRAFT_MT_LAG = 2.0         # s, a draft whose audio is this far behind the capture skips translation
 HOLD_MAX = 4.0             # s, a final without . ? ! waits this long for the next one to join it (0 = off)
+VOICE_HOLD_MAX = 1.5       # s, the same hold while the English voice reads aloud: each held second is a second
+                           # of lag on the subtitle and the voice (VOICE-10 probe, GPU: final 4.4 s -> ~2 s)
 MT_CONTEXT = True          # translate with the previous line as context (synthetic gold German: chrF +0.4, BLEU +0.8)
 CLOUD_SPLIT, CLOUD_BREATH, CLOUD_MAX = 3.0, 0.2, 6.0   # cloud captions: cut long speech sooner
 CLOUD_MIN = 0.3            # s of speech a cloud utterance needs ("Ja, genau." is ~0.6 s)
@@ -456,10 +458,19 @@ def _reinsert(en, term, place):
 class Engine:
     def __init__(self, model, device, language="de"):
         dolmi_platform.prepare_gpu()   # Windows: wire up pip-installed CUDA libs before probing the GPU
+        wanted = device
         device, ctype = dolmi_platform.compute_device(device)   # "auto": GPU if usable, else CPU
         from faster_whisper import WhisperModel
         if model == "auto":
             model = dolmi_platform.auto_speech(device == "cuda")
+        # "auto" device fell back to the CPU (GPU add-on missing): a Large model there runs at ~5x real time
+        # (large-v3-turbo, 3.5 s of speech took 20-24 s on the dev laptop), so the captions would fall
+        # minutes behind. Use Auto's CPU model instead; the app warns about the fallback.
+        self.cpu_fallback = wanted == "auto" and device == "cpu" and str(model).startswith("large")
+        if self.cpu_fallback:
+            print(f"GPU not usable: '{model}' would be far too slow on the CPU, using "
+                  f"'{dolmi_platform.auto_speech(False)}'")
+            model = dolmi_platform.auto_speech(False)
         print(f"📥 Whisper '{model}' on {device} ({ctype})")
         self.model_name, self.device = model, device
         self.asr = WhisperModel(model, device=device, compute_type=ctype)
@@ -1244,7 +1255,7 @@ def _job_samples(job):
 
 
 def worker(eng, audio_q, ui_q, tr, stop, detect=speech_gap, clock=time.time, on_drop=None, diarizer=None,
-           session=None):
+           session=None, hold=HOLD_MAX):
     """Audio chunks -> subtitles on ui_q (see UI_Q_CONTRACT). This thread only segments; on the local
     path a second thread runs Whisper on finished utterances, so no speech is skipped while it works."""
     cloud = getattr(eng, "cloud", False)
@@ -1279,7 +1290,7 @@ def worker(eng, audio_q, ui_q, tr, stop, detect=speech_gap, clock=time.time, on_
     else:
         every = DRAFT_EVERY
         threading.Thread(target=_asr_loop, name="dolmi-asr", daemon=True,
-                         args=(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker, tag)).start()
+                         args=(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker, tag, hold)).start()
     draft_uid, last_draft = None, None
     try:
         while not stop.is_set():
@@ -1368,7 +1379,7 @@ def _translate(eng, de, lang, last):
 _STOP = ("stop",)
 
 
-def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker, tag=None):
+def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker, tag=None, hold=HOLD_MAX):
     """Whisper side of worker(): finals in the order spoken; a draft only while nothing else waits.
     A final without . ? ! is held up to HOLD_MAX s and joined with the next one, so a sentence cut
     in two is translated whole. After Stop it still transcribes the finals already queued, into the
@@ -1472,7 +1483,7 @@ def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker, tag=No
             drop("error", line["start"], line["end"], line["de"])
 
     def due():
-        return clock() - held["end"] >= HOLD_MAX or (seg.samples - held["upto"]) / SR >= HOLD_MAX
+        return clock() - held["end"] >= hold or (seg.samples - held["upto"]) / SR >= hold
 
     try:
         while True:
@@ -1549,7 +1560,7 @@ def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker, tag=No
                             "unsure": _unsure(eng)}
                     if held:
                         same = None in (spk, held["speaker"]) or spk == held["speaker"]
-                        if same and held["lang"] == lang and start - held["end"] <= HOLD_MAX:
+                        if same and held["lang"] == lang and start - held["end"] <= hold:
                             line.update(de=f"{held['de']} {de}", start=held["start"],
                                         speaker=spk or held["speaker"], speaker_conf=conf or held["speaker_conf"])
                             trace["speech_start"] = held["trace"].get("speech_start", held["start"])
@@ -1559,7 +1570,7 @@ def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker, tag=No
                     previous = (u.uid, de)
                     if not stop.is_set():                # a new session may already use eng.context
                         eng.context = line["de"]
-                    if HOLD_MAX and not ends_sentence(line["de"]) and u.reason != "stop" and not stop.is_set():
+                    if hold and not ends_sentence(line["de"]) and u.reason != "stop" and not stop.is_set():
                         held = line
                         show_held()
                     else:

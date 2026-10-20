@@ -1393,7 +1393,9 @@ class Api:
 
         threading.Thread(target=capture, daemon=True).start()
         threading.Thread(target=live_subs.worker, args=(self._engine, audio_q, self._ui_q, tr, stop),
-                         kwargs={"diarizer": diarizer, "session": sid}, daemon=True).start()
+                         kwargs={"diarizer": diarizer, "session": sid,
+                                 "hold": live_subs.VOICE_HOLD_MAX if self._readout_on() else live_subs.HOLD_MAX},
+                         daemon=True).start()
         self._emit("onListening", True, self._engine_label())
         if self._settings.get("overlay"):             # subtitles are the point of pressing Start
             self.show_overlay()
@@ -1588,12 +1590,30 @@ class Api:
         s = self._settings
         if source == "local":
             eng = live_subs.Engine(s["model"], s["device"], s["language"])
+            self._warn_cpu_fallback(eng)
         else:   # captions use the provider's fast speech model, not the Assistant's model
             eng = cloud_speech.CloudEngine(source, self._key_for(source), s["language"])
             if s.get("cloud_failover"):   # STR-9: a failed line is captioned on this PC (model loads on first need)
                 eng.fallback_factory = lambda: live_subs.Engine(s["model"], s["device"], s["language"])
         eng.unsure_marks = bool(s.get("unsure_marks"))   # STR-8
         return eng
+
+    def _warn_cpu_fallback(self, eng):
+        """An NVIDIA card but Whisper on the CPU (the GPU add-on is missing or broken): say so, because
+        captions and the English voice then lag several seconds behind the speaker."""
+        if self._settings.get("device", "auto") != "auto" or getattr(eng, "device", "") != "cpu":
+            return
+        try:
+            card = dolmi_platform.gpu_name()
+        except Exception as e:
+            print(f"GPU check failed: {e}")
+            return
+        if "NVIDIA" not in (card or "").upper():
+            return
+        print(f"Whisper fell back to the CPU although {card} is present")
+        self._emit("onError", f"Dolmi is running on the CPU, not your {card}: the GPU add-on is missing or "
+                              "damaged, so captions and the voice lag behind. Reinstall Dolmi with the GPU "
+                              "add-on to fix it.")
 
     def _set_engine_state(self, state, label=None):
         """idle | loading | ready | missing; the page says 'Ready' only for "ready"."""
