@@ -58,6 +58,7 @@
     ['audio','#setVoiceSafety','input:20','set_setting','voice_safety'],
     ['audio','#swVoiceSplit','click','set_setting','voice_split'],
     ['audio','#setVoiceNames','change:Anna','set_setting','voice_names'],
+    ['audio','#swVoiceClauses','click','set_setting','voice_clauses'],                    // VOICE-9
     ['captions','#setSource','change:gemini','set_setting','speech_source'],
     ['captions','#setSource','change:local','set_setting','speech_source'],
     ['captions','#setLang','change:en','set_setting','language'],

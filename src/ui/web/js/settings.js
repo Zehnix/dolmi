@@ -267,6 +267,7 @@ if($('#setReport')) $('#setReport').onclick=async()=>{ const b=bridge(); if(!b){
    VOICE-8: natural voice (Kokoro, download once). VOICE-7: Dolmi's headphone mix and its setup. ---- */
 { const m=settingsMount('audio.voice');
   if(m){ m.innerHTML=`<div class="set" data-kw="voice read aloud speak translation tts text to speech headset experimental"><div><div class="lab">Read translations aloud <span class="mtag">experimental</span></div><div class="ps" id="voiceHint">Speaks each English line with the system voice. The meeting audio is not muted or turned down yet, so you hear both. Lines that fall behind are skipped; subtitles show everything</div></div><button class="sw" id="swVoice" aria-label="Read translations aloud"></button></div>
+    <div class="set" data-kw="voice clause faster speak sooner latency delay experimental"><div><div class="lab">Speak clause by clause <span class="mtag">experimental</span></div><div class="ps">Starts speaking each part of a sentence as soon as it is clear, instead of waiting for the whole line. Faster, but the voice may differ slightly from the final subtitle</div></div><button class="sw" id="swVoiceClauses" aria-label="Speak clause by clause"></button></div>
     <div class="set" data-kw="natural voice kokoro tts download human sounding experimental"><div><div class="lab">Natural voice <span class="mtag">experimental</span></div><div class="ps" id="voiceNatHint">A more human English voice that runs on this computer. Falls back to the system voice when it is not downloaded</div></div><div style="display:flex;gap:8px;align-items:center"><button class="btn ghost" id="voiceDl" hidden>Download</button><button class="sw" data-sw id="swVoiceNatural" aria-label="Natural voice"></button></div></div>
     <div class="set" data-kw="headphone mix original german safety net duck quiet translated voice experimental"><div><div class="lab">Headphone mix <span class="mtag">experimental</span></div><div class="ps">Dolmi plays the voice on your headphones with the original speech quietly underneath, turned down while the voice speaks. Hold <span id="voiceHoldKey">Ctrl+Alt+Shift+O</span> to hear the original</div></div><button class="sw" data-sw id="swVoiceMix" aria-label="Headphone mix"></button></div>
     <div class="set" data-kw="headphones output device headset bluetooth voice mix setup"><div><div class="lab">Headphones</div><div class="ps" id="voiceCheck">Pick the headphones you wear in the meeting</div></div><div style="display:flex;gap:8px;align-items:center"><button class="btn ghost" id="voiceTest">Test tone</button><select class="field" id="setVoiceOut"><option value="">Default output</option></select></div></div>
@@ -289,6 +290,9 @@ async function voiceSetup(){ const b=bridge(); if(!b||!b.voice_setup) return;
 if($('#swVoice')) $('#swVoice').onclick=async()=>{ const sw=$('#swVoice'), on=!sw.classList.contains('on'), b=bridge(); sw.classList.toggle('on',on);
   if(b&&!await b.set_setting('voice_readout',on)){ sw.classList.toggle('on',!on); return; }
   toast(on?'Reading translations aloud (experimental)':'Reading aloud off'); voiceHint(); };
+if($('#swVoiceClauses')) $('#swVoiceClauses').onclick=async()=>{ const sw=$('#swVoiceClauses'), on=!sw.classList.contains('on'), b=bridge(); sw.classList.toggle('on',on);
+  if(b&&!await b.set_setting('voice_clauses',on)){ sw.classList.toggle('on',!on); return; }
+  toast(on?'Speaking clause by clause (experimental)':'Speaking whole lines'); };
 [['#swVoiceNatural','voice_natural'],['#swVoiceMix','voice_mix'],['#swVoiceSplit','voice_split']].forEach(([sel,key])=>{ const e=$(sel); if(e) e.addEventListener('click',async()=>{
   const b=bridge(); if(!b) return; const on=e.classList.contains('on'); if(!await b.set_setting(key,on)){ e.classList.toggle('on',!on); return; } voiceSetup(); }); });
 if($('#setVoiceOut')) $('#setVoiceOut').addEventListener('change',async()=>{ const b=bridge(); if(b){ await b.set_setting('voice_out_device',$('#setVoiceOut').value); voiceSetup(); } });
@@ -301,7 +305,7 @@ if($('#voiceDl')) $('#voiceDl').onclick=async()=>{ const b=bridge(); if(!b) retu
   window.dolmi.onModelProgress=(k,mb,total)=>{ if(k==='kokoro'){ const dl=$('#voiceDl'); if(dl) dl.textContent=`Downloading… ${mb} of ${total} MB`; return; } if(pp) pp(k,mb,total); };
   window.dolmi.onModelDone=(k,err)=>{ if(k==='kokoro'){ toast(err||'Natural voice downloaded'); voiceSetup(); return; } if(pd) pd(k,err); };
   window.dolmi.onNameHeard=de=>{ if(pn) pn(de); toast('Someone said your name'); }; }
-async function voiceBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state(); setSw('#swVoice',!!s.voiceReadout);
+async function voiceBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state(); setSw('#swVoice',!!s.voiceReadout); setSw('#swVoiceClauses',!!s.voiceClauses);
   setSw('#swVoiceNatural',!!s.voiceNatural); setSw('#swVoiceMix',!!s.voiceMix); setSw('#swVoiceSplit',!!s.voiceSplit);
   const pct=Math.round((s.voiceSafety??0.1)*100); if($('#setVoiceSafety')){ $('#setVoiceSafety').value=pct; $('#setVoiceSafetyVal').textContent=pct+'%'; }
   if($('#setVoiceNames')) $('#setVoiceNames').value=s.voiceNames||'';

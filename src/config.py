@@ -63,6 +63,7 @@ DEFAULTS = {
     "english_only_device": "",                    # VOICE-5: that speaker's Windows device id
     "voice_natural": False,                       # VOICE-8: Kokoro natural voice when downloaded (else OS voice)
     "voice_mix": False, "voice_safety": 0.10, "voice_split": False, "voice_out_device": "", "voice_names": "",  # VOICE-7: headphone mix
+    "voice_clauses": False,                       # VOICE-9: read clause by clause from stable drafts (faster)
 }
 
 
