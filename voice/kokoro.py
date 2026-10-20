@@ -21,11 +21,18 @@ import time
 import numpy as np
 
 REPO = "onnx-community/Kokoro-82M-v1.0-ONNX"
-MODEL_FILE = "onnx/model_quantized.onnx"           # int8, 92 MB: the fastest variant on CPU
+MODEL_FILE = "onnx/model.onnx"                     # fp32, 325 MB. VOICE-10 measurement on the dev laptop
+                                                   # (22 threads, Whisper busy on the GPU): fp32 synthesizes at
+                                                   # RTF 0.30-0.45, the int8 file at 0.9-1.0, too slow to keep up
+INT8_FILE = "onnx/model_quantized.onnx"            # 92 MB, what Dolmi 2.3.0 downloaded: still used when it is
+                                                   # the only one there
+THREADS = 4                                        # fp32: 4 threads RTF 0.30, 2 threads 0.45 ...
+CPU_THREADS = 2                                    # ... but 2 while Whisper also runs on the CPU (4 slowed it)
 VOICES = ("af_heart", "am_michael", "bf_emma")     # US woman (default), US man, UK woman
 DEFAULT_VOICE = "af_heart"
-FILES = [MODEL_FILE, "tokenizer.json", "config.json", *(f"voices/{v}.bin" for v in VOICES)]
-SIZE_MB = 94
+COMMON = ["tokenizer.json", "config.json", *(f"voices/{v}.bin" for v in VOICES)]
+FILES = [MODEL_FILE, *COMMON]
+SIZE_MB = 327
 SR = 24000
 MAX_TOKENS = 510                                   # the style table has one row per input length
 FIRST_WORDS = 6
@@ -42,11 +49,20 @@ def model_dir():
         find = _hf()
     except ImportError:
         return None
-    paths = [find(REPO, f) for f in FILES]
-    if not all(isinstance(p, str) for p in paths):
+    paths = [find(REPO, f) for f in COMMON]
+    if not all(isinstance(p, str) for p in paths) or model_file(find) is None:
         return None
     from pathlib import Path
-    return Path(paths[0]).parent.parent           # .../snapshots/<rev>/onnx/model.onnx -> snapshots/<rev>
+    return Path(paths[0]).parent                  # .../snapshots/<rev>/tokenizer.json -> snapshots/<rev>
+
+
+def model_file(find=None):
+    """The ONNX file to run: fp32 when downloaded, else the int8 file an older Dolmi fetched; None if neither."""
+    find = find or _hf()
+    for f in (MODEL_FILE, INT8_FILE):
+        if isinstance(find(REPO, f), str):
+            return f
+    return None
 
 
 def is_installed():
@@ -117,6 +133,7 @@ class KokoroVoice:
         self._styles = self._vocab = None
         self._lock = threading.Lock()
         self.player = None                        # set by the app: a mixer.Mixer that plays PCM
+        self.threads = THREADS                    # the app sets CPU_THREADS when Whisper runs on the CPU
 
     def available(self):
         if self._sess is not None:
@@ -136,8 +153,10 @@ class KokoroVoice:
         if self._sess is None:
             import onnxruntime as ort
             opts = ort.SessionOptions()
-            opts.intra_op_num_threads = 2         # leave the cores to Whisper
-            self._sess = ort.InferenceSession(str(folder / MODEL_FILE), opts, providers=["CPUExecutionProvider"])
+            opts.intra_op_num_threads = self.threads
+            name = model_file() if self._folder is None else next(
+                (f for f in (MODEL_FILE, INT8_FILE) if (folder / f).is_file()), MODEL_FILE)
+            self._sess = ort.InferenceSession(str(folder / name), opts, providers=["CPUExecutionProvider"])
         if self._g2p is None:
             from misaki import en
             g2p = en.G2P(trf=False, british=self.voice_name.startswith("b"), fallback=None, unk="")

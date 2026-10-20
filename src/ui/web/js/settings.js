@@ -286,7 +286,7 @@ async function voiceSetup(){ const b=bridge(); if(!b||!b.voice_setup) return;
     // VOICE-8: without the voice packages (not in the default build yet) the switch and the download would do
     // nothing, so both are put away and the hint says why
     if(sw){ sw.disabled=!n.deps; sw.title=n.deps?'':'Not available in this version yet'; }
-    if(dl){ dl.hidden=!!n.installed||!n.deps; dl.disabled=!!n.downloading; dl.textContent=n.downloading?`Downloading… ${n.mb||0} MB`:`Download (${n.sizeMb||94} MB)`; }
+    if(dl){ dl.hidden=!!n.installed||!n.deps; dl.disabled=!!n.downloading; dl.textContent=n.downloading?`Downloading… ${n.mb||0} MB`:`Download (${n.sizeMb||327} MB)`; }
     if(nh) nh.textContent=!n.deps?'Not available in this version of Dolmi yet. The system voice reads the translations'
       :!n.installed?'A more human English voice that runs on this computer. Download it once; until then the system voice speaks'
       :'A more human English voice that runs on this computer. Falls back to the system voice if it fails';

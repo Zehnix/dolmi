@@ -842,7 +842,15 @@ class Api:
     # VOICE-8: natural voice (Kokoro) first when on, then the OS voice. VOICE-7: Dolmi's headphone mix.
     def _voice_backends(self):
         from voice import tts
-        return tts.natural_backends() if self._settings.get("voice_natural") else tts.os_backends()
+        if not self._settings.get("voice_natural"):
+            return tts.os_backends()
+        chain = tts.natural_backends()
+        if getattr(self._engine, "device", "cuda") == "cpu":    # share the cores with Whisper
+            from voice import kokoro
+            for b in chain:
+                if hasattr(b, "threads"):
+                    b.threads = kokoro.CPU_THREADS
+        return chain
 
     @staticmethod
     def _voice_ok(b):
