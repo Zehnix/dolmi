@@ -521,8 +521,8 @@ def test_a_draft_decodes_only_the_last_seconds_greedily():
     assert seen == [(m.DRAFT_WINDOW, m.DRAFT_BEAM), (11.0, m.FINAL_BEAM)]
 
 
-def test_cpu_finals_decode_greedily_and_gpu_finals_keep_the_beam():
-    """SEG-5 decision: beam 5 kept CPU Whisper at real-time factor ~1.0 (first text p50 17.2 s)."""
+def test_cpu_finals_use_a_narrower_beam_and_gpu_finals_keep_beam_5():
+    """SEG-5 decision: beam 5 kept CPU Whisper at real-time factor ~1.0; beam 2 keeps the smoke WER gate."""
     seen = []
 
     class FakeWhisper:
@@ -537,8 +537,9 @@ def test_cpu_finals_decode_greedily_and_gpu_finals_keep_the_beam():
         e._asr(None, "de")
         e._asr(None, "de", retry=True)
         e._asr(None, "de", beam=m.DRAFT_BEAM)
-    assert m.CPU_FINAL_BEAM == 1 and m.FINAL_BEAM == 5
-    assert seen == [1, 1, m.DRAFT_BEAM, 5, 5, m.DRAFT_BEAM]
+    assert m.DRAFT_BEAM <= m.CPU_FINAL_BEAM < m.FINAL_BEAM == 5
+    cpu = m.CPU_FINAL_BEAM
+    assert seen == [cpu, cpu, m.DRAFT_BEAM, 5, 5, m.DRAFT_BEAM]
 
 
 def test_the_engine_picks_the_final_beam_from_its_device(monkeypatch):

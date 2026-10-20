@@ -44,8 +44,9 @@ LOW_ENERGY_RMS = 0.01      # loudest 100 ms below this: a lone "Thank you." ther
                            # (quiet remote speech peaks near 0.018, so this stays well under it)
 ASR_VAD_THRESHOLD = 0.35   # faster-whisper's own VAD: lower than its 0.5 default so soft speech survives
 FINAL_BEAM = 5             # Whisper beam for finals on the GPU
-CPU_FINAL_BEAM = 1         # SEG-5: on the CPU finals decode greedily too (bench syn-s1, small: first text
-                           # p50 17.2 -> 13.6 s, stream WER 8.5 -> 8.6 %); the beam there kept Whisper at RTF ~1.0
+CPU_FINAL_BEAM = 2         # SEG-5: a narrower beam on the CPU, where beam 5 kept small Whisper at RTF ~1.0. Bench
+                           # 2026-10-20 (back to back, CPU small), beam 5 / 2 / 1: smoke WER 12.14 / 12.52 / 14.26 %
+                           # (beam 1 fails the +1 gate); syn-s1 first text p50 22.3 / 16.7 / 18.4 s, p95 32.1 / 22.2 / 32.7 s
 DRAFT_BEAM = 1             # drafts decode greedily: they are redone a second later anyway
 DRAFT_WINDOW = 6.0         # s, a draft decodes only the end of the sentence (cost stays flat on long ones)
 DRAFT_MT_LAG = 2.0         # s, a draft whose audio is this far behind the capture skips translation
