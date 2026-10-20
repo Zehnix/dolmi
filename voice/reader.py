@@ -4,8 +4,8 @@ Backlog control: at most MAX_QUEUE lines wait (a new line pushes out the oldest 
 whose speech ended more than MAX_AGE seconds ago is skipped instead of spoken. The subtitles still show
 every line, so a skipped line is never lost. Nothing here mutes or ducks the meeting audio (VOICE-0b).
 
-VOICE-8: a line that starts more than BEHIND_S after its speech ended is spoken faster (1.15x, up to
-1.3x at BEHIND_S + 2 s) by backends that take a speed. Backends are a fallback chain: when the first
+VOICE-8: a line that starts more than BEHIND_S after its speech ended is spoken a little faster (1.05x, up to
+1.12x at BEHIND_S + 2 s) by backends that take a speed. Backends are a fallback chain: when the first
 (Kokoro) fails on a line, the line is retried with the next (the OS voice) and the reader stays there.
 VOICE-7: with a `mixer`, PCM backends play through Dolmi's headphone mix instead of the default output.
 """
@@ -13,14 +13,14 @@ import threading
 import time
 from collections import deque
 
-MAX_QUEUE = 2       # lines waiting to be spoken
-MAX_AGE = 6.0       # s after the end of the speech: older lines are skipped
-BEHIND_S = 2.0      # s behind before the voice speeds up
-SPEED_MIN, SPEED_MAX = 1.15, 1.3
+MAX_QUEUE = 1       # lines waiting to be spoken (more made the voice read old lines)
+MAX_AGE = 4.0       # s after the end of the speech: older lines are skipped
+BEHIND_S = 3.0      # s behind before the voice speeds up
+SPEED_MIN, SPEED_MAX = 1.05, 1.12   # gentle: 1.3x sounded rushed in the first listening test
 
 
 def catch_up_speed(lag):
-    """1.0 when on time; 1.15x just past BEHIND_S, rising to 1.3x at BEHIND_S + 2 s."""
+    """1.0 when on time; 1.05x just past BEHIND_S, rising to 1.12x at BEHIND_S + 2 s."""
     if lag is None or lag <= BEHIND_S:
         return 1.0
     return round(min(SPEED_MAX, SPEED_MIN + (lag - BEHIND_S) / 2.0 * (SPEED_MAX - SPEED_MIN)), 3)

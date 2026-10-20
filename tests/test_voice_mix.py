@@ -181,11 +181,11 @@ def test_resample_keeps_duration():
 
 
 # ------------------------------------------------------------------ reader: speed-up + fallback chain
-def test_catch_up_speed_starts_after_two_seconds_and_caps():
-    assert reader.catch_up_speed(1.9) == 1.0 and reader.catch_up_speed(None) == 1.0
-    assert reader.catch_up_speed(2.01) == pytest.approx(1.15, abs=0.01)
-    assert reader.catch_up_speed(3.0) == pytest.approx(1.225, abs=0.01)
-    assert reader.catch_up_speed(5.5) == 1.3
+def test_catch_up_speed_starts_after_three_seconds_and_stays_gentle():
+    assert reader.catch_up_speed(2.9) == 1.0 and reader.catch_up_speed(None) == 1.0
+    assert reader.catch_up_speed(3.01) == pytest.approx(1.05, abs=0.01)
+    assert reader.catch_up_speed(4.0) == pytest.approx(1.085, abs=0.01)
+    assert reader.catch_up_speed(6.5) == 1.12
 
 
 class SpeedTTS:
@@ -212,12 +212,12 @@ class SpeedTTS:
 def test_late_lines_are_spoken_faster_and_too_old_lines_still_skipped():
     clock = Clock(1000.0)
     tt = SpeedTTS()
-    r = reader.Reader(tt, clock=clock)
-    r.offer("late", end=997.0)          # 3 s behind
+    r = reader.Reader(tt, clock=clock, max_queue=2)
+    r.offer("late", end=996.5)          # 3.5 s behind
     r.offer("on time", end=1000.0)
     r._say(*r.next_item(0))
     r._say(*r.next_item(0))
-    assert tt.said == [("late", pytest.approx(1.225, abs=0.01)), ("on time", 1.0)]
+    assert tt.said == [("late", pytest.approx(1.068, abs=0.01)), ("on time", 1.0)]
     r.offer("ancient", end=990.0)
     assert r.next_item(0) is None and r.skipped == 1
 

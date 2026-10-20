@@ -38,7 +38,7 @@ def test_queue_keeps_only_the_newest_lines():
     r = reader.Reader(FakeTTS(), clock=Clock())
     for t in ("one", "two", "three"):
         r.offer(t)
-    assert r.skipped == 1 and r.next_line(wait=0) == "two" and r.next_line(wait=0) == "three"
+    assert r.skipped == 2 and r.next_line(wait=0) == "three"
     assert r.next_line(wait=0) is None
 
 
@@ -68,7 +68,7 @@ def test_the_worker_speaks_and_a_failing_voice_does_not_stop_it():
             raise RuntimeError("voice broke")
         fake.done.set()
     fake.speak = speak
-    r = reader.Reader(fake).start()
+    r = reader.Reader(fake, max_queue=2).start()
     r.offer("bad")
     r.offer("good")
     assert fake.done.wait(5) and calls == ["bad", "good"]

@@ -681,6 +681,8 @@ class Api:
                             names=self._settings.get("voice_names"))
         if key == "english_only" and not value:
             self._routing_end()
+            if not self._settings.get("voice_readout"):
+                self._voice_stop()
         if key == "voice_clauses" and not value:
             self._clauses_stop()
         if key == "shortcuts_on" and self._shortcuts is not None:
@@ -942,7 +944,7 @@ class Api:
         return True
 
     def _voice_offer(self, en, meta):
-        if not self._settings.get("voice_readout") or not en:
+        if not self._readout_on() or not en:
             return
         r = self._voice_reader()
         if r:
@@ -960,7 +962,7 @@ class Api:
     # ---- VOICE-9: speak clause by clause from the STR-1 committed German (off by default)
     def _clause_voice(self):
         """The running clause speaker, or None (setting off, no voice, or the engine has no stable MT)."""
-        if not (self._settings.get("voice_readout") and self._settings.get("voice_clauses")):
+        if not (self._readout_on() and self._settings.get("voice_clauses")):
             return None
         cv = getattr(self, "_clauses", None)
         if cv is not None:
@@ -980,7 +982,7 @@ class Api:
                 cv.draft(meta.get("utt"), meta["committed"])
 
     def _voice_final(self, de, en, meta):
-        cv = self._clause_voice() if self._settings.get("voice_readout") and en else None
+        cv = self._clause_voice() if self._readout_on() and en else None
         if cv:
             cv.final(meta.get("utt"), de, en)
         else:
@@ -993,7 +995,7 @@ class Api:
 
     def voice_state(self):
         """For Settings > Audio: is reading aloud on, and which voice would speak."""
-        r = self._voice_reader() if self._settings.get("voice_readout") else None
+        r = self._voice_reader() if self._readout_on() else None
         backend = r.backend if r else None
         if backend is None:
             try:
@@ -1001,9 +1003,13 @@ class Api:
                 backend = tts.select_backend(self._voice_backends())
             except ImportError:
                 backend = None
-        return {"on": bool(self._settings.get("voice_readout")), "available": backend is not None,
+        return {"on": bool(self._readout_on()), "available": backend is not None,
                 "backend": getattr(backend, "name", ""), "spoken": r.spoken if r else 0,
                 "skipped": r.skipped if r else 0, "mix": getattr(self, "_voice_mix", None) is not None}
+
+    def _readout_on(self):
+        """English only mutes the German, so it always needs the English voice too."""
+        return bool(self._settings.get("voice_readout") or self._settings.get("english_only"))
 
     def voice_setup(self):
         """Settings > Audio voice setup: headphones list + check, natural-voice download state."""
