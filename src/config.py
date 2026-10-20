@@ -61,6 +61,8 @@ DEFAULTS = {
     "voice_readout": False,                       # VOICE-1: read English finals aloud (experimental, OS voice)
     "english_only": False,                        # VOICE-5/6: meeting apps unheard, Dolmi captures them (Windows route / Mac tap, experimental)
     "english_only_device": "",                    # VOICE-5: that speaker's Windows device id
+    "voice_natural": False,                       # VOICE-8: Kokoro natural voice when downloaded (else OS voice)
+    "voice_mix": False, "voice_safety": 0.10, "voice_split": False, "voice_out_device": "", "voice_names": "",  # VOICE-7: headphone mix
 }
 
 

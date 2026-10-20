@@ -111,6 +111,14 @@ The full licence texts are inside each package's folder in `runtime\Lib\site-pac
   [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-recongition-models) (Apache-2.0) — from GitHub.
   It was trained on **VoxCeleb1 and VoxCeleb2** (A. Nagrani, J. S. Chung, W. Xie, A. Zisserman, University of Oxford),
   licensed CC BY 4.0 — https://www.robots.ox.ac.uk/~vgg/data/voxceleb/ . No changes were made to the model.
+- Only with *Natural voice* (experimental) on and after pressing Download: **Kokoro-82M** text-to-speech
+  (hexgrad, Apache-2.0 — https://huggingface.co/hexgrad/Kokoro-82M) in the ONNX export and voice files published by
+  [onnx-community/Kokoro-82M-v1.0-ONNX](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX) (Apache-2.0) — from
+  Hugging Face. Dolmi runs the model itself with onnxruntime; it does **not** use the `kokoro-onnx` package, because that
+  package and `misaki[en]` pull in espeak-ng (GPL-3.0) through `espeakng-loader` / `phonemizer`. Phonemes come from
+  **misaki** (Apache-2.0) with its espeak fallback switched off, which needs **spaCy** and **en_core_web_sm** (MIT) and
+  **num2words** (LGPL-2.1, used unmodified as a separate package). These packages are listed in
+  `requirements-voice.txt` and are not in the default build yet; without them the system voice speaks.
 
 # macOS (Dolmi.app)
 

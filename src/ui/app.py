@@ -65,6 +65,8 @@ SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_tran
             "capture_both",                                    # SPK-5
             "voice_readout",                                   # VOICE-1
             "english_only", "english_only_device",             # VOICE-5 (Windows), VOICE-6 (Mac)
+            "voice_natural",                                   # VOICE-8
+            "voice_mix", "voice_safety", "voice_split", "voice_out_device", "voice_names",   # VOICE-7
             "ui_text_size",                                    # APP-14
             "local_only",                                      # STR-7
             "unsure_marks",                                    # STR-8
@@ -72,13 +74,47 @@ SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_tran
 UI_TEXT_SIZES = ("normal", "large")                      # APP-14: Appearance > Larger UI text
 BOOL_SETTINGS = {"warn_silence", "preload_models", "check_updates", "shortcuts_on",
                  "speaker_labels", "clarify_queue", "bar_time",
-                 "capture_both", "voice_readout", "english_only", "local_only",
+                 "capture_both", "voice_readout", "english_only", "local_only", "voice_natural", "voice_mix", "voice_split",
                  "unsure_marks", "cloud_failover"}        # on/off switches that must be true or false
 SPEAKER_NAME_MAX = 40                                    # SPK-4: longest speaker name
+VOICE_NAMES_MAX = 120                                    # VOICE-7: 'chime when I am named' text
+VOICE_REBUILD = {"voice_natural", "voice_mix", "voice_out_device"}   # VOICE-7/8: these restart the voice
+HOLD_POLL_S, HOLD_MAX_S = 0.05, 30.0                     # VOICE-7: hold-to-hear-original key polling
 # APP-3 'nothing heard' warning: how quiet counts as silence, and how long before Dolmi says so
 HEARD_SILENCE_RMS = live_subs.SILENCE_RMS
 HEARD_AFTER_S = 20.0
 HEARD_TICK_S = 1.0
+
+
+class _VoiceTapQueue(streaming.SampleQueue):
+    """VOICE-7: the capture queue, also handing each chunk to the headphone mix's safety net."""
+
+    def __init__(self, tap, **kw):
+        super().__init__(**kw)
+        self._tap = tap
+
+    def _put(self, item):
+        super()._put(item)
+        try:
+            self._tap(item)
+        except Exception as e:                  # the mix must never stop the captions
+            print(f"voice: safety-net feed failed: {e}")
+
+
+_VK_F1 = 0x70
+
+
+def _key_down(key):
+    """Windows: is this shortcut key (letter, digit or F-key) held right now?"""
+    import ctypes
+    k = key.lower()
+    if len(k) == 1 and k.isalnum():
+        vk = ord(k.upper())
+    elif k.startswith("f") and k[1:].isdigit():
+        vk = _VK_F1 + int(k[1:]) - 1
+    else:
+        return False
+    return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
 HEARD_SOUND_NOW_S = 3.0          # sound in the last 3 s counts as "sound present" (speech has short gaps)
 # APP-4 Instant Start: settings that change which models the next Start needs
 ENGINE_SETTINGS = ("model", "language", "speech_source")
@@ -87,7 +123,8 @@ WARM_DEBOUNCE_S = 0.5            # several setting changes in a row load the mod
 
 # APP-7 global shortcuts: what each does, and its default (Ctrl+Alt+Shift+D stays "show Dolmi")
 DEFAULT_SHORTCUTS = {"toggle_live": "ctrl+alt+shift+s", "toggle_bar": "ctrl+alt+shift+b",
-                     "toggle_source": "ctrl+alt+shift+m", "toggle_lock": "ctrl+alt+shift+l"}
+                     "toggle_source": "ctrl+alt+shift+m", "toggle_lock": "ctrl+alt+shift+l",
+                     "hold_original": "ctrl+alt+shift+o"}          # VOICE-7: hear the original while held
 RESERVED_SHORTCUTS = {"ctrl+alt+shift+d": "showing Dolmi"}
 _SHORTCUT_MOD_ORDER = ("ctrl", "alt", "shift", "meta")
 _SHORTCUT_MOD_NAMES = {"ctrl": "ctrl", "control": "ctrl", "alt": "alt", "option": "alt", "opt": "alt",
@@ -431,6 +468,7 @@ class Api:
                     self._ov("line", a, b, ts[:5] if self._settings.get("bar_time") else "")
                     self._cloud_submit(a, b, meta)
                     self._voice_offer(b, meta)
+                    self._voice_name_check(a)
                 elif kind == "cloud_status":                    # STR-9: "local" while the cloud is down
                     self._emit("onCloudStatus", a)
                 elif kind == "final_update":
@@ -578,6 +616,9 @@ class Api:
             "speakerLabels": bool(s.get("speaker_labels", False)),
             "captureBoth": bool(s.get("capture_both", False)),
             "voiceReadout": bool(s.get("voice_readout", False)),
+            "voiceNatural": bool(s.get("voice_natural", False)), "voiceMix": bool(s.get("voice_mix", False)),
+            "voiceSafety": s.get("voice_safety", 0.10), "voiceSplit": bool(s.get("voice_split", False)),
+            "voiceOutDevice": s.get("voice_out_device", ""), "voiceNames": s.get("voice_names", ""),
             "barVisible": bool(self._overlay_visible), "barLocked": bool(s.get("bar_locked")),
             "barTime": bool(s.get("bar_time", False)),
             "uiTextSize": s.get("ui_text_size") if s.get("ui_text_size") in UI_TEXT_SIZES else "normal",
@@ -604,6 +645,14 @@ class Api:
             return False
         if key == "english_only_device" and not isinstance(value, str):
             return False
+        if key == "voice_safety":                            # VOICE-7: 0-30 %
+            if isinstance(value, bool) or not isinstance(value, numbers.Real):
+                return False
+            value = round(min(0.30, max(0.0, float(value))), 3)
+        if key in ("voice_out_device", "voice_names"):
+            if not isinstance(value, str):
+                return False
+            value = value.strip()[:VOICE_NAMES_MAX if key == "voice_names" else 200]
         with self._settings_lock:
             self._settings[key] = value
             config.save_settings(self._settings)
@@ -620,8 +669,13 @@ class Api:
         if key in ENGINE_SETTINGS and not self._session:
             self._drop_engine()              # next Start loads the newly chosen model/translator
             self._request_warm()
-        if key == "voice_readout" and not value:
-            self._voice_stop()
+        if (key == "voice_readout" and not value) or key in VOICE_REBUILD:
+            self._voice_stop()                   # the next line builds the voice with the new choice
+        if key in ("voice_safety", "voice_split", "voice_names"):
+            m = getattr(self, "_voice_mix", None)
+            if m is not None:
+                m.configure(safety=self._settings.get("voice_safety"), split=self._settings.get("voice_split"),
+                            names=self._settings.get("voice_names"))
         if key == "english_only" and not value:
             self._routing_end()
         if key == "shortcuts_on" and self._shortcuts is not None:
@@ -778,20 +832,109 @@ class Api:
         return getattr(e, "glossary", ""), getattr(e, "vocab", None)
 
     # ---- VOICE-1 prototype: read English finals aloud (off by default; does not mute the meeting audio)
+    # VOICE-8: natural voice (Kokoro) first when on, then the OS voice. VOICE-7: Dolmi's headphone mix.
+    def _voice_backends(self):
+        from voice import tts
+        return tts.natural_backends() if self._settings.get("voice_natural") else tts.os_backends()
+
+    @staticmethod
+    def _voice_ok(b):
+        try:
+            return b.available()
+        except Exception as e:
+            print(f"voice backend {getattr(b, 'name', b)} check failed: {e}")
+            return False
+
     def _voice_reader(self):
         """The running reader, started on first use; None when no voice backend works here."""
         r = getattr(self, "_voice", None)
         if r is None:
             try:
                 from voice import reader, tts
-                backend = tts.select_backend()
+                chain = self._voice_backends()
+                backend = tts.select_backend(chain)
             except ImportError as e:            # a build without the voice/ folder
                 print(f"voice: not in this build ({e})")
-                backend = None
+                return None
             if backend is None:
                 return None
-            r = self._voice = reader.Reader(backend).start()
+            rest = chain[chain.index(backend) + 1:] if backend in chain else []
+            pcm_only = getattr(backend, "pcm", False)
+            mix = self._voice_mixer() if (self._settings.get("voice_mix") or pcm_only) else None
+            if mix is None and pcm_only:        # Kokoro has no output of its own: use the OS voice
+                backend = next((b for b in rest if self._voice_ok(b)), None)
+                rest = []
+                if backend is None:
+                    return None
+            r = self._voice = reader.Reader(backend, fallbacks=rest, mixer=mix).start()
         return r
+
+    def _voice_german_allowed(self):
+        """The safety net only when Dolmi would not capture its own mix again (mic, or other headphones)."""
+        if self._source() == "mic":
+            return True
+        out, cap = self._settings.get("voice_out_device", ""), self._settings.get("audio_device", "")
+        return bool(out) and bool(cap) and out not in cap and cap not in out
+
+    def _voice_mixer(self):
+        """Dolmi's headphone mix on the chosen headphones; None when that output cannot be opened."""
+        m = getattr(self, "_voice_mix", None)
+        if m is not None:
+            return m
+        try:
+            from voice import mixer
+            s = self._settings
+            m = mixer.Mixer(safety=s.get("voice_safety", mixer.SAFETY_DEFAULT), split=s.get("voice_split"),
+                            names=s.get("voice_names", ""),
+                            german=bool(s.get("voice_mix")) and self._voice_german_allowed())
+            m.start(self._voice_sink(s.get("voice_out_device", "")))
+        except Exception as e:
+            print(f"voice: could not open the headphone mix ({e})")
+            return None
+        self._voice_mix = m
+        return m
+
+    @staticmethod
+    def _voice_sink(device):
+        from voice import mixer
+        return mixer.open_sink(device)
+
+    def _voice_feed(self, chunk):
+        """Captured audio (16 kHz) -> the German safety net, only while the headphone mix runs."""
+        m = getattr(self, "_voice_mix", None)
+        if m is not None and m.german_on and chunk is not None:
+            m.feed_german(chunk, 16000)
+
+    def _voice_name_check(self, german):
+        m = getattr(self, "_voice_mix", None)
+        if m is not None and german and m.check_name(german):
+            self._emit("onNameHeard", german)
+
+    def _voice_hold_original(self):
+        """Hold-to-hear-original key: German at full level until the key is let go (Windows polls the
+        key; elsewhere the shortcut toggles)."""
+        m = getattr(self, "_voice_mix", None)
+        if m is None:
+            return False
+        if dolmi_platform.OS != "win":
+            m.hold(not m.held)
+            return m.held
+        if m.held:
+            return True
+        m.hold(True)
+        key = _shortcut_parts(self._shortcut_map()["hold_original"])[1]
+
+        def watch():
+            t = time.monotonic()
+            try:
+                while time.monotonic() - t < HOLD_MAX_S and _key_down(key):
+                    time.sleep(HOLD_POLL_S)
+            except Exception as e:
+                print(f"voice: hold key polling failed: {e}")
+            finally:
+                m.hold(False)
+        threading.Thread(target=watch, daemon=True, name="voice-hold").start()
+        return True
 
     def _voice_offer(self, en, meta):
         if not self._settings.get("voice_readout") or not en:
@@ -802,8 +945,11 @@ class Api:
 
     def _voice_stop(self):
         r, self._voice = getattr(self, "_voice", None), None
+        m, self._voice_mix = getattr(self, "_voice_mix", None), None
         if r:
             r.stop()
+        if m:
+            m.stop()
 
     def voice_state(self):
         """For Settings > Audio: is reading aloud on, and which voice would speak."""
@@ -812,12 +958,86 @@ class Api:
         if backend is None:
             try:
                 from voice import tts
-                backend = tts.select_backend()
+                backend = tts.select_backend(self._voice_backends())
             except ImportError:
                 backend = None
         return {"on": bool(self._settings.get("voice_readout")), "available": backend is not None,
                 "backend": getattr(backend, "name", ""), "spoken": r.spoken if r else 0,
-                "skipped": r.skipped if r else 0}
+                "skipped": r.skipped if r else 0, "mix": getattr(self, "_voice_mix", None) is not None}
+
+    def voice_setup(self):
+        """Settings > Audio voice setup: headphones list + check, natural-voice download state."""
+        try:
+            from voice import kokoro, mixer
+        except ImportError:
+            return {"ok": False, "devices": [], "germanAllowed": False,
+                    "check": {"level": "warn", "message": "The translated voice is not in this build."},
+                    "natural": {"installed": False, "deps": False, "downloading": False, "sizeMb": 0, "mb": 0}}
+        out = self._settings.get("voice_out_device", "")
+        cap = "" if self._source() == "mic" else (self._settings.get("audio_device") or "")
+        if not out and self._source() != "mic" and not cap:
+            level, message = "warn", ("The default output is also the speaker Dolmi listens to. Pick your "
+                                      "headphones, so the voice is not captioned again and the safety net can play.")
+        else:
+            level, message = mixer.check_device(out, cap)
+        try:
+            devices = mixer.headphone_devices()
+        except Exception as e:
+            print(f"voice setup: listing outputs failed: {e}")
+            devices = []
+        return {"ok": True, "devices": devices, "check": {"level": level, "message": message},
+                "germanAllowed": self._voice_german_allowed(),
+                "natural": {"installed": kokoro.is_installed(), "deps": kokoro.deps_ok(),
+                            "downloading": "kokoro" in self._dl, "sizeMb": kokoro.SIZE_MB,
+                            "mb": round(kokoro.downloaded_mb())}}
+
+    def voice_test_tone(self):
+        """Play the setup's test tone on the chosen headphones (opens the output briefly if needed)."""
+        try:
+            from voice import mixer
+            m = getattr(self, "_voice_mix", None)
+            if m is not None:
+                m.play_effect(mixer.test_tone())
+                return {"ok": True}
+            m = mixer.Mixer(german=False).start(self._voice_sink(self._settings.get("voice_out_device", "")))
+        except Exception as e:
+            return {"ok": False, "message": f"Could not play on that output: {e}"}
+        m.play(mixer.test_tone(), mixer.SR)
+
+        def done():
+            m.wait_tts(5)
+            m.stop()
+        threading.Thread(target=done, daemon=True).start()
+        return {"ok": True}
+
+    def download_voice_model(self):
+        """VOICE-8: fetch the natural voice (~94 MB) into the models folder, with progress events."""
+        try:
+            from voice import kokoro
+        except ImportError:
+            return False
+        if "kokoro" in self._dl:
+            return False
+        self._dl.add("kokoro")
+
+        def work():
+            err = ""
+            stop = threading.Event()
+
+            def poll():
+                while not stop.wait(1.0):
+                    self._emit("onModelProgress", "kokoro", round(kokoro.downloaded_mb()), kokoro.SIZE_MB)
+            threading.Thread(target=poll, daemon=True).start()
+            try:
+                kokoro.download()
+            except Exception as e:
+                err = f"Download failed: {e}"
+            stop.set()
+            self._dl.discard("kokoro")
+            self._voice_stop()                  # the next line picks the natural voice up
+            self._emit("onModelDone", "kokoro", err)
+        threading.Thread(target=work, daemon=True).start()
+        return True
 
     # ------------------------------------------------------------------ English only routing (VOICE-5)
     def _routing(self):
@@ -1070,8 +1290,8 @@ class Api:
             self._chat_id, self._ai_history = None, []
             sid = id(token)
             # STR-3: captured audio is counted; a backlog over ~30 s is shown and logged, never dropped
-            stop, audio_q = threading.Event(), streaming.SampleQueue(
-                on_overload=lambda sec: self._ui_q.put(("overload", round(sec), "", {"session": sid})))
+            stop, audio_q = threading.Event(), _VoiceTapQueue(
+                self._voice_feed, on_overload=lambda sec: self._ui_q.put(("overload", round(sec), "", {"session": sid})))
             both = bool(self._settings.get("capture_both"))   # SPK-5: mic + speaker at once (beta)
             source_log = None
             if both:
@@ -2201,6 +2421,8 @@ class Api:
         go to the page, which presses its own button, so the screen and the missing-model prompt stay right."""
         if name == "toggle_lock":
             self.toggle_bar_lock()
+        elif name == "hold_original":
+            self._voice_hold_original()
         elif name in DEFAULT_SHORTCUTS:
             self._emit("onShortcut", name)
 

@@ -50,6 +50,14 @@
     ['audio','#swWarnSilence','click','set_setting','warn_silence'],
     ['audio','#swVoice','click','set_setting','voice_readout'],                           // VOICE-1
     ['audio','#swEnglishOnly','click','set_setting','english_only'],                    // VOICE-5
+    ['audio','#swVoiceNatural','click','set_setting','voice_natural'],                    // VOICE-8
+    ['audio','#voiceDl','click','download_voice_model'],
+    ['audio','#swVoiceMix','click','set_setting','voice_mix'],                            // VOICE-7
+    ['audio','#setVoiceOut','change:Headphones (USB)','set_setting','voice_out_device'],
+    ['audio','#voiceTest','click','voice_test_tone'],
+    ['audio','#setVoiceSafety','input:20','set_setting','voice_safety'],
+    ['audio','#swVoiceSplit','click','set_setting','voice_split'],
+    ['audio','#setVoiceNames','change:Anna','set_setting','voice_names'],
     ['captions','#setSource','change:gemini','set_setting','speech_source'],
     ['captions','#setSource','change:local','set_setting','speech_source'],
     ['captions','#setLang','change:en','set_setting','language'],
@@ -95,6 +103,7 @@
     ['about','#sc-toggle_bar','rec:ctrl+alt+shift+F9','set_shortcut','toggle_bar'],
     ['about','#sc-toggle_source','rec:ctrl+alt+shift+Digit7','set_shortcut','toggle_source'],
     ['about','#sc-toggle_lock','rec:Backspace','set_shortcut','toggle_lock'],
+    ['about','#sc-hold_original','rec:ctrl+alt+shift+KeyH','set_shortcut','hold_original'],   // VOICE-7
     ['about','#setDownloadUpdate','click','open_release','https://github.com/Zehnix/dolmi/releases/tag/v2.3.0'],
     ['about','#setReport','click','report_problem',false],                                  // APP-12
     ['about','#swRepTranscripts','click','report_problem',null,true],                      // local switches: no call

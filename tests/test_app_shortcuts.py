@@ -29,7 +29,7 @@ def test_defaults_and_state(api):
     assert s["shortcutsOn"] is True
     assert s["shortcuts"] == app_mod.DEFAULT_SHORTCUTS
     assert "ctrl+alt+shift+d" not in s["shortcuts"].values()      # the show-Dolmi key stays its own
-    assert len(set(s["shortcuts"].values())) == 4
+    assert len(set(s["shortcuts"].values())) == len(app_mod.DEFAULT_SHORTCUTS)   # all different
 
 
 def test_set_shortcut_saves_only_changes(api):

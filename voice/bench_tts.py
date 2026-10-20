@@ -1,7 +1,8 @@
 """VOICE-0c: first-audio latency of the text-to-speech candidates on the same English lines.
 
     python -m voice.bench_tts                       # OS voices (Windows Zira/Hazel, Mac 'say')
-    <python with kokoro installed> voice/bench_tts.py --kokoro   # also Kokoro-82M (Apache-2.0)
+    <python with kokoro installed> voice/bench_tts.py --kokoro   # also Kokoro-82M (Apache-2.0, PyTorch)
+    <python with onnxruntime + misaki + spacy> -m voice.bench_tts --onnx --no-os   # VOICE-8: Dolmi's Kokoro path
 
 Kokoro is timed to its first generated chunk (what a streaming player could start on). Prints a table and
 JSON lines; numbers only, no audio is kept.
@@ -61,12 +62,30 @@ def bench_kokoro(voice="am_michael"):
     return [_row(f"kokoro-82M:{voice}", firsts, totals, "PyTorch " + ("cuda" if torch.cuda.is_available() else "cpu"))]
 
 
+def bench_onnx(voice="af_heart", provider="cpu"):
+    """VOICE-8: voice/kokoro.py (the shipped path), first piece of each line; CPU unless provider='gpu'."""
+    sys.path[:0] = [str(ROOT), str(ROOT / "src")]
+    from voice import kokoro
+    v = kokoro.KokoroVoice(voice)
+    if provider == "gpu":
+        import onnxruntime as ort
+        v._sess = ort.InferenceSession(str(kokoro.model_dir() / kokoro.MODEL_FILE),
+                                       providers=["CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"])
+    v.first_audio("Hello.")                              # warm-up: loads the model, voice and spaCy
+    res = [v.first_audio(t) for t in LINES for _ in range(3)]
+    return [_row(f"kokoro-onnx:{voice}", [r[0] for r in res], [r[1] for r in res],
+                 f"{kokoro.MODEL_FILE} on {provider}, first piece <= {kokoro.FIRST_WORDS} words or first clause")]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--kokoro", action="store_true")
+    ap.add_argument("--onnx", action="store_true")
+    ap.add_argument("--gpu", action="store_true", help="with --onnx: CUDA/DirectML provider (GPU check later)")
     ap.add_argument("--no-os", action="store_true")
     args = ap.parse_args()
-    rows = ([] if args.no_os else bench_os()) + (bench_kokoro() if args.kokoro else [])
+    rows = (([] if args.no_os else bench_os()) + (bench_kokoro() if args.kokoro else [])
+            + (bench_onnx(provider="gpu" if args.gpu else "cpu") if args.onnx else []))
     for r in rows:
         print(json.dumps(r))
 
