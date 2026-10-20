@@ -64,6 +64,7 @@ SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_tran
             "bar_time",                                        # LIVE-5
             "capture_both",                                    # SPK-5
             "voice_readout",                                   # VOICE-1
+            "voice_clauses",                                   # VOICE-9
             "ui_text_size",                                    # APP-14
             "local_only",                                      # STR-7
             "unsure_marks",                                    # STR-8
@@ -71,7 +72,7 @@ SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_tran
 UI_TEXT_SIZES = ("normal", "large")                      # APP-14: Appearance > Larger UI text
 BOOL_SETTINGS = {"warn_silence", "preload_models", "check_updates", "shortcuts_on",
                  "speaker_labels", "clarify_queue", "bar_time",
-                 "capture_both", "voice_readout", "local_only",
+                 "capture_both", "voice_readout", "voice_clauses", "local_only",
                  "unsure_marks", "cloud_failover"}        # on/off switches that must be true or false
 SPEAKER_NAME_MAX = 40                                    # SPK-4: longest speaker name
 # APP-3 'nothing heard' warning: how quiet counts as silence, and how long before Dolmi says so
@@ -429,7 +430,7 @@ class Api:
                     self._emit("onLine", ts[:5], a, b, meta)
                     self._ov("line", a, b, ts[:5] if self._settings.get("bar_time") else "")
                     self._cloud_submit(a, b, meta)
-                    self._voice_offer(b, meta)
+                    self._voice_final(a, b, meta)
                 elif kind == "cloud_status":                    # STR-9: "local" while the cloud is down
                     self._emit("onCloudStatus", a)
                 elif kind == "final_update":
@@ -439,6 +440,7 @@ class Api:
                     if a or b:
                         self._mark_caption()
                     self._emit("onDraft", a, b, meta)
+                    self._voice_draft(meta)
                     self._ov("draft", a, b, {k: meta.get(k) for k in
                                              ("committed", "tentative", "en_committed", "en_tentative")})
                 elif kind == "ask_start":
@@ -577,6 +579,7 @@ class Api:
             "speakerLabels": bool(s.get("speaker_labels", False)),
             "captureBoth": bool(s.get("capture_both", False)),
             "voiceReadout": bool(s.get("voice_readout", False)),
+            "voiceClauses": bool(s.get("voice_clauses", False)),
             "barVisible": bool(self._overlay_visible), "barLocked": bool(s.get("bar_locked")),
             "barTime": bool(s.get("bar_time", False)),
             "uiTextSize": s.get("ui_text_size") if s.get("ui_text_size") in UI_TEXT_SIZES else "normal",
@@ -619,6 +622,8 @@ class Api:
             self._request_warm()
         if key == "voice_readout" and not value:
             self._voice_stop()
+        if key == "voice_clauses" and not value:
+            self._clauses_stop()
         if key == "shortcuts_on" and self._shortcuts is not None:
             self._start_shortcuts()
         if key == "preload_models":
@@ -796,9 +801,44 @@ class Api:
             r.offer(en, meta.get("end"))
 
     def _voice_stop(self):
+        self._clauses_stop()
         r, self._voice = getattr(self, "_voice", None), None
         if r:
             r.stop()
+
+    # ---- VOICE-9: speak clause by clause from the STR-1 committed German (off by default)
+    def _clause_voice(self):
+        """The running clause speaker, or None (setting off, no voice, or the engine has no stable MT)."""
+        if not (self._settings.get("voice_readout") and self._settings.get("voice_clauses")):
+            return None
+        cv = getattr(self, "_clauses", None)
+        if cv is not None:
+            return cv
+        eng, r = self._engine, self._voice_reader()
+        if r is None or not hasattr(eng, "translate_prefix"):
+            return None
+        from voice import clauses
+        lang = getattr(eng, "language", None) or self._settings.get("language") or "de"
+        cv = self._clauses = clauses.ClauseVoice(lambda src, pre: eng.translate_prefix(src, lang, pre), r)
+        return cv
+
+    def _voice_draft(self, meta):
+        if meta.get("committed"):
+            cv = self._clause_voice()
+            if cv:
+                cv.draft(meta.get("utt"), meta["committed"])
+
+    def _voice_final(self, de, en, meta):
+        cv = self._clause_voice() if self._settings.get("voice_readout") and en else None
+        if cv:
+            cv.final(meta.get("utt"), de, en)
+        else:
+            self._voice_offer(en, meta)
+
+    def _clauses_stop(self):
+        cv, self._clauses = getattr(self, "_clauses", None), None
+        if cv:
+            cv.stop()
 
     def voice_state(self):
         """For Settings > Audio: is reading aloud on, and which voice would speak."""

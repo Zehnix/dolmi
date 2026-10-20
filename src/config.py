@@ -59,6 +59,7 @@ DEFAULTS = {
     "clarify_queue": False,                       # VOC-9: collect unsure words, ask "Did they say ...?" after Stop
     "capture_both": False,                        # SPK-5: caption the microphone too (mic + speaker mixed, beta)
     "voice_readout": False,                       # VOICE-1: read English finals aloud (experimental, OS voice)
+    "voice_clauses": False,                       # VOICE-9: read clause by clause from stable drafts (faster)
 }
 
 
