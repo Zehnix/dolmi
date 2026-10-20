@@ -64,7 +64,7 @@ SETTABLE = {"speech_source", "mic_device", "language", "show_german", "save_tran
             "bar_time",                                        # LIVE-5
             "capture_both",                                    # SPK-5
             "voice_readout",                                   # VOICE-1
-            "english_only", "english_only_device",             # VOICE-5
+            "english_only", "english_only_device",             # VOICE-5 (Windows), VOICE-6 (Mac)
             "ui_text_size",                                    # APP-14
             "local_only",                                      # STR-7
             "unsure_marks",                                    # STR-8
@@ -1101,7 +1101,8 @@ class Api:
                                              on_level=self._on_level)
                     elif not self._english_only_capture(audio_q, cap):
                         live_subs.loopback_stream(audio_q, cap, self._settings["audio_device"] or None,
-                                                  on_level=self._on_level)
+                                                  on_level=self._on_level,
+                                                  english_only=bool(self._settings.get("english_only")))
             except Exception as e:
                 # no audio means no captions: end the session instead of sitting on "Translating"
                 self._emit("onError", f"Can't record audio: {e}")

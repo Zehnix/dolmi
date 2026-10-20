@@ -4,7 +4,8 @@ The rest of the program (live_subs, models, assistant, config, the webview Api, 
 imports from here. windows.py and mac.py define the same names; this picks one by sys.platform.
 Both modules import on any OS (OS libraries load lazily inside functions), so tests can check both.
 
-    capture   output_devices() input_devices() loopback_stream(out_q, stop, device=None, on_level=None)
+    capture   output_devices() input_devices() loopback_stream(out_q, stop, device=None, on_level=None,
+              english_only=False)
               mic_stream(out_q, stop, device=None, on_level=None) DEFAULT_SPEAKER
               dual_stream(out_q, stop, mic_device=None, speaker_device=None, on_level=None, log=None)
     compute   prepare_gpu() compute_device(device) -> (device, compute_type) auto_speech(gpu=None)

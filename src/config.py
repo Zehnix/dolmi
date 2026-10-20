@@ -59,7 +59,7 @@ DEFAULTS = {
     "clarify_queue": False,                       # VOC-9: collect unsure words, ask "Did they say ...?" after Stop
     "capture_both": False,                        # SPK-5: caption the microphone too (mic + speaker mixed, beta)
     "voice_readout": False,                       # VOICE-1: read English finals aloud (experimental, OS voice)
-    "english_only": False,                        # VOICE-5: send meeting apps to an unheard speaker (Windows, experimental)
+    "english_only": False,                        # VOICE-5/6: meeting apps unheard, Dolmi captures them (Windows route / Mac tap, experimental)
     "english_only_device": "",                    # VOICE-5: that speaker's Windows device id
 }
 
