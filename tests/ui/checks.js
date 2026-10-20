@@ -210,6 +210,37 @@
     sumClose();
   }
 
+  /* the top bar: status chips with the hidden attribute stay hidden (QA: .chip{display:inline-flex} beat it and
+     showed "Local only" and the cloud failover chip all the time), the bar fits
+     on one line and the page never scrolls sideways while a status chip shows */
+  function topBarFits(label){
+    const top=q('.top'), w=W(), bad=[];
+    for(const e of top.children){ if(!visible(e)) continue; const r=e.getBoundingClientRect();
+      if(r.right>w+1||r.left<-1) bad.push(describe(e)+' '+Math.round(r.left)+'..'+Math.round(r.right)); }
+    ok(!bad.length,`${label}: top bar sticks out of the ${w}px window: ${bad.join(', ')}`);
+    const de=document.documentElement;
+    ok(de.scrollWidth<=de.clientWidth+1,`${label}: the page scrolls sideways (${de.scrollWidth} > ${de.clientWidth})`);
+    for(const c of top.querySelectorAll('.chip')){ if(!visible(c)) continue;
+      ok(c.getBoundingClientRect().height<=40,`${label}: ${describe(c)} wraps onto several lines`); }
+  }
+  async function topBarChecks(label){
+    nav('live'); await tick();
+    for(const id of ['chipLocal','chipCloud']) ok(!visible(q('#'+id)),`${label}: #${id} shows although it is hidden`);
+    topBarFits(label);
+    /* .btn eases its size over .2s and headless virtual time does not run transitions: measure the end state */
+    const still=document.createElement('style'); still.textContent='.top *{transition:none!important}'; document.head.append(still);
+    /* one at a time: local-only never talks to the cloud, so the failover chip cannot show next to it */
+    applyLocalOnly(true); await tick();
+    if(W()>1100) ok(visible(q('#chipLocal')),`${label}: #chipLocal does not show when local-only is on`);
+    topBarFits(label+' local only');
+    applyLocalOnly(false); window.dolmi.onCloudStatus('local'); await tick();
+    if(W()>1100) ok(visible(q('#chipCloud')),`${label}: #chipCloud does not show when the cloud is down`);
+    topBarFits(label+' cloud down');
+    window.dolmi.onCloudStatus('cloud'); await tick();
+    still.remove();
+    for(const id of ['chipLocal','chipCloud']) ok(!visible(q('#'+id)),`${label}: #${id} still shows after it was switched off`);
+  }
+
   async function viewChecks(label){
     for(const v of ['live','meetings','assistant','vocab','settings']){
       nav(v); await tick(120);
@@ -363,6 +394,7 @@
     try{
       await tick(300);                     // boot(), settingsBoot() and the first loads settle
       await viewChecks(label);
+      await topBarChecks(label);
       await meetingsChecks(label);
       for(const extra of window.__uiExtra) await extra(label,{ok,tick,q,qa,mark,since,nav,visible,noOverflow,noWrappedToggles,use});
       await settingsChecks(label);         // last: it changes theme, provider and other state

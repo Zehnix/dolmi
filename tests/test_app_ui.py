@@ -55,6 +55,17 @@ def test_catches_wrapped_toggles_and_sideways_scrolling():
     assert any("sticks out of the" in f or "scrolls sideways" in f for f in r["failures"]), _report(r)
 
 
+
+@needs_browser
+def test_catches_status_chips_that_ignore_hidden():
+    """Final QA: .chip{display:inline-flex} beat the hidden attribute, so "Local only" and the cloud failover
+    chip always showed above 1100 px and pushed the Invisible button out of the window."""
+    css = ".chip[hidden]{display:inline-flex!important}"
+    r = ui.run_all(sizes=[(1360, 860, 1)], extra_css=css, overlay=False)["1360x860@1"]
+    assert not r["ok"], _report(r)
+    assert any("#chipLocal shows although it is hidden" in f for f in r["failures"]), _report(r)
+    assert any("#chipCloud shows although it is hidden" in f for f in r["failures"]), _report(r)
+
 def _bridge_calls(text):
     """Python methods a script calls on the bridge: b.name(, a.name(, api().name(, bridge().name(."""
     names = set(re.findall(r"\b(?:b|a|api\(\)|bridge\(\))\.([a-z][a-z_]*)\(", text))
