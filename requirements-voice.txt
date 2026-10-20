@@ -1,0 +1,8 @@
+# VOICE-8 (optional, experimental): what the natural voice needs on top of requirements.txt.
+# Do NOT install kokoro-onnx or misaki[en]: both pull in espeak-ng (GPL-3.0) via espeakng-loader / phonemizer.
+onnxruntime>=1.20
+misaki==0.9.4             # Apache-2.0; English G2P used with fallback=None (no espeak)
+spacy>=3.8,<4             # MIT; misaki's English tokenizer
+num2words>=0.5.14         # LGPL-2.1; numbers to words, used unmodified
+# spaCy's small English model (MIT), from the official spaCy release:
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
