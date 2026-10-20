@@ -210,7 +210,7 @@ document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) barTimeBoot(); e
 
 /* ---- APP-7 global shortcuts: work while Teams or Zoom has the focus. Click a key button, then press the new
    keys (Esc cancels, Backspace puts the default back). ---- */
-const SHORTCUTS=[['toggle_live','Start / stop captions'],['toggle_bar','Show / hide the subtitle bar'],['toggle_source','Switch speaker / microphone'],['toggle_lock','Lock / unlock the subtitle bar']];
+const SHORTCUTS=[['toggle_live','Start / stop captions'],['toggle_bar','Show / hide the subtitle bar'],['toggle_source','Switch speaker / microphone'],['toggle_lock','Lock / unlock the subtitle bar'],['hold_original','Hear the original (hold, headphone mix)']];
 let scMap={},scStatus={},scRec=null;
 function fmtCombo(c){ if(!c) return '—'; const parts=c.split('+'), key=parts.pop().toUpperCase();
   if(PLATFORM.os==='mac') return parts.map(m=>({ctrl:'⌃',alt:'⌥',shift:'⇧',meta:'⌘'})[m]||m).join('')+key;
@@ -263,15 +263,50 @@ if($('#setReport')) $('#setReport').onclick=async()=>{ const b=bridge(); if(!b){
     if(r.ok){ $('#repStatus').textContent='Saved: '+r.path; toast('Report saved'); } else if(!r.cancelled) toast(r.message||'Could not save the report'); }
   catch(e){ console.error('report_problem',e); toast('Could not save the report'); } };
 /* ---- VOICE-1 prototype: read the English subtitles aloud with the system voice (off by default). It does
-   not mute or turn down the meeting audio yet, so both are heard; subtitles keep showing every line. ---- */
+   not mute or turn down the meeting audio yet, so both are heard; subtitles keep showing every line.
+   VOICE-8: natural voice (Kokoro, download once). VOICE-7: Dolmi's headphone mix and its setup. ---- */
 { const m=settingsMount('audio.voice');
-  if(m) m.innerHTML=`<div class="set" data-kw="voice read aloud speak translation tts text to speech headset experimental"><div><div class="lab">Read translations aloud <span class="mtag">experimental</span></div><div class="ps" id="voiceHint">Speaks each English line with the system voice. The meeting audio is not muted or turned down yet, so you hear both. Lines that fall behind are skipped; subtitles show everything</div></div><button class="sw" id="swVoice" aria-label="Read translations aloud"></button></div>`; }
+  if(m){ m.innerHTML=`<div class="set" data-kw="voice read aloud speak translation tts text to speech headset experimental"><div><div class="lab">Read translations aloud <span class="mtag">experimental</span></div><div class="ps" id="voiceHint">Speaks each English line with the system voice. The meeting audio is not muted or turned down yet, so you hear both. Lines that fall behind are skipped; subtitles show everything</div></div><button class="sw" id="swVoice" aria-label="Read translations aloud"></button></div>
+    <div class="set" data-kw="natural voice kokoro tts download human sounding experimental"><div><div class="lab">Natural voice <span class="mtag">experimental</span></div><div class="ps" id="voiceNatHint">A more human English voice that runs on this computer. Falls back to the system voice when it is not downloaded</div></div><div style="display:flex;gap:8px;align-items:center"><button class="btn ghost" id="voiceDl" hidden>Download</button><button class="sw" data-sw id="swVoiceNatural" aria-label="Natural voice"></button></div></div>
+    <div class="set" data-kw="headphone mix original german safety net duck quiet translated voice experimental"><div><div class="lab">Headphone mix <span class="mtag">experimental</span></div><div class="ps">Dolmi plays the voice on your headphones with the original speech quietly underneath, turned down while the voice speaks. Hold <span id="voiceHoldKey">Ctrl+Alt+Shift+O</span> to hear the original</div></div><button class="sw" data-sw id="swVoiceMix" aria-label="Headphone mix"></button></div>
+    <div class="set" data-kw="headphones output device headset bluetooth voice mix setup"><div><div class="lab">Headphones</div><div class="ps" id="voiceCheck">Pick the headphones you wear in the meeting</div></div><div style="display:flex;gap:8px;align-items:center"><button class="btn ghost" id="voiceTest">Test tone</button><select class="field" id="setVoiceOut"><option value="">Default output</option></select></div></div>
+    <div class="set" data-kw="original level safety net german volume quiet slider"><div><div class="lab">Original underneath</div><div class="ps">How loud the original speech plays under the voice. 0 % is English only</div></div><div style="display:flex;gap:10px;align-items:center"><input type="range" id="setVoiceSafety" min="0" max="30" value="10" style="accent-color:var(--ac);width:150px" aria-label="Original underneath"><span class="mtag" id="setVoiceSafetyVal">10%</span></div></div>
+    <div class="set" data-kw="stereo split left right ear english german"><div><div class="lab">English left, original right</div><div class="ps">Each in its own ear</div></div><button class="sw" data-sw id="swVoiceSplit" aria-label="English left, original right"></button></div>
+    <div class="set" data-kw="name chime alert my name called mentioned"><div><div class="lab">Chime when I am named</div><div class="ps">Your name as people say it, several separated by commas. Dolmi chimes when it appears in what they say</div></div><input class="field" id="setVoiceNames" placeholder="e.g. Anna, Anni" spellcheck="false" maxlength="120" style="width:200px;max-width:100%"></div>`;
+    wireNewSwitches(m); } }
 async function voiceHint(){ const b=bridge(), h=$('#voiceHint'); if(!b||!h||!b.voice_state) return;
   try{ const v=await b.voice_state(); if(!v.available) h.textContent='No system voice was found on this computer, so nothing can be read aloud'; }catch(e){ console.error('voice state',e); } }
+async function voiceSetup(){ const b=bridge(); if(!b||!b.voice_setup) return;
+  try{ const v=await b.voice_setup(), s=await b.state(), sel=$('#setVoiceOut');
+    if(sel){ const cur=s.voiceOutDevice||''; sel.innerHTML='<option value="">Default output</option>'+(v.devices||[]).map(d=>`<option value="${esc(d)}">${esc(d)}</option>`).join('');
+      if(cur&&!(v.devices||[]).includes(cur)) sel.insertAdjacentHTML('beforeend',`<option value="${esc(cur)}">${esc(cur)}</option>`); sel.value=cur; }
+    const c=$('#voiceCheck'); if(c){ c.textContent=v.check.message; c.style.color=v.check.level==='ok'?'':'var(--danger)'; }
+    const n=v.natural||{}, dl=$('#voiceDl'), nh=$('#voiceNatHint');
+    if(dl){ dl.hidden=!!n.installed; dl.disabled=!!n.downloading; dl.textContent=n.downloading?`Downloading… ${n.mb||0} MB`:`Download (${n.sizeMb||94} MB)`; }
+    if(nh) nh.textContent=!n.installed?'A more human English voice that runs on this computer. Download it once; until then the system voice speaks'
+      :!n.deps?'Downloaded, but this build cannot run it yet, so the system voice speaks':'A more human English voice that runs on this computer. Falls back to the system voice if it fails';
+  }catch(e){ console.error('voice setup',e); } }
 if($('#swVoice')) $('#swVoice').onclick=async()=>{ const sw=$('#swVoice'), on=!sw.classList.contains('on'), b=bridge(); sw.classList.toggle('on',on);
   if(b&&!await b.set_setting('voice_readout',on)){ sw.classList.toggle('on',!on); return; }
   toast(on?'Reading translations aloud (experimental)':'Reading aloud off'); voiceHint(); };
-async function voiceBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state(); setSw('#swVoice',!!s.voiceReadout); voiceHint(); }catch(e){ console.error('voice boot',e); } }
+[['#swVoiceNatural','voice_natural'],['#swVoiceMix','voice_mix'],['#swVoiceSplit','voice_split']].forEach(([sel,key])=>{ const e=$(sel); if(e) e.addEventListener('click',async()=>{
+  const b=bridge(); if(!b) return; const on=e.classList.contains('on'); if(!await b.set_setting(key,on)){ e.classList.toggle('on',!on); return; } voiceSetup(); }); });
+if($('#setVoiceOut')) $('#setVoiceOut').addEventListener('change',async()=>{ const b=bridge(); if(b){ await b.set_setting('voice_out_device',$('#setVoiceOut').value); voiceSetup(); } });
+if($('#setVoiceSafety')){ const e=$('#setVoiceSafety'); let tm; e.addEventListener('input',()=>{ $('#setVoiceSafetyVal').textContent=e.value+'%'; clearTimeout(tm);
+  tm=setTimeout(()=>{ const b=bridge(); if(b) b.set_setting('voice_safety',(+e.value)/100); },150); }); }
+if($('#setVoiceNames')) $('#setVoiceNames').addEventListener('change',()=>{ const b=bridge(); if(b) b.set_setting('voice_names',$('#setVoiceNames').value); });
+if($('#voiceTest')) $('#voiceTest').onclick=async()=>{ const b=bridge(); if(!b) return; const r=await b.voice_test_tone(); toast(r.ok?'Playing a test tone on your headphones':r.message); };
+if($('#voiceDl')) $('#voiceDl').onclick=async()=>{ const b=bridge(); if(!b) return; if(await b.download_voice_model()){ toast('Downloading the natural voice'); voiceSetup(); } };
+{ const pp=window.dolmi.onModelProgress, pd=window.dolmi.onModelDone, pn=window.dolmi.onNameHeard;
+  window.dolmi.onModelProgress=(k,mb,total)=>{ if(k==='kokoro'){ const dl=$('#voiceDl'); if(dl) dl.textContent=`Downloading… ${mb} of ${total} MB`; return; } if(pp) pp(k,mb,total); };
+  window.dolmi.onModelDone=(k,err)=>{ if(k==='kokoro'){ toast(err||'Natural voice downloaded'); voiceSetup(); return; } if(pd) pd(k,err); };
+  window.dolmi.onNameHeard=de=>{ if(pn) pn(de); toast('Someone said your name'); }; }
+async function voiceBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state(); setSw('#swVoice',!!s.voiceReadout);
+  setSw('#swVoiceNatural',!!s.voiceNatural); setSw('#swVoiceMix',!!s.voiceMix); setSw('#swVoiceSplit',!!s.voiceSplit);
+  const pct=Math.round((s.voiceSafety??0.1)*100); if($('#setVoiceSafety')){ $('#setVoiceSafety').value=pct; $('#setVoiceSafetyVal').textContent=pct+'%'; }
+  if($('#setVoiceNames')) $('#setVoiceNames').value=s.voiceNames||'';
+  if($('#voiceHoldKey')&&s.shortcuts&&s.shortcuts.hold_original) $('#voiceHoldKey').textContent=fmtCombo(s.shortcuts.hold_original);
+  voiceHint(); voiceSetup(); }catch(e){ console.error('voice boot',e); } }
 document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) voiceBoot(); else window.addEventListener('pywebviewready',voiceBoot); });
 /* STR-7: local-only mode switch and the "Local only" chip; STR-9: the "Using this PC" (cloud down) chip */
 function statusChips(){ const t=$('.top'); if(t) t.classList.toggle('has-status',!!$('#chipLocal:not([hidden]),#chipCloud:not([hidden])')); }

@@ -19,8 +19,9 @@
     speechModel:'auto',overlay:true,theme:'paper',listening:false,opacity:.88,font:22,warnSilence:true,barVisible:false,
     engine:'not loaded',engineState:'idle',dataFolder:'C:\\Users\\Test\\Documents\\Dolmi',version:'2.2.0',
     checkUpdates:true,barLocked:false,uiTextSize:'normal',shortcutsOn:true,speakerLabels:false,voiceReadout:false,
-    shortcuts:{toggle_live:'ctrl+alt+shift+s',toggle_bar:'ctrl+alt+shift+b',toggle_source:'ctrl+alt+shift+m',toggle_lock:'ctrl+alt+shift+l'},
-    shortcutStatus:{toggle_live:true,toggle_bar:true,toggle_source:true,toggle_lock:false},
+    voiceNatural:false,voiceMix:false,voiceSafety:0.1,voiceSplit:false,voiceOutDevice:'',voiceNames:'',
+    shortcuts:{toggle_live:'ctrl+alt+shift+s',toggle_bar:'ctrl+alt+shift+b',toggle_source:'ctrl+alt+shift+m',toggle_lock:'ctrl+alt+shift+l',hold_original:'ctrl+alt+shift+o'},
+    shortcutStatus:{toggle_live:true,toggle_bar:true,toggle_source:true,toggle_lock:false,hold_original:true},
     platform:{os:'win',words:WORDS}};
   const meetings=[
     {name:'meeting_2026-10-19_10-00.md',day:'Mon 19 Oct 2026',time:'10:00',lines:3,date:'2026-10-19',title:'Release planning for the next sprint',titleSource:'lines'},
@@ -41,7 +42,11 @@
   const canned={
     state:()=>JSON.parse(JSON.stringify(state)),
     set_setting:()=>true,
-    voice_state:()=>({on:false,available:true,backend:'windows',spoken:0,skipped:0}),   // VOICE-1
+    voice_state:()=>({on:false,available:true,backend:'windows',spoken:0,skipped:0,mix:false}),   // VOICE-1
+    voice_setup:()=>({ok:true,devices:['Speakers (Realtek Audio)','Headphones (USB)'],germanAllowed:false,   // VOICE-7/8
+      check:{level:'warn',message:'Pick your headphones.'},natural:{installed:false,deps:true,downloading:false,sizeMb:94,mb:0}}),
+    voice_test_tone:()=>({ok:true}),
+    download_voice_model:()=>true,
     pc_info:()=>({ram_gb:32,cores:16,gpu:true,gpu_name:'NVIDIA GeForce RTX 4060',model_dir:'C:\\Users\\Test\\.cache\\huggingface\\hub',data_dir:state.dataFolder}),
     devices:()=>['Speakers (Realtek Audio)','Headset (USB)'],
     mic_devices:()=>['Microphone (USB)','Microphone Array'],

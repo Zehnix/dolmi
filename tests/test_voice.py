@@ -180,7 +180,8 @@ def test_no_voice_on_this_computer_keeps_captions(api, monkeypatch):
     monkeypatch.setattr(tts, "select_backend", lambda backends=None: None)
     api.set_setting("voice_readout", True)
     api._voice_offer("Hello.", {})
-    assert api.voice_state() == {"on": True, "available": False, "backend": "", "spoken": 0, "skipped": 0}
+    assert api.voice_state() == {"on": True, "available": False, "backend": "", "spoken": 0, "skipped": 0,
+                                 "mix": False}
 
 
 def test_settings_page_has_the_switch_and_says_it_does_not_mute():

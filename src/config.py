@@ -59,6 +59,8 @@ DEFAULTS = {
     "clarify_queue": False,                       # VOC-9: collect unsure words, ask "Did they say ...?" after Stop
     "capture_both": False,                        # SPK-5: caption the microphone too (mic + speaker mixed, beta)
     "voice_readout": False,                       # VOICE-1: read English finals aloud (experimental, OS voice)
+    "voice_natural": False,                       # VOICE-8: Kokoro natural voice when downloaded (else OS voice)
+    "voice_mix": False, "voice_safety": 0.10, "voice_split": False, "voice_out_device": "", "voice_names": "",  # VOICE-7: headphone mix
 }
 
 
