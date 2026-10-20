@@ -265,13 +265,16 @@ if($('#setReport')) $('#setReport').onclick=async()=>{ const b=bridge(); if(!b){
 /* ---- VOICE-1 prototype: read the English subtitles aloud with the system voice (off by default). It does
    not mute or turn down the meeting audio yet, so both are heard; subtitles keep showing every line. ---- */
 { const m=settingsMount('audio.voice');
-  if(m) m.innerHTML=`<div class="set" data-kw="voice read aloud speak translation tts text to speech headset experimental"><div><div class="lab">Read translations aloud <span class="mtag">experimental</span></div><div class="ps" id="voiceHint">Speaks each English line with the system voice. The meeting audio is not muted or turned down yet, so you hear both. Lines that fall behind are skipped; subtitles show everything</div></div><button class="sw" id="swVoice" aria-label="Read translations aloud"></button></div>`; }
+  if(m) m.innerHTML=`<div class="set" data-kw="voice read aloud speak translation tts text to speech headset experimental"><div><div class="lab">Read translations aloud <span class="mtag">experimental</span></div><div class="ps" id="voiceHint">Speaks each English line with the system voice. The meeting audio is not muted or turned down yet, so you hear both. Lines that fall behind are skipped; subtitles show everything</div></div><button class="sw" id="swVoice" aria-label="Read translations aloud"></button></div><div class="set" data-kw="voice clause faster speak sooner latency delay experimental"><div><div class="lab">Speak clause by clause <span class="mtag">experimental</span></div><div class="ps">Starts speaking each part of a sentence as soon as it is clear, instead of waiting for the whole line. Faster, but the voice may differ slightly from the final subtitle</div></div><button class="sw" id="swVoiceClauses" aria-label="Speak clause by clause"></button></div>`; }
 async function voiceHint(){ const b=bridge(), h=$('#voiceHint'); if(!b||!h||!b.voice_state) return;
   try{ const v=await b.voice_state(); if(!v.available) h.textContent='No system voice was found on this computer, so nothing can be read aloud'; }catch(e){ console.error('voice state',e); } }
 if($('#swVoice')) $('#swVoice').onclick=async()=>{ const sw=$('#swVoice'), on=!sw.classList.contains('on'), b=bridge(); sw.classList.toggle('on',on);
   if(b&&!await b.set_setting('voice_readout',on)){ sw.classList.toggle('on',!on); return; }
   toast(on?'Reading translations aloud (experimental)':'Reading aloud off'); voiceHint(); };
-async function voiceBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state(); setSw('#swVoice',!!s.voiceReadout); voiceHint(); }catch(e){ console.error('voice boot',e); } }
+if($('#swVoiceClauses')) $('#swVoiceClauses').onclick=async()=>{ const sw=$('#swVoiceClauses'), on=!sw.classList.contains('on'), b=bridge(); sw.classList.toggle('on',on);
+  if(b&&!await b.set_setting('voice_clauses',on)){ sw.classList.toggle('on',!on); return; }
+  toast(on?'Speaking clause by clause (experimental)':'Speaking whole lines'); };
+async function voiceBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state(); setSw('#swVoice',!!s.voiceReadout); setSw('#swVoiceClauses',!!s.voiceClauses); voiceHint(); }catch(e){ console.error('voice boot',e); } }
 document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) voiceBoot(); else window.addEventListener('pywebviewready',voiceBoot); });
 /* STR-7: local-only mode switch and the "Local only" chip; STR-9: the "Using this PC" (cloud down) chip */
 function statusChips(){ const t=$('.top'); if(t) t.classList.toggle('has-status',!!$('#chipLocal:not([hidden]),#chipCloud:not([hidden])')); }
