@@ -52,6 +52,10 @@ def _instance_name():
     return "Dolmi"
 
 
+class _Starting:
+    """The start page's bridge: nothing to call yet."""
+
+
 def main():
     _setup_output()
     instance = dolmi_platform.single_instance(_instance_name())   # APP-5: one Dolmi at a time
@@ -62,23 +66,45 @@ def main():
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
     dolmi_platform.register_app()                             # Windows: own taskbar entry + icon
 
-    from ui import app as app_mod
+    # The window comes up first, on a light start page, and the heavy imports (speech, translation,
+    # audio) follow inside it. On the first start of the day the antivirus scans every one of those
+    # files, which took over a minute with nothing on screen, so people clicked again and again.
+    state = {"api": None}
 
-    api = app_mod.Api()
-
-    def make_window(x=None, y=None, width=1180, height=780):
+    def make_window(x=None, y=None, width=1180, height=780, page="index.html", js_api=None):
         w = webview.create_window(
-            "Dolmi", url=str((WEB / "index.html").as_uri()), js_api=api, x=x, y=y,
+            "Dolmi", url=str((WEB / page).as_uri()), js_api=js_api or state["api"], x=x, y=y,
             width=width, height=height, min_size=(900, 600), background_color="#F2ECDF",
             text_select=True)   # captions, transcripts and answers must be selectable/copyable
-        w.events.closed += lambda *_: api._on_main_closed(w)   # closing the window quits Dolmi
+        w.events.closed += lambda *_: _closed(w)   # closing the window quits Dolmi
         return w
 
-    window = make_window()
-    api._window = window
-    api._make_window = make_window   # Mac: invisible off rebuilds the window (see dolmi_platform/mac.py)
+    def _closed(w):
+        print("Dolmi: the main window closed")
+        api = state["api"]
+        if api is None:                  # closed while still starting: nothing to save or restore
+            os._exit(0)
+        api._on_main_closed(w)
+
+    def bring_forward():
+        api = state["api"]
+        if api is not None:
+            api._bring_to_front()
+        else:
+            dolmi_platform.bring_to_front(window)
+
+    window = make_window(page="starting.html", js_api=_Starting())
 
     def on_start():
+        instance.listen(bring_forward)   # APP-5: a second launch brings this window forward, even while starting
+        from ui import app as app_mod
+        api = app_mod.Api()
+        api._window = window
+        api._make_window = make_window   # Mac: invisible off rebuilds the window (see dolmi_platform/mac.py)
+        state["api"] = api
+        atexit.register(api._routing_end)
+        window._js_api = api             # the real page gets the full bridge when it loads
+        window.load_url(str((WEB / "index.html").as_uri()))
         # apply a saved "invisible" setting once the window really exists (no HWND/NSWindow before)
         try:
             window.events.shown.wait(10)
@@ -87,13 +113,10 @@ def main():
         if api._settings.get("invisible"):
             api.toggle_invisible(True)
         api._start_background()          # APP-4: load the downloaded models now, so Start is instant
-        instance.listen(api._bring_to_front)   # APP-5: a second launch brings this window forward
         api._start_update_check()        # APP-6: is a newer release out? (setting; silent when offline)
         # a system-wide hotkey always brings Dolmi back, even hidden from the taskbar / Dock
         dolmi_platform.start_recover_hotkey(api.recover)
         api._start_shortcuts()           # APP-7: start/stop, bar, source, lock from any app (after the recover key)
-
-    atexit.register(api._routing_end)
 
     icon = dolmi_platform.app_icon(ROOT)
     webview.start(on_start, gui=dolmi_platform.WEBVIEW_GUI, private_mode=False, icon=str(icon))

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Dolmi</title>
+<style>
+  html, body { height: 100%; margin: 0; background: #F2ECDF; color: #2B2620;
+    font: 15px/1.4 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  body { display: grid; place-items: center; }
+  .box { display: grid; justify-items: center; gap: 14px; }
+  img { width: 64px; height: 64px; }
+  .bar { width: 160px; height: 3px; border-radius: 2px; background: #E1D8C6; overflow: hidden; }
+  .bar i { display: block; width: 40%; height: 100%; background: #8A6E46; animation: go 1.2s ease-in-out infinite; }
+  @keyframes go { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+  @media (prefers-reduced-motion: reduce) { .bar i { animation: none; width: 100%; } }
+  p { margin: 0; color: #6B6255; }
+</style>
+</head>
+<body>
+  <div class="box">
+    <img src="dolmi.png" alt="">
+    <p>Starting Dolmi…</p>
+    <div class="bar"><i></i></div>
+  </div>
+</body>
+</html>
