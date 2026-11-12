@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Dolmi for the Microsoft Store (MSIX). A template: build-msix.ps1 fills every double-braced placeholder from
+  store-config.psd1 (Partner Center identity) and VERSION, and writes the result into the package layout.
+
+  Why each declaration is here:
+  - runFullTrust: Dolmi is a classic desktop app (embedded Python + WebView2), started as
+    runtime\pythonw.exe -m dolmi_launch (uap10:Parameters; dolmi_launch.py sits next to pythonw.exe).
+  - microphone: captions for in-person meetings. Speaker capture (WASAPI loopback) and the English-only
+    routing of meeting apps need no capability in a full-trust app.
+  - unvirtualizedResources + the two FileSystemWriteVirtualization properties: Dolmi's settings,
+    vocabulary and glossary (%APPDATA%\Dolmi) and its log and GPU add-on (%LOCALAPPDATA%\Dolmi) stay in
+    the real folders, shared with the classic installer's Dolmi and kept on uninstall like the user's
+    transcripts. Windows 11 excludes only those two folders; Windows 10 (which ignores the per-folder
+    list) turns AppData write virtualization off for the app.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  xmlns:virtualization="http://schemas.microsoft.com/appx/manifest/virtualization/windows10"
+  IgnorableNamespaces="uap uap10 desktop6 rescap virtualization">
+
+  <Identity
+    Name="{{IDENTITY_NAME}}"
+    Publisher="{{PUBLISHER}}"
+    Version="{{VERSION}}"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>{{DISPLAY_NAME}}</DisplayName>
+    <PublisherDisplayName>{{PUBLISHER_DISPLAY_NAME}}</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <desktop6:FileSystemWriteVirtualization>disabled</desktop6:FileSystemWriteVirtualization>
+    <virtualization:FileSystemWriteVirtualization>
+      <virtualization:ExcludedDirectories>
+        <virtualization:ExcludedDirectory>$(KnownFolder:RoamingAppData)\Dolmi</virtualization:ExcludedDirectory>
+        <virtualization:ExcludedDirectory>$(KnownFolder:LocalAppData)\Dolmi</virtualization:ExcludedDirectory>
+      </virtualization:ExcludedDirectories>
+    </virtualization:FileSystemWriteVirtualization>
+  </Properties>
+
+  <Dependencies>
+    <!-- invisible mode (screen-capture exclusion) needs Windows 10 2004 (19041), as in dolmi.iss -->
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application
+      Id="Dolmi"
+      Executable="runtime\pythonw.exe"
+      uap10:Parameters="-m dolmi_launch"
+      EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="{{DISPLAY_NAME}}"
+        Description="Live meeting subtitles translated to English, on your PC"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" ShortName="Dolmi" />
+        <uap:SplashScreen Image="Assets\SplashScreen.png" BackgroundColor="#F2ECDF" />
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="unvirtualizedResources" />
+    <DeviceCapability Name="microphone" />
+  </Capabilities>
+</Package>
