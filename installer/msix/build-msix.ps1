@@ -88,6 +88,17 @@ New-Item -ItemType Directory -Force $layout | Out-Null
 Copy-Item (Join-Path $stage "*") $layout -Recurse
 Copy-Item (Join-Path $here "dolmi_launch.py") (Join-Path $layout "runtime")   # -m dolmi_launch (manifest)
 
+# The certification kit flags archives and process-launching .exe files. None of these run in Dolmi:
+# the libraries' own test folders, and the setuptools/distlib script launchers (the GPU add-on's
+# pip install makes no scripts).
+$site = Join-Path $layout "runtime\Lib\site-packages"
+Get-ChildItem $site -Recurse -Directory -Filter "tests" | Where-Object { $_.FullName -match '\\(networkx|numpy)\\' } |
+    Remove-Item -Recurse -Force
+Get-ChildItem $site -Recurse -File -Include "*.gz", "*.bz2" | Where-Object { $_.FullName -match '\\(networkx|numpy)\\' } |
+    Remove-Item -Force
+Get-ChildItem (Join-Path $site "setuptools"), (Join-Path $site "pip\_vendor\distlib") -File -Filter "*.exe" -ErrorAction SilentlyContinue |
+    Remove-Item -Force
+
 # The package folder is read-only, and timestamp-checked .pyc files can go stale when the files' times
 # change in the package, so Python would compile in memory on every start. Hash-based .pyc files that are
 # never re-checked suit a package that cannot change.
