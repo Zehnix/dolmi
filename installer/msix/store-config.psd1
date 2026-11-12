@@ -7,9 +7,9 @@
 # signed with a self-signed certificate. A Store upload needs the real values (and no signing:
 # the Store signs it).
 @{
-  IdentityName         = 'PASTE_PARTNER_CENTER_IDENTITY_NAME'      # e.g. 12345Zehnix.Dolmi
-  Publisher            = 'PASTE_PARTNER_CENTER_PUBLISHER_CN'       # e.g. CN=1A2B3C4D-5E6F-7A8B-9C0D-1E2F3A4B5C6D
-  PublisherDisplayName = 'PASTE_PARTNER_CENTER_PUBLISHER_DISPLAY_NAME'   # e.g. Zehnix
+  IdentityName         = 'Zehnix.Dolmi'
+  Publisher            = 'CN=4615264E-CFEC-4CD3-ACF1-BB7F42CC0DF3'
+  PublisherDisplayName = 'Zehnix'
   DisplayName          = 'Dolmi'                                   # the reserved app name
 
   # Local test package: its own identity, so it installs next to the classic (Inno) Dolmi.

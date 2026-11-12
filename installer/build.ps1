@@ -1,4 +1,4 @@
-# Builds the Dolmi installer: a self-contained app folder (dist\Dolmi) that runs on the official
+﻿# Builds the Dolmi installer: a self-contained app folder (dist\Dolmi) that runs on the official
 # embeddable CPython, then dist\Dolmi-Setup-<version>.exe via Inno Setup.
 #
 #   powershell -ExecutionPolicy Bypass -File installer\build.ps1                 # version from VERSION
@@ -86,7 +86,9 @@ Copy-Item (Join-Path $root "THIRD-PARTY-NOTICES.md") $stage
 
 Step "Precompile (.pyc) so first start is fast and never writes into Program Files"
 $rtPy = Join-Path $runtime "python.exe"
-& $rtPy -m compileall -q -j 0 $site $appDir | Out-Null
+# -W ignore: a library's SyntaxWarning on stderr is a terminating error in Windows PowerShell 5.1,
+# which stopped the build here and left the parallel compile's workers waiting forever.
+& $rtPy -W ignore -m compileall -q -j 0 $site $appDir | Out-Null
 Assert-Exit "compileall"
 
 Step "Smoke test: the bundled runtime imports the whole app"
