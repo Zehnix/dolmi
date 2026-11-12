@@ -36,11 +36,11 @@ Labelling who said what is processing personal data about the other participants
 
 ## 3. GPU add-on (optional, Windows) — downloaded from PyPI
 
-If you tick **GPU speech recognition** in the installer, it downloads NVIDIA's CUDA libraries from [PyPI](https://pypi.org) once, during setup.
+If you tick **GPU speech recognition** in the installer, it downloads NVIDIA's CUDA libraries (about 1.3 GB) from [PyPI](https://pypi.org) once, during setup. The Microsoft Store version has no installer step: it downloads the same libraries once when you press **Install GPU add-on** in *Settings → Speech models*, into `%LOCALAPPDATA%\Dolmi\gpu`.
 
 ## Update check (on by default, can be turned off)
 
-The one request you don't start yourself: when Dolmi opens, it asks GitHub's public API which Dolmi release is the latest (`api.github.com/repos/Zehnix/dolmi/releases/latest`). The request carries no personal data and nothing about your meetings, only what any web request sends (your IP address) and a User-Agent naming the Dolmi version. GitHub's [privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement) applies. If a newer version exists, Dolmi offers **Download x.y.z**, which opens the release page in your browser; nothing is downloaded or installed by itself. Offline or slow (over 5 s), the check is silently skipped. **To opt out:** turn off *Settings → About & updates → Check for updates* (**Check now** still works when you press it).
+The Microsoft Store version has no update check of its own: the Store installs its updates. In the installer version and the Mac app, this is the one request you don't start yourself: when Dolmi opens, it asks GitHub's public API which Dolmi release is the latest (`api.github.com/repos/Zehnix/dolmi/releases/latest`). The request carries no personal data and nothing about your meetings, only what any web request sends (your IP address) and a User-Agent naming the Dolmi version. GitHub's [privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement) applies. If a newer version exists, Dolmi offers **Download x.y.z**, which opens the release page in your browser; nothing is downloaded or installed by itself. Offline or slow (over 5 s), the check is silently skipped. **To opt out:** turn off *Settings → About & updates → Check for updates* (**Check now** still works when you press it).
 
 ## Local only (off by default)
 
@@ -65,4 +65,4 @@ Settings > Privacy & data > **Local only** stops every connection Dolmi makes: c
 
 ## Contact
 
-Questions about privacy: [open an issue](https://github.com/Zehnix/dolmi/issues).
+Questions about privacy: write to hello@zehnix.co or [open an issue](https://github.com/Zehnix/dolmi/issues). This policy is also published at [dolmi.zehnix.co/privacy](https://dolmi.zehnix.co/privacy).
