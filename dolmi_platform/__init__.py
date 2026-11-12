@@ -20,6 +20,8 @@ Both modules import on any OS (OS libraries load lazily inside functions), so te
               start_shortcuts({name: (modifiers, key)}, on_press(name)) -> handle (.status, .stop())
     instance  single_instance(name="Dolmi") -> guard (.listen(on_activate), .close()) | None if one runs
               bring_to_front(window)
+    store     is_packaged() -> bool (Microsoft Store/MSIX run: read-only program folder, Store updates)
+              install_gpu_addon() -> (ok, message)   (Store package: GPU add-on into %LOCALAPPDATA%\\Dolmi\\gpu)
     words     OS ("win" | "mac")  WORDS {key: user-visible word}  MODEL_NOTES {speech model key: note}
 """
 import sys
@@ -34,6 +36,7 @@ API = (
     "config_dir", "log_dir", "documents_folder", "needs_log_file",
     "start_recover_hotkey", "start_shortcuts",
     "single_instance", "bring_to_front",
+    "is_packaged", "install_gpu_addon",
 )
 
 if sys.platform == "darwin":

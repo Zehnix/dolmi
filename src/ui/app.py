@@ -403,6 +403,7 @@ class Api:
         self._ids = itertools.count()
         self._level = 0.0
         self._pc = None                      # cached PC specs (pc_info)
+        self._gpu_install_lock = threading.Lock()   # Store package: one GPU add-on download at a time
         self._model_lists = {}               # (provider, key) -> model IDs
         self._dl = set()                     # model keys downloading right now
         self._ui_q = queue.Queue()
@@ -642,6 +643,7 @@ class Api:
             "cloudFailover": bool(s.get("cloud_failover")), "tidyFillers": bool(s.get("tidy_fillers", True)),
             "checkUpdates": bool(s.get("check_updates", True)), "update": self._update, "dataFolder": str(self._data), "version": VERSION,
             "platform": {"os": dolmi_platform.OS, "words": dolmi_platform.WORDS},
+            "packaged": dolmi_platform.is_packaged(),   # Microsoft Store: the Store updates Dolmi
         }
 
     def set_setting(self, key, value):
@@ -709,7 +711,7 @@ class Api:
         """What this computer has — detected, never assumed — and where Dolmi keeps things."""
         if self._pc is None:
             info = {"ram_gb": 0, "cores": os.cpu_count() or 1, "gpu": False, "gpu_name": "",
-                    "model_dir": "", "data_dir": str(self._data)}
+                    "model_dir": "", "data_dir": str(self._data), "packaged": dolmi_platform.is_packaged()}
             try:
                 dolmi_platform.prepare_gpu()           # pip-installed CUDA libs count as installed
                 import models
@@ -725,6 +727,27 @@ class Api:
                 pass
             self._pc = info
         return self._pc
+
+    def install_gpu_addon(self):
+        """Store package only: download NVIDIA's CUDA libraries (about 1.3 GB) into %LOCALAPPDATA%\\Dolmi\\gpu,
+        then load the speech model again so it runs on the GPU. {"ok", "message", "gpu"}."""
+        if not dolmi_platform.is_packaged():
+            return {"ok": False, "message": "Reinstall Dolmi and tick the GPU add-on.", "gpu": False}
+        if not self._gpu_install_lock.acquire(blocking=False):
+            return {"ok": False, "message": "The GPU add-on is already downloading.", "gpu": False}
+        try:
+            ok, message = dolmi_platform.install_gpu_addon()
+        except Exception as e:                       # local-only mode (netgate) or an unexpected failure
+            print(f"GPU add-on install failed: {e}")
+            ok, message = False, str(e)
+        finally:
+            self._gpu_install_lock.release()
+        self._pc = None                              # detect the GPU again
+        gpu = bool(self.pc_info().get("gpu"))
+        if ok and gpu and not self._session:
+            self._drop_engine()                      # the next load picks the GPU
+            self._request_warm()
+        return {"ok": ok, "message": message, "gpu": gpu}
 
     def copy_text(self, text):
         """Put text on the system clipboard (works regardless of the webview's clipboard permissions)."""
@@ -1635,9 +1658,10 @@ class Api:
         if "NVIDIA" not in (card or "").upper():
             return
         print(f"Whisper fell back to the CPU although {card} is present")
+        fix = ("Install it in Settings > Speech models." if dolmi_platform.is_packaged()
+               else "Reinstall Dolmi with the GPU add-on to fix it.")
         self._emit("onError", f"Dolmi is running on the CPU, not your {card}: the GPU add-on is missing or "
-                              "damaged, so captions and the voice lag behind. Reinstall Dolmi with the GPU "
-                              "add-on to fix it.")
+                              f"damaged, so captions and the voice lag behind. {fix}")
 
     def _set_engine_state(self, state, label=None):
         """idle | loading | ready | missing; the page says 'Ready' only for "ready"."""
@@ -2566,12 +2590,15 @@ class Api:
     # ------------------------------------------------------------------ update check (APP-6)
     def _start_update_check(self):
         """Called once by main when the window is up: ask GitHub in the background (when allowed)."""
-        if self._settings.get("check_updates", True):
+        if self._settings.get("check_updates", True) and not dolmi_platform.is_packaged():
             threading.Thread(target=self.check_update, name="dolmi-update", daemon=True).start()
 
     def check_update(self, force=False):
         """Is a newer Dolmi out? {"available", "version", "url", "current"}. Skipped (available False,
         "off" True) when the setting is off, unless the user pressed "Check now" (force)."""
+        if dolmi_platform.is_packaged():           # Microsoft Store: the Store installs updates, never GitHub
+            return {"available": False, "version": "", "url": updates.RELEASES_PAGE, "current": VERSION,
+                    "off": True, "store": True}
         if not force and not self._settings.get("check_updates", True):
             return {"available": False, "version": "", "url": updates.RELEASES_PAGE, "current": VERSION, "off": True}
         result = updates.check(VERSION)

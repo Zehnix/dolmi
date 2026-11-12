@@ -153,12 +153,76 @@ def dual_stream(out_q: queue.Queue, stop: threading.Event, mic_device=None, spea
     from ._dual import dual
     dual(mic_stream, loopback_stream, out_q, stop, mic_device, speaker_device, on_level, log)
 
+# ------------------------------------------------------------------ Microsoft Store (MSIX) package
+APPMODEL_ERROR_NO_PACKAGE = 15700
+ERROR_INSUFFICIENT_BUFFER = 122
+_packaged = None
+
+
+def is_packaged():
+    """True when this process runs from the Microsoft Store (MSIX) package. Its install folder is then
+    read-only and the Store handles updates. Asked once (GetCurrentPackageFullName, Windows 8+)."""
+    global _packaged
+    if _packaged is None:
+        try:
+            n = ctypes.c_uint32(0)
+            rc = ctypes.windll.kernel32.GetCurrentPackageFullName(ctypes.byref(n), None)
+            _packaged = rc == ERROR_INSUFFICIENT_BUFFER   # has a name; APPMODEL_ERROR_NO_PACKAGE when not
+        except (AttributeError, OSError):
+            _packaged = False
+    return _packaged
+
+
+def gpu_dir() -> Path:
+    """Where the optional GPU add-on (NVIDIA cuBLAS + cuDNN wheels) lives: {app}\\gpu next to the runtime
+    for the Inno install (python312._pth lists ..\\gpu), %LOCALAPPDATA%\\Dolmi\\gpu for the Store package,
+    whose own folder is read-only."""
+    if is_packaged():
+        return log_dir() / "gpu"
+    return Path(sys.prefix).parent / "gpu"
+
+
+GPU_PACKAGES = ("nvidia-cublas-cu12", "nvidia-cudnn-cu12>=9,<10")   # same as the Inno installer's GPU task
+
+
+def gpu_addon_command(target=None):
+    """The pip command that installs the GPU add-on (about 1.3 GB from PyPI) with the bundled Python."""
+    py = Path(sys.executable)
+    if py.name.lower() == "pythonw.exe" and (py.parent / "python.exe").exists():
+        py = py.parent / "python.exe"
+    return [str(py), "-m", "pip", "install", "--disable-pip-version-check", "--no-warn-script-location",
+            "--no-cache-dir", "--target", str(target or gpu_dir()), *GPU_PACKAGES]
+
+
+def install_gpu_addon(timeout=3600):
+    """Store package only (the Inno installer has its own GPU task): download the add-on into gpu_dir().
+    Returns (ok, message); the GPU is used from the next model load."""
+    import netgate
+    netgate.check("download")                     # STR-7: refuses in local-only mode
+    target = gpu_dir()
+    target.mkdir(parents=True, exist_ok=True)
+    try:
+        r = subprocess.run(gpu_addon_command(target), capture_output=True, text=True, timeout=timeout,
+                           creationflags=0x08000000)   # CREATE_NO_WINDOW
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"GPU add-on install failed to run: {e}")
+        return False, "The download could not start."
+    if r.returncode != 0:
+        print(f"GPU add-on install failed (exit {r.returncode}): {(r.stderr or r.stdout)[-2000:]}")
+        return False, "The download failed. Check the internet connection and try again."
+    prepare_gpu()
+    return True, "GPU add-on installed."
+
+
 # ------------------------------------------------------------------ compute (NVIDIA GPU or CPU)
 def prepare_gpu():
     """Make pip-installed CUDA libs (nvidia-cublas-cu12 / nvidia-cudnn-cu12) discoverable, so the GPU
     path works without a full CUDA toolkit. On PATH so find_library() sees them, and on the DLL
     search path so CTranslate2 can load them. A no-op when the wheels aren't installed (stays CPU)."""
-    roots = [Path(sys.prefix) / "Lib" / "site-packages", *map(Path, sys.path)]   # venv, or {app}\gpu
+    gpu = gpu_dir()
+    if gpu.is_dir() and str(gpu) not in sys.path:
+        sys.path.append(str(gpu))                  # the Store package has no ._pth entry for it
+    roots = [Path(sys.prefix) / "Lib" / "site-packages", gpu, *map(Path, sys.path)]   # venv, or the add-on
     seen = set()
     for d in (r / "nvidia" / pkg / "bin" for r in roots for pkg in ("cublas", "cudnn")):
         if d.is_dir() and d not in seen:
@@ -266,7 +330,10 @@ def open_path(path):
     os.startfile(path)
 
 def register_app():
-    """Own taskbar entry + icon instead of inheriting pythonw's."""
+    """Own taskbar entry + icon instead of inheriting pythonw's. The Store package already has its own
+    (the package's app ID); overriding it would split the pinned tile from the running window."""
+    if is_packaged():
+        return
     try:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Dolmi.App")
     except (AttributeError, OSError):

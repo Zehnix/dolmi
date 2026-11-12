@@ -188,6 +188,16 @@ def dual_stream(out_q: queue.Queue, stop: threading.Event, mic_device=None, spea
     dual(mic_stream, loopback_stream, out_q, stop, mic_device, speaker_device, on_level, log)
 
 
+# ------------------------------------------------------------------ store package (Windows only)
+def is_packaged():
+    """The Microsoft Store package is Windows only; Dolmi.app updates from its release page."""
+    return False
+
+def install_gpu_addon(timeout=3600):
+    """There is no GPU add-on on a Mac (CTranslate2 has no Metal backend)."""
+    return False, "There is no GPU add-on on a Mac."
+
+
 # ------------------------------------------------------------------ compute (always the CPU cores)
 def prepare_gpu():
     """Nothing to prepare: CTranslate2 has no Metal backend, so there is no GPU path on a Mac."""

@@ -80,9 +80,15 @@ async function applyPc(){ const b=bridge(); if(!b) return; const pc=await b.pc_i
   $('#eye').textContent='ON THIS '+W('COMPUTER')+' · '+(pc.gpu?gpuShort.toUpperCase():'CPU ONLY');
   if($('#modelHint')) $('#modelHint').textContent=pc.gpu?`Auto picks large-v3-turbo on your ${gpuShort}`:'No usable NVIDIA GPU — Auto picks Small, which runs on the CPU';
   const nvidia=/nvidia/i.test(pc.gpu_name||''), speech=pc.gpu?['GPU speech ready','on']:nvidia?['NVIDIA found, GPU add-on not installed','warn']:['Speech runs on the CPU',''];
-  if($('#specs')) $('#specs').innerHTML=[[pc.gpu_name||'No dedicated GPU found',''],[pc.ram_gb?pc.ram_gb+' GB RAM':'RAM unknown',''],[pc.cores+' CPU threads',''],speech].map(([t,c])=>`<span class="chipt ${c}">${esc(t)}</span>`).join('');
+  if($('#specs')) $('#specs').innerHTML=[[pc.gpu_name||'No dedicated GPU found',''],[pc.ram_gb?pc.ram_gb+' GB RAM':'RAM unknown',''],[pc.cores+' CPU threads',''],speech].map(([t,c])=>`<span class="chipt ${c}">${esc(t)}</span>`).join('')
+    +(pc.packaged&&nvidia&&!pc.gpu?' <button class="btn ghost" id="gpuAddon">Install GPU add-on (about 1.3 GB)</button>':'');
+  if($('#gpuAddon')) $('#gpuAddon').onclick=installGpuAddon;
   if($('#modelDir')) $('#modelDir').textContent=(pc.model_dir||'Model folder unknown')+' — shared by every Dolmi install for this '+W('os_user');
 }
+/* Microsoft Store package: no installer task, so the GPU add-on (NVIDIA's CUDA libraries) downloads from here */
+async function installGpuAddon(){ const b=bridge(), btn=$('#gpuAddon'); if(!b||!btn) return;
+  btn.disabled=true; btn.textContent='Downloading… (a few minutes)';
+  const r=await b.install_gpu_addon(); toast(r.ok&&r.gpu?'GPU speech ready':r.message); applyPc(); }
 /* the Mac: no GPU path (CTranslate2 has no Metal backend), so the chip name stands in for the graphics card */
 function applyMac(pc){
   const chip=pc.gpu_name||W('computer');
@@ -188,7 +194,9 @@ function applyUpdate(u,asked){ const st=$('#updStatus'), dl=$('#setDownloadUpdat
 if($('#setCheckUpdate')) $('#setCheckUpdate').onclick=async()=>{ const b=bridge(); if(!b) return; $('#updStatus').textContent='Checking…'; applyUpdate(await b.check_update(true),true); };
 if($('#setDownloadUpdate')) $('#setDownloadUpdate').onclick=()=>{ const b=bridge(); if(b) b.open_release($('#setDownloadUpdate').dataset.url||''); };
 { const prev=window.dolmi.onUpdate; window.dolmi.onUpdate=u=>{ if(prev) prev(u); applyUpdate(u); toast(`Dolmi ${u.version} is available: Settings → About & updates`); }; }
-async function updatesBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state(); setSw('#swUpdates',s.checkUpdates!==false); if(s.update) applyUpdate(s.update); }catch(e){ console.error('updates boot',e); } }
+/* Microsoft Store package: the Store updates Dolmi, so its own check is gone from Settings */
+function storeUpdates(){ const m=document.querySelector('[data-mount="about.updates"]'); if(m) m.innerHTML='<div class="set" data-kw="update updates new version store"><div><div class="lab">Updates</div><div class="ps">The Microsoft Store keeps Dolmi up to date</div></div></div>'; }
+async function updatesBoot(){ const b=bridge(); if(!b) return; try{ const s=await b.state(); if(s.packaged){ storeUpdates(); return; } setSw('#swUpdates',s.checkUpdates!==false); if(s.update) applyUpdate(s.update); }catch(e){ console.error('updates boot',e); } }
 document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) updatesBoot(); else window.addEventListener('pywebviewready',updatesBoot); });
 
 /* ---- APP-8 subtitle bar lock: the bar ignores the mouse so it never takes a click from the meeting window.

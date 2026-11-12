@@ -16,9 +16,12 @@ ROOT = Path(__file__).resolve().parent.parent          # repo root: core modules
 sys.path.insert(0, str(ROOT))                          # reuse live_subs, assistant, inbox, dolmi_platform, ...
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # src/ for the ui package
 
-import webview
-
 import dolmi_platform
+
+if dolmi_platform.is_packaged():
+    sys.dont_write_bytecode = True   # Store package: read-only folder, every .pyc ships precompiled
+
+import webview
 
 WEB = Path(__file__).resolve().parent / "ui" / "web"
 
