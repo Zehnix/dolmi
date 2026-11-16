@@ -321,6 +321,15 @@ def _spoken_language_ok(code):
     return code == "auto" or code in models.LANGUAGES
 
 
+_CUDA_LIBRARY_ERROR = re.compile(r"(cublas|cudnn|cudart|cuda)\w*\.dll|CUDA (driver|runtime)|"
+                                 r"no CUDA-capable device", re.I)
+
+
+def _cuda_library_error(error):
+    """True for errors that mean the GPU's CUDA libraries or driver could not be used at all."""
+    return error is not None and bool(_CUDA_LIBRARY_ERROR.search(str(error)))
+
+
 def _replace_text(path, text, tries=10, wait=0.05):
     """Write text to path through a temp file, so a reader never sees half a file. On Windows os.replace
     fails while anyone else has the file open (the engine reloading it, an indexer, antivirus), so it is
@@ -1378,6 +1387,7 @@ class Api:
                     self._emit("onStopped")
                     return
                 watch.set()
+                self._engine = self._prime_or_cpu(self._engine)   # never listen on a GPU that cannot caption
                 self._set_engine_state("ready")
         meeting = {}                                  # the diarizer's merges relabel THIS meeting only
         diarizer = self._make_diarizer(lambda: meeting.get("transcript"))  # SPK-3: None unless the beta is on
@@ -1724,7 +1734,7 @@ class Api:
                 self._set_engine_state("idle", "models load on Start")
                 return False
             if gen == self._settings_gen:    # priming takes seconds: skip it for an engine already stale
-                self._prime(engine)
+                engine = self._prime_or_cpu(engine)
             with self._gen_lock:             # a setting may also change while priming: re-check, then store
                 fresh = gen == self._settings_gen
                 if fresh:
@@ -1745,10 +1755,39 @@ class Api:
             print(f"Could not check the models: {e}")
             return True
 
+    def _prime_or_cpu(self, engine):
+        """Prime the engine. When the GPU's CUDA libraries cannot be loaded (seen on the first start
+        after a boot: "cublas64_12.dll is not found"), every caption would fail the same way while
+        Dolmi looks like it is listening. Wire the libraries up again and retry once; if they still do
+        not load, switch to the CPU model and say so."""
+        error = self._prime(engine)
+        if not _cuda_library_error(error) or getattr(engine, "device", "") != "cuda":
+            return engine
+        print(f"GPU libraries failed to load ({error}); retrying once")
+        dolmi_platform.prepare_gpu()
+        error = self._prime(engine)
+        if not _cuda_library_error(error):
+            return engine
+        s = self._settings
+        model = s["model"]
+        if model == "auto" or str(model).startswith("large"):
+            model = dolmi_platform.auto_speech(False)   # a Large model on the CPU falls minutes behind
+        print(f"GPU still unusable ({error}): captions run on the CPU with '{model}'")
+        del engine
+        gc.collect()
+        engine = live_subs.Engine(model, "cpu", s["language"])
+        engine.unsure_marks = bool(s.get("unsure_marks"))
+        engine.tidy_fillers = bool(s.get("tidy_fillers", True))
+        self._prime(engine)
+        self._emit("onError", "Your graphics card's speech libraries did not load, so Dolmi switched to the "
+                              "processor with a faster model. Captions work but are less accurate; "
+                              "restart Dolmi to try the graphics card again.")
+        return engine
+
     @staticmethod
     def _prime(engine):
         """Run each model once on a little silence, so the first real caption does not pay for the GPU
-        (CUDA) and decoder set-up. Failures only cost that first-caption speed."""
+        (CUDA) and decoder set-up. Returns the error when a model failed, else None."""
         try:
             import numpy as np
             asr = getattr(engine, "asr", None)
@@ -1769,7 +1808,10 @@ class Api:
             engine.translate("Hello everyone." if lang == "en" else "Hallo zusammen.", lang)
         except Exception as e:
             print(f"Model warm-up run failed (first caption may be slower): {e}")
+            engine.context = ""
+            return e
         engine.context = ""
+        return None
 
     # ------------------------------------------------------------------ models
     def _auto_speech(self):

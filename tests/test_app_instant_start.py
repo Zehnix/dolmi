@@ -211,3 +211,62 @@ def test_warm_up_also_loads_the_vad_and_the_real_decoder(installed, engines, mon
     runs = engines[0].asr.runs
     assert gaps and gaps[0] > live_subs.SILENCE_RMS                    # loud enough to pass the early-out
     assert any(kw["beam_size"] == 5 and kw["vad_filter"] is True for _, kw in runs)
+
+
+class BrokenGpuAsr(FakeAsr):
+    """The first start after a boot: CTranslate2 cannot load the CUDA libraries."""
+    def transcribe(self, audio, **kw):
+        raise RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+
+
+def test_gpu_libraries_that_never_load_switch_to_the_cpu_and_say_so(installed, engines, monkeypatch):
+    import dolmi_platform
+    prepared = []
+    monkeypatch.setattr(dolmi_platform, "prepare_gpu", lambda: prepared.append(1))
+    monkeypatch.setattr(dolmi_platform, "auto_speech", lambda gpu=None: "small")
+    real_make = live_subs.Engine
+
+    def make(model, device, language="de"):
+        e = real_make(model, device, language)
+        e.device = device
+        if device != "cpu":
+            e.asr = BrokenGpuAsr()
+        return e
+    monkeypatch.setattr(live_subs, "Engine", make)
+    api = installed
+    api._settings.update(model="large-v3-turbo", device="cuda")
+    assert api._warm_once() is True
+    assert prepared                                       # wired up the libraries again before giving up
+    assert api._engine.device == "cpu" and api._engine.args[0] == "small"
+    assert any("onError(" in c and "processor" in c for c in api._window.calls if isinstance(c, str))
+
+
+def test_a_gpu_warm_up_that_works_on_the_retry_keeps_the_gpu(installed, engines, monkeypatch):
+    import dolmi_platform
+    real_make = live_subs.Engine
+    fails = {"n": 1}
+
+    class FlakyAsr(FakeAsr):
+        def transcribe(self, audio, **kw):
+            if fails["n"]:
+                fails["n"] -= 1
+                raise RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+            return super().transcribe(audio, **kw)
+
+    def make(model, device, language="de"):
+        e = real_make(model, device, language)
+        e.device, e.asr = device, FlakyAsr()
+        return e
+    monkeypatch.setattr(live_subs, "Engine", make)
+    monkeypatch.setattr(dolmi_platform, "prepare_gpu", lambda: None)
+    api = installed
+    api._settings.update(model="large-v3-turbo", device="cuda")
+    assert api._warm_once() is True
+    assert len(engines) == 1 and api._engine.device == "cuda"
+
+
+def test_other_warm_up_errors_do_not_drop_the_gpu(installed, engines):
+    from ui import app as app_mod
+    assert not app_mod._cuda_library_error(RuntimeError("out of memory"))
+    assert not app_mod._cuda_library_error(None)
+    assert app_mod._cuda_library_error(RuntimeError("Could not load library cudnn_ops64_9.dll"))
