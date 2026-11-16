@@ -575,7 +575,7 @@ class Engine:
         raw = " ".join(t for t in (s.text.strip() for s in segs) if t)
         text = drop_echoes(segs, self.terms)
         self.last_info = {"retried": retried, "echo": text != raw,
-                          "ghosts": ghosts,
+                          "ghosts": ghosts, "language_probability": getattr(info, "language_probability", None),
                           "uncertainty": uncertainty.line_uncertainty(segs) if final else None}   # STR-8
         q = getattr(self, "clarify", None)   # VOC-9: unsure words of finals, for "Did they say ...?" after Stop
         if q is not None and final and text:
@@ -960,6 +960,42 @@ def strip_quiet_ghosts(segs, audio):
         if "".join(w.word for w in kept).strip():
             out.append(_with_words(seg, kept))
     return out, removed
+
+# Short English replies and German ones Whisper may call English: a short line with one of these is not a ghost
+ENGLISH_WORDS = frozenset("""
+a an the and or but so if then than to of in on at by for with from up out about into over after
+i me my we us our you your he him his she her it its they them their this that these those there here
+is are was were be been am do does did done have has had can could will would should shall may might must
+not no yes yeah yep yup nope ok okay sure right fine good great nice cool perfect exactly true correct agreed
+thanks thank please sorry hello hi hey bye goodbye welcome well oh ah wow hmm uh huh mhm
+what why how who where when which all one two three just very really too also now later today tomorrow
+go going gone get got let lets see look know think mean guess sounds sound makes sense love like want need
+make take give tell say said talk talking work works working done next last first time thing things way
+absolutely definitely probably maybe course alright everyone everybody guys team bit more less much many
+um uhm erm mm hm ähm äh
+""".split())
+GERMAN_REPLIES = frozenset("""
+gut super prima klar okay perfekt richtig korrekt toll schön sicher logisch absolut genau stimmt passt
+hallo servus moin tschüss danke bitte ja nein nee jo jep naja achso ach aha oh wunderbar sehr
+""".split())
+THIRD_LANGUAGE_WORDS = 4    # only lines this short: a longer line in another language is real speech
+THIRD_LANGUAGE_PROB = 0.7   # ... and only when Whisper was this unsure that it heard English
+
+def third_language_reason(text: str, lang, prob, meeting, terms=frozenset()):
+    """'third_language' for a short line Whisper called English in a meeting of another language when it has
+    no English, German or vocabulary word and Whisper reported it was unsure of the language ('Goed.', 'Vamos los ojos.'),
+    else None. On Auto-detect or in an English meeting every language is fair."""
+    if lang != "en" or meeting in (None, "auto", "en"):
+        return None
+    words = re.findall(r"[^\W\d_]+(?:'[^\W\d_]+)?", text.lower())
+    if not words or len(words) > THIRD_LANGUAGE_WORDS:
+        return None
+    if prob is None or prob >= THIRD_LANGUAGE_PROB:
+        return None                          # no sign Whisper was unsure: keep it
+    known = ENGLISH_WORDS | GERMAN_STOPWORDS | GERMAN_REPLIES
+    if any(w in known or w.split("'")[0] in known or w in terms for w in words):
+        return None
+    return "third_language"
 
 def peak_rms(audio, window=STEP) -> float:
     """Loudness of the loudest 100 ms of `audio` (0.0 for no audio)."""
@@ -1745,7 +1781,9 @@ def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker, tag=No
                     de = strip_repeat(said, de) if said and de else de
                 info = getattr(eng, "last_info", None) or {}
                 if de:
-                    reason = junk_reason(de, peak_rms(u.audio), _spoken(eng, lang))
+                    reason = junk_reason(de, peak_rms(u.audio), _spoken(eng, lang)) or third_language_reason(
+                        de, lang, info.get("language_probability"), getattr(eng, "language", None),
+                        getattr(eng, "terms", None) or frozenset())
                 else:
                     reason = "echo" if info.get("echo") else "empty"
                 if reason:

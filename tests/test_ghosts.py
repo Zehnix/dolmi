@@ -80,3 +80,74 @@ def test_the_engine_drops_a_quiet_thank_you_segment_from_the_final():
     segs = [NS(text=" Wir starten am Montag.", start=0.0, end=2.0), NS(text=" Thank you.", start=2.3, end=3.2)]
     e.language, e.terms, e._asr = "de", set(), lambda audio, language, retry=False, **kw: (segs, NS(language="de"))
     assert e.transcribe(audio) == ("Wir starten am Montag.", "de") and e.last_info["ghosts"] == 1
+
+
+# ---------------------------------------------------------------- third-language one-liners
+def test_short_third_language_lines_whisper_called_english_are_ghosts():
+    # 11-16: "Goed.", "Vamos los ojos." shown as English-source lines in a German meeting
+    assert m.third_language_reason("Goed.", "en", 0.41, "de") == "third_language"
+    assert m.third_language_reason("Vamos los ojos.", "en", 0.38, "de") == "third_language"
+
+
+def test_real_short_english_or_german_replies_stay():
+    for text in ("Okay.", "Sounds good.", "Thank you.", "Yes, exactly.", "Perfekt.", "Genau so.", "I'm fine."):
+        assert m.third_language_reason(text, "en", 0.4, "de") is None, text
+
+
+def test_a_third_language_line_stays_when_whisper_is_sure_or_the_line_is_long_or_a_known_term():
+    assert m.third_language_reason("Goed.", "en", 0.93, "de") is None
+    assert m.third_language_reason("Vamos a revisar el informe de ventas hoy", "en", 0.4, "de") is None
+    assert m.third_language_reason("Kranich.", "en", 0.4, "de", terms={"kranich"}) is None
+
+
+def test_only_lines_called_english_in_a_meeting_of_another_language_are_checked():
+    assert m.third_language_reason("Goed.", "de", 0.4, "de") is None   # forced German: no detection to trust
+    assert m.third_language_reason("Goed.", "en", 0.4, "auto") is None  # Auto-detect: every language is fair
+    assert m.third_language_reason("Goed.", "en", 0.4, "en") is None
+    assert m.third_language_reason("Goed.", "en", None, "de") is None    # no language probability: no evidence
+    assert m.third_language_reason("um", "en", 0.3, "de") is None        # a hesitation joins the next line
+
+
+class OneLine:
+    """Whisper hears one short English-called line with a low language probability."""
+    cloud, language, context = False, "de", ""
+
+    def __init__(self, text, prob):
+        self.text, self.prob = text, prob
+
+    def transcribe(self, audio):
+        self.last_info = {"language_probability": self.prob}
+        return self.text, "en"
+
+    def transcribe_draft(self, audio):
+        return "", "de"
+
+    def translate(self, text, lang):
+        return text
+
+
+def run(eng, audio):
+    aq, uq, stop, drops = queue.Queue(), queue.Queue(), threading.Event(), []
+    gap = lambda a: None if np.abs(a[-160:]).max() < 0.01 else 0.0
+    th = threading.Thread(target=m.worker, args=(eng, aq, uq, NS(add=lambda *a, **k: None), stop, gap),
+                          kwargs={"on_drop": lambda reason, *a: drops.append(reason)}, daemon=True)
+    th.start()
+    for i in range(0, len(audio), m.STEP):
+        aq.put(audio[i:i + m.STEP])
+    items = []
+    for _ in range(40):
+        try:
+            items.append(uq.get(timeout=0.05))
+        except queue.Empty:
+            pass
+    stop.set()
+    th.join(2)
+    return [i for i in items if i[0] == "final"], drops
+
+
+def test_the_pipeline_drops_a_third_language_ghost_and_keeps_a_sure_one():
+    audio = np.concatenate([loud(1), np.zeros(int(1.5 * SR), np.float32)])
+    finals, drops = run(OneLine("Goed.", 0.4), audio)
+    assert finals == [] and drops == ["third_language"]
+    finals, drops = run(OneLine("Okay.", 0.4), audio)
+    assert [f[1] for f in finals] == ["Okay."] and drops == []
