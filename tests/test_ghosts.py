@@ -151,3 +151,54 @@ def test_the_pipeline_drops_a_third_language_ghost_and_keeps_a_sure_one():
     assert finals == [] and drops == ["third_language"]
     finals, drops = run(OneLine("Okay.", 0.4), audio)
     assert [f[1] for f in finals] == ["Okay."] and drops == []
+
+
+# ---------------------------------------------------------------- translator markup and invented text
+def test_markup_and_invented_text_are_suspect():
+    assert m.mt_suspect("Jahrhundert.", "==References==") == "markup"         # 11-16 10:15:14
+    assert m.mt_suspect("Siehe Liste", "[[List of things]]") == "markup"
+    assert m.mt_suspect("und wo", "This is the case in the United Kingdom, where the") == "too_long"   # 11-06
+    assert m.mt_suspect("Das ist ihm egal.", "He doesn't care.") is None
+    assert m.mt_suspect("Die Variable {{name}} ist leer.", "The variable {{name}} is empty.") is None
+
+
+class FakeMarian:
+    """CTranslate2 stand-in: answers from a list, one per call, and records the call options."""
+
+    def __init__(self, *answers):
+        self.answers, self.calls = list(answers), []
+
+    def translate_batch(self, batch, **kw):
+        self.calls.append(kw)
+        return [NS(hypotheses=[self.answers.pop(0).split()])]
+
+
+class Spm:
+    def encode(self, text, out_type=str):
+        return text.split()
+
+    def decode(self, tokens):
+        return " ".join(tokens)
+
+
+def mt_engine(*answers):
+    e = object.__new__(m.Engine)
+    e.language, e.vocab, mt = "de", m.Vocabulary(text=""), FakeMarian(*answers)
+    e.translators = {"opus-de": (mt, Spm(), Spm())}
+    return e, mt
+
+
+def test_a_markup_translation_is_retried_shorter_and_the_retry_is_shown():
+    e, mt = mt_engine("==References==", "Century.")
+    assert e.translate("Jahrhundert.", "de") == "Century."
+    assert len(mt.calls) == 2 and mt.calls[1]["max_decoding_length"] < mt.calls[0]["max_decoding_length"]
+
+
+def test_when_the_retry_is_still_bad_the_line_shows_german_only():
+    e, _ = mt_engine("==References==", "{{cite web}}")
+    assert e.translate("Jahrhundert.", "de") == ""
+
+
+def test_a_good_translation_needs_no_retry():
+    e, mt = mt_engine("He doesn't care.")
+    assert e.translate("Das ist ihm egal.", "de") == "He doesn't care." and len(mt.calls) == 1

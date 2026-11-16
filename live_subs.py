@@ -674,9 +674,19 @@ class Engine:
         vocab = self.vocab   # one set of rules per line, even if reload_terms swaps them meanwhile
         text, slots = vocab.protect(text)
         toks = sp_src.encode(text, out_type=str)[:400] + ["</s>"]
-        res = mt.translate_batch([toks], beam_size=2, max_decoding_length=256)
-        out = [tok for tok in res[0].hypotheses[0] if tok not in ("</s>", "<pad>")]
-        return collapse_repeats(vocab.finish(sp_tgt.decode(out), slots))   # Opus-MT loops too
+        en = self._marian(mt, sp_tgt, toks, beam_size=2, max_decoding_length=256)
+        why = mt_suspect(text, collapse_repeats(en))
+        if why:   # markup or invented text: once more, with a length near the input's, else the German alone
+            en = self._marian(mt, sp_tgt, toks, beam_size=4, max_decoding_length=max(8, int(1.5 * len(toks)) + 2))
+            if mt_suspect(text, collapse_repeats(en)):
+                print(f"Translation rejected ({why}, {len(toks)} tokens in): showing the German only")
+                return ""
+        return collapse_repeats(vocab.finish(en, slots))   # Opus-MT loops too
+
+    @staticmethod
+    def _marian(mt, sp_tgt, toks, **opts):
+        res = mt.translate_batch([toks], **opts)
+        return sp_tgt.decode([tok for tok in res[0].hypotheses[0] if tok not in ("</s>", "<pad>")])
 
 UNSURE_MARKS = os.environ.get("DOLMI_UNSURE_MARKS") == "1"   # STR-8: off until calibrated (QA-2/QA-9)
 
@@ -996,6 +1006,19 @@ def third_language_reason(text: str, lang, prob, meeting, terms=frozenset()):
     if any(w in known or w.split("'")[0] in known or w in terms for w in words):
         return None
     return "third_language"
+
+# Opus-MT, given a short or odd input, can write Wikipedia markup or invent a long sentence
+_MT_MARKUP = re.compile(r"={2,}|\[\[|\]\]|\{\{|\}\}|</?ref\b|\|\s*(?:thumb|alt)\s*=", re.I)
+MT_MAX_RATIO, MT_MAX_EXTRA = 2, 3   # English words beyond 2 x German words + 3 are invented
+
+def mt_suspect(src: str, en: str):
+    """Why a translation is not a translation of `src` (None = fine): 'markup' (==References==, [[, {{ that the
+    German does not have) or 'too_long' (far more words than the German: invented text)."""
+    if _MT_MARKUP.search(en) and not _MT_MARKUP.search(src):
+        return "markup"
+    if len(en.split()) > MT_MAX_RATIO * len(src.split()) + MT_MAX_EXTRA:
+        return "too_long"
+    return None
 
 def peak_rms(audio, window=STEP) -> float:
     """Loudness of the loudest 100 ms of `audio` (0.0 for no audio)."""
