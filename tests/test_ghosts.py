@@ -202,3 +202,62 @@ def test_when_the_retry_is_still_bad_the_line_shows_german_only():
 def test_a_good_translation_needs_no_retry():
     e, mt = mt_engine("He doesn't care.")
     assert e.translate("Das ist ihm egal.", "de") == "He doesn't care." and len(mt.calls) == 1
+
+
+# ---------------------------------------------------------------- garbled multi-script decodes
+GARBLED = ("Und dann haben wir 그래서 우리는 что мы делаем das Modell 그리고 нужно было мы "
+           "это сделали 이렇게 해서 und so weiter 그렇습니다 потом")
+
+
+def test_a_multi_script_segment_whisper_was_guessing_on_is_garbled():
+    # 11-13 11:28:59: 94 words with Hangul and Cyrillic in a German line
+    assert m.garbled_segment(NS(text=GARBLED, avg_logprob=-1.4), "de")
+    assert not m.garbled_segment(NS(text=GARBLED, avg_logprob=-0.4), "de")   # sure: strip_foreign_words handles it
+    assert not m.garbled_segment(NS(text="Привет, как дела?", avg_logprob=-1.4), "ru")   # not a Latin language
+
+
+def test_a_loop_is_garbled_unless_collapsing_its_repeats_leaves_real_text():
+    loop = ", ".join(f"Punkt {i} von der Liste" for i in range(40))   # counting on: no exact repeat to collapse
+    assert m.garbled_segment(NS(text=loop, avg_logprob=-0.3), "de")
+    assert not m.garbled_segment(NS(text="Ja. " * 12 + "Dann machen wir das so.", avg_logprob=-0.3), "de")
+    assert not m.garbled_segment(NS(text="Wir haben das Projekt am Montag gestartet und am Freitag "
+                                         "die ersten Tests gemacht.", avg_logprob=-0.2), "de")
+
+
+def test_the_engine_drops_garbled_segments_and_reports_a_line_that_was_only_garbage():
+    e = object.__new__(m.Engine)
+    good = NS(text=" Wir starten am Montag.", avg_logprob=-0.2)
+    bad = NS(text=" " + GARBLED, avg_logprob=-1.5)
+    e.language, e.terms = "de", set()
+    e._asr = lambda audio, language, retry=False, **kw: ([good, bad], NS(language="de"))
+    assert e.transcribe(None) == ("Wir starten am Montag.", "de") and not e.last_info["garbled"]
+    e._asr = lambda audio, language, retry=False, **kw: ([bad], NS(language="de"))
+    assert e.transcribe(None) == ("", "de") and e.last_info["garbled"]
+
+
+def test_a_garbled_line_is_dropped_with_its_own_reason():
+    class Garbled(OneLine):
+        def transcribe(self, audio):
+            self.last_info = {"garbled": True}
+            return "", "de"
+
+    audio = np.concatenate([loud(1), np.zeros(int(1.5 * SR), np.float32)])
+    finals, drops = run(Garbled("", None), audio)
+    assert finals == [] and drops == ["garbled"]
+
+
+def test_finals_fall_back_to_one_higher_temperature_at_most_and_drafts_never():
+    seen = []
+
+    class Asr:
+        def transcribe(self, audio, **kw):
+            seen.append(kw["temperature"])
+            return iter(()), NS(language="de")
+
+    e = object.__new__(m.Engine)
+    e.asr, e.glossary, e.context = Asr(), "", ""
+    e._asr(None, "de")
+    e._asr(None, "de", retry=True)
+    e._asr(None, "de", beam=m.DRAFT_BEAM)
+    assert seen == [m.FINAL_TEMPERATURES, m.FINAL_TEMPERATURES, m.DRAFT_TEMPERATURE]
+    assert len(m.FINAL_TEMPERATURES) == 2 and m.FINAL_TEMPERATURES[0] == 0.0

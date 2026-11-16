@@ -48,6 +48,9 @@ CPU_FINAL_BEAM = 2         # SEG-5: a narrower beam on the CPU, where beam 5 kep
                            # 2026-10-20 (back to back, CPU small), beam 5 / 2 / 1: smoke WER 12.14 / 12.52 / 14.26 %
                            # (beam 1 fails the +1 gate); syn-s1 first text p50 22.3 / 16.7 / 18.4 s, p95 32.1 / 22.2 / 32.7 s
 DRAFT_BEAM = 1             # drafts decode greedily: they are redone a second later anyway
+FINAL_TEMPERATURES = (0.0, 0.4)   # a final that loops or guesses is decoded once more, sampled; faster-whisper's
+                           # default ladder (0.0 ... 1.0, six decodes) let one garbled line block the queue 15-30 s
+DRAFT_TEMPERATURE = 0.0    # drafts never fall back: they are redone a second later anyway
 DRAFT_WINDOW = 6.0         # s, a draft decodes only the end of the sentence (cost stays flat on long ones)
 DRAFT_MT_LAG = 2.0         # s, a draft whose audio is this far behind the capture skips translation
 HOLD_MAX = 4.0             # s, a final without . ? ! waits at most this long for the next one to join it (0 = off)
@@ -571,10 +574,15 @@ class Engine:
         retried = retry_empty and not any(s.text.strip() for s in segs)
         if retried:
             segs, info = self._asr(audio, language, retry=True)
+        heard = [s for s in segs if s.text.strip()]
+        segs = [s for s in heard if not garbled_segment(s, info.language)]   # loops, multi-script guesses
+        garbled = len(segs) < len(heard)
+        if garbled:
+            print(f"Dropped {len(heard) - len(segs)} garbled Whisper segment(s) of {len(heard)}")
         segs, ghosts = strip_quiet_ghosts(segs, audio)                      # 'Vielen Dank.' on silence
         raw = " ".join(t for t in (s.text.strip() for s in segs) if t)
         text = drop_echoes(segs, self.terms)
-        self.last_info = {"retried": retried, "echo": text != raw,
+        self.last_info = {"retried": retried, "echo": text != raw, "garbled": garbled and not segs,
                           "ghosts": ghosts, "language_probability": getattr(info, "language_probability", None),
                           "uncertainty": uncertainty.line_uncertainty(segs) if final else None}   # STR-8
         q = getattr(self, "clarify", None)   # VOC-9: unsure words of finals, for "Did they say ...?" after Stop
@@ -598,7 +606,7 @@ class Engine:
             vad = {"vad_filter": True, "vad_parameters": {"threshold": ASR_VAD_THRESHOLD}}
             segs, info = self.asr.transcribe(
                 audio, language=language, beam_size=DRAFT_BEAM, condition_on_previous_text=False,
-                word_timestamps=True, hotwords=self.glossary or None,
+                word_timestamps=True, hotwords=self.glossary or None, temperature=DRAFT_TEMPERATURE,
                 initial_prompt=(prompt or self.context[-200:]) or None, **vad)
             segs = list(segs)
             if attempt or not mixed or info.language in (self.language, "en"):
@@ -622,6 +630,7 @@ class Engine:
             vad["word_timestamps"] = True    # VOC-9: word probabilities, finals only (they cost time)
         segs, info = self.asr.transcribe(
             audio, language=language, beam_size=beam, condition_on_previous_text=False, **vad,
+            temperature=FINAL_TEMPERATURES if final else DRAFT_TEMPERATURE,
             # spelling hints go in as hotwords; only the previous sentence is the prompt
             hotwords=self.glossary or None, initial_prompt=self.context[-200:] or None)
         return list(segs), info
@@ -970,6 +979,27 @@ def strip_quiet_ghosts(segs, audio):
         if "".join(w.word for w in kept).strip():
             out.append(_with_words(seg, kept))
     return out, removed
+
+GARBLED_RATIO = 2.4        # gzip compression ratio above which a decode is a loop (Whisper's own fallback limit)
+GARBLED_LOGPROB = -1.0     # mean token log-probability below which Whisper was guessing
+
+def _compression_ratio(text: str) -> float:
+    import zlib
+    raw = text.encode("utf-8")
+    return len(raw) / len(zlib.compress(raw)) if raw else 0.0
+
+def garbled_segment(seg, lang) -> bool:
+    """A Whisper segment that is no speech: still a loop after its repeats are collapsed (compression ratio
+    above GARBLED_RATIO), or words in another script on a Latin-script language while Whisper was guessing
+    (avg_logprob below GARBLED_LOGPROB). The 94-word Hangul + Cyrillic + German decode was both."""
+    text = seg.text.strip()
+    if not text:
+        return False
+    if _compression_ratio(collapse_repeats(text)) > GARBLED_RATIO:
+        return True
+    lp = getattr(seg, "avg_logprob", None)
+    foreign = lang in LATIN_LANGUAGES and any(_foreign_word(w) for w in text.split())
+    return foreign and lp is not None and lp < GARBLED_LOGPROB
 
 # Short English replies and German ones Whisper may call English: a short line with one of these is not a ghost
 ENGLISH_WORDS = frozenset("""
@@ -1808,7 +1838,7 @@ def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker, tag=No
                         de, lang, info.get("language_probability"), getattr(eng, "language", None),
                         getattr(eng, "terms", None) or frozenset())
                 else:
-                    reason = "echo" if info.get("echo") else "empty"
+                    reason = "echo" if info.get("echo") else "garbled" if info.get("garbled") else "empty"
                 if reason:
                     previous = (u.uid, "")               # its words were not shown: none to de-duplicate
                     drop(reason, start, end, de)
