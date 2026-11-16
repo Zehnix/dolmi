@@ -571,9 +571,11 @@ class Engine:
         retried = retry_empty and not any(s.text.strip() for s in segs)
         if retried:
             segs, info = self._asr(audio, language, retry=True)
+        segs, ghosts = strip_quiet_ghosts(segs, audio)                      # 'Vielen Dank.' on silence
         raw = " ".join(t for t in (s.text.strip() for s in segs) if t)
         text = drop_echoes(segs, self.terms)
         self.last_info = {"retried": retried, "echo": text != raw,
+                          "ghosts": ghosts,
                           "uncertainty": uncertainty.line_uncertainty(segs) if final else None}   # STR-8
         q = getattr(self, "clarify", None)   # VOC-9: unsure words of finals, for "Did they say ...?" after Stop
         if q is not None and final and text:
@@ -899,6 +901,65 @@ def junk_reason(t: str, energy=None, lang=None):
 
 def is_junk(t: str, energy=None, lang=None) -> bool:
     return junk_reason(t, energy, lang) is not None
+
+# ---- ghost filter 2.0: thank-you ghosts inside lines, third-language one-liners, garbled decodes
+QUIET_GHOSTS = SILENCE_GHOSTS | {"danke", "danke schön", "dankeschön", "danke sehr", "vielen vielen dank"}
+
+def _plain_words(text: str) -> str:
+    return " ".join(re.findall(r"[^\W\d_]+", text.lower()))
+
+def _span_rms(audio, start, end) -> float:
+    """Loudest 100 ms of `audio` between `start` and `end` s (None when the span is empty or unknown)."""
+    if audio is None or start is None or end is None:
+        return None
+    a, b = max(0, int(start * SR)), min(len(audio), int(end * SR))
+    return peak_rms(audio[a:b]) if b > a else None
+
+_GHOST_LEN = max(len(p.split()) for p in QUIET_GHOSTS)
+
+def _with_words(seg, words):
+    """A copy of a Whisper segment that keeps only `words` (faster-whisper's Segment is a dataclass)."""
+    import copy
+    out = copy.copy(seg)
+    out.words = words
+    out.text = "".join(w.word for w in words).strip()
+    return out
+
+def strip_quiet_ghosts(segs, audio):
+    """Whisper writes 'Vielen Dank.' / 'Thank you.' / 'Danke.' onto near-silent stretches, also between the
+    real sentences of a line. Such a phrase goes when the audio under it is near-silent (loudest 100 ms below
+    LOW_ENERGY_RMS): measured on its own words when Whisper gave word times, else on its whole segment (so
+    only a segment that is nothing but the phrase can go). Said aloud, it stays. Returns (segments, removed)."""
+    out, removed = [], 0
+    for seg in segs:
+        words = getattr(seg, "words", None) or []
+        if not words:
+            quiet = _span_rms(audio, getattr(seg, "start", None), getattr(seg, "end", None))
+            if _plain_words(seg.text) in QUIET_GHOSTS and quiet is not None and quiet < LOW_ENERGY_RMS:
+                removed += 1
+                continue
+            out.append(seg)
+            continue
+        keep, i = [True] * len(words), 0
+        while i < len(words):
+            for n in range(_GHOST_LEN, 0, -1):   # longest phrase first: 'thank you very much' before 'thank you'
+                run = words[i:i + n]
+                if len(run) == n and _plain_words(" ".join(w.word for w in run)) in QUIET_GHOSTS:
+                    quiet = _span_rms(audio, run[0].start, run[-1].end)
+                    if quiet is not None and quiet < LOW_ENERGY_RMS:
+                        keep[i:i + n] = [False] * n
+                        i += n
+                        break
+            else:
+                i += 1
+        if all(keep):
+            out.append(seg)
+            continue
+        removed += 1
+        kept = [w for w, k in zip(words, keep) if k]
+        if "".join(w.word for w in kept).strip():
+            out.append(_with_words(seg, kept))
+    return out, removed
 
 def peak_rms(audio, window=STEP) -> float:
     """Loudness of the loudest 100 ms of `audio` (0.0 for no audio)."""
@@ -1682,10 +1743,11 @@ def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker, tag=No
                     de = dedupe_overlap(previous[1], de)
                 for said in {previous[1], getattr(eng, "context", "")}:
                     de = strip_repeat(said, de) if said and de else de
+                info = getattr(eng, "last_info", None) or {}
                 if de:
                     reason = junk_reason(de, peak_rms(u.audio), _spoken(eng, lang))
                 else:
-                    reason = "echo" if (getattr(eng, "last_info", None) or {}).get("echo") else "empty"
+                    reason = "echo" if info.get("echo") else "empty"
                 if reason:
                     previous = (u.uid, "")               # its words were not shown: none to de-duplicate
                     drop(reason, start, end, de)
