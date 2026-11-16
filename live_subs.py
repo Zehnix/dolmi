@@ -50,7 +50,11 @@ CPU_FINAL_BEAM = 2         # SEG-5: a narrower beam on the CPU, where beam 5 kep
 DRAFT_BEAM = 1             # drafts decode greedily: they are redone a second later anyway
 DRAFT_WINDOW = 6.0         # s, a draft decodes only the end of the sentence (cost stays flat on long ones)
 DRAFT_MT_LAG = 2.0         # s, a draft whose audio is this far behind the capture skips translation
-HOLD_MAX = 4.0             # s, a final without . ? ! waits this long for the next one to join it (0 = off)
+HOLD_MAX = 4.0             # s, a final without . ? ! waits at most this long for the next one to join it (0 = off)
+HOLD_SILENCE = 1.0         # s, ... but goes out as soon as no new speech started within this long after its end:
+                           # with nobody talking there is nothing to join (it used to wait the full HOLD_MAX).
+                           # A shorter cap for long lines (2.5 s from 15 words) was tried: on the syn-s1 replay it
+                           # split 3 of 85 lines that the 4 s cap joined, for ~0.2 s less p95, so it is not used.
 VOICE_HOLD_MAX = 1.5       # s, the same hold while the English voice reads aloud: each held second is a second
                            # of lag on the subtitle and the voice (VOICE-10 probe, GPU: final 4.4 s -> ~2 s)
 FRAGMENT_WORDS = 2         # SEG-17: a final this short without . ? ! is a cut-off fragment ("Und dann", "Die")
@@ -1119,7 +1123,8 @@ anything from another session (streaming.CaptionGuard). Finals are FIFO and neve
                                     drafts pause, nothing is dropped)
   ("error", message, "")            from the cloud engine
 Each final is also written with tr.add(start, end, heard, subtitle, meta=meta).
-A final without . ? ! is held up to HOLD_MAX s (a 1-2 word fragment at least FRAGMENT_HOLD s, SEG-17)
+A final without . ? ! is held up to HOLD_MAX s (a 1-2 word fragment at least FRAGMENT_HOLD s, SEG-17;
+out after HOLD_SILENCE s when no new speech began)
 and joined with the next final of the same speaker and language (one line, one id, start of the first, end of the second); meanwhile its words stay on the
 live line as a draft.
 Cloud path: eng.submit(audio, start, end, ui_q, tr, meta={"speaker", "speaker_conf", "overlap"}) and
@@ -1170,6 +1175,7 @@ class Segmenter:
         self.recent = np.zeros(0, np.float32)    # last 1 s: VAD context and pre-roll source
         self.used = 0                            # samples before this belong to an earlier utterance
         self.uid = 0                             # number of the newest utterance
+        self.started = None                      # sample where the newest utterance's speech began (kept after it ends)
         self._lock = threading.Lock()            # mark_sentence_end (ASR thread) vs. a cut (worker)
         self._clear()
 
@@ -1221,6 +1227,7 @@ class Segmenter:
                 if len(pre):
                     self.parts, self.silent = [pre.copy()], [True]
                 self.first, self.onset = start - len(pre), start
+                self.started = start
                 if self.adaptive is not None:
                     self.levels = [0.0] * len(self.parts)
             elif self.adaptive is not None:
@@ -1308,6 +1315,7 @@ class Segmenter:
         self.parts, self.silent = parts, silent
         self.levels = levels if len(levels) == len(parts) else []
         self.first, self.onset, self.last_voice = first, onset, last_voice
+        self.started = onset
         self.overlap = (cut - carry) / SR
         self.used = first
         return u
@@ -1465,8 +1473,9 @@ def _for_mt(eng, de, lang=None):
 
 
 def hold_window(de: str, hold: float) -> float:
-    """How long a final waits for the next one (0 = emit now). Whole sentences never wait; a 1-2 word
-    fragment waits at least FRAGMENT_HOLD; any other unfinished line waits `hold` (HOLD_MAX/VOICE_HOLD_MAX)."""
+    """The longest a final waits for the next one (0 = emit now). Whole sentences never wait; a 1-2 word
+    fragment waits at least FRAGMENT_HOLD; any other unfinished line `hold` (HOLD_MAX/VOICE_HOLD_MAX). Apart
+    from fragments, a held line also goes out once HOLD_SILENCE passes with no new speech (see _asr_loop)."""
     if ends_sentence(de):
         return 0.0
     return max(hold, FRAGMENT_HOLD) if len(de.split()) <= FRAGMENT_WORDS else hold
@@ -1486,9 +1495,11 @@ _STOP = ("stop",)
 
 def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker, tag=None, hold=HOLD_MAX):
     """Whisper side of worker(): finals in the order spoken; a draft only while nothing else waits.
-    A final without . ? ! is held up to HOLD_MAX s and joined with the next one, so a sentence cut
-    in two is translated whole. After Stop it still transcribes the finals already queued, into the
-    transcript file only: that speech was captured, so it must not be lost because the CPU was behind.
+    A final without . ? ! is held up to HOLD_MAX s and joined with the next
+    one, so a sentence cut in two is translated whole; it goes out after HOLD_SILENCE s when nobody went on
+    talking (a 1-2 word fragment keeps its FRAGMENT_HOLD wait). After Stop it still transcribes the finals
+    already queued, into the transcript file only: that speech was captured, so it must not be lost because
+    the CPU was behind.
 
     Drafts (STR-1/3/5): the German goes on ui_q at once; its translation is draft work for a second
     thread fed through a latest-only Mailbox (a newer draft replaces one still waiting, at most one
@@ -1587,11 +1598,24 @@ def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker, tag=No
             print(f"Translation failed on one line: {e!r}")
             drop("error", line["start"], line["end"], line["de"])
 
+    def silent_after():
+        """No new speech began within HOLD_SILENCE of the held line's end, and that much audio has passed."""
+        # one STEP of slack: onsets are known to the 100 ms piece, and once the audio is a piece past the
+        # limit, the segmenter has finished the piece in which speech could still have begun in time
+        limit = int(HOLD_SILENCE * SR) + STEP
+        began = seg.started if seg.uid != held["utt"] else None   # the speech after the held line, if any
+        if began is not None and began - held["upto"] <= limit:
+            return False                         # the speaker went on: wait for that final (up to the cap)
+        return seg.samples - held["upto"] >= limit
+
     def due():
         """Why the held line goes out now (None = keep waiting for the next final)."""
         wait, first = held["window"], seg.first
-        if held["fragment"] and first is not None and (first - held["upto"]) / SR <= wait:
-            return None                          # SEG-17: the next sentence began in time, the fragment joins it
+        if held["fragment"]:
+            if first is not None and (first - held["upto"]) / SR <= wait:
+                return None                      # SEG-17: the next sentence began in time, the fragment joins it
+        elif silent_after():
+            return "silence"                     # nobody went on talking: nothing will join it
         if clock() - held["end"] >= wait or (seg.samples - held["upto"]) / SR >= wait:
             return "cap"
         return None

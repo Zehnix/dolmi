@@ -966,6 +966,42 @@ def test_hold_window_only_lengthens_fragments():
     assert m.hold_window("Wir haben das Projekt", 4.0) == 4.0
 
 
+def test_a_line_that_ends_a_sentence_is_never_held():
+    items, _ = run_worker(Scripted("Wir haben das Projekt verschoben."), np.concatenate([speech(1), silence(2)]),
+                          realtime=True, wait=3, finals=1)
+    [f] = finals_of(items)
+    assert "held_start" not in f[3]["trace"] and f[3]["trace"]["mt_start"] - f[3]["trace"]["speech_end"] < 1.0
+
+
+def held_wait(final):
+    tr = final[3]["trace"]
+    return tr["mt_start"] - tr["speech_end"], tr.get("release")
+
+
+def test_a_held_line_goes_out_after_a_second_of_silence_not_the_full_hold():
+    audio = np.concatenate([speech(1), silence(m.HOLD_MAX + 1)])
+    items, _ = run_worker(Scripted("Wir haben das Projekt"), audio, realtime=True, wait=3, finals=1)
+    [f] = finals_of(items)
+    wait, why = held_wait(f)
+    assert why == "silence" and m.HOLD_SILENCE <= wait < m.HOLD_MAX - 1    # was the full HOLD_MAX (4 s)
+
+
+def test_speech_going_on_within_a_second_keeps_the_hold_and_joins():
+    audio = np.concatenate([speech(1), silence(0.8), speech(1), silence(1.5)])
+    eng = Scripted("Wir haben das Projekt", "verschoben, weil der Kunde abgesagt hat.")
+    items, _ = run_worker(eng, audio, realtime=True, wait=4, finals=1)
+    assert [f[1] for f in finals_of(items)] == ["Wir haben das Projekt verschoben, weil der Kunde abgesagt hat."]
+
+
+def test_while_the_speaker_goes_on_a_held_line_waits_up_to_the_cap():
+    audio = np.concatenate([speech(1), silence(0.7), speech(5), silence(1)])   # next final too late to join
+    eng = Scripted("Wir haben im letzten Sprint die Anbindung gebaut und dann noch die", "Tests geschrieben.")
+    items, _ = run_worker(eng, audio, realtime=True, wait=4, finals=2)
+    first, second = finals_of(items)
+    wait, why = held_wait(first)
+    assert why == "cap" and m.HOLD_MAX - 0.2 <= wait < m.HOLD_MAX + 1.5 and second[1] == "Tests geschrieben."
+
+
 def test_a_fragment_joins_the_next_final_even_with_the_voice_hold():
     audio = np.concatenate([speech(1), silence(1.7), speech(1), silence(1)])   # gap > VOICE_HOLD_MAX, slack for slow CI
     eng = Scripted("Und dann", "haben wir die Tests gestartet.")
