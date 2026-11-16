@@ -577,7 +577,7 @@ class Engine:
         lang = info.language
         if lang == "en" and self.language == "de" and looks_german(text):
             lang = "de"
-        return strip_ellipses(collapse_repeats(text)), lang
+        return strip_ellipses(collapse_repeats(strip_foreign_words(text, lang))), lang
 
     def transcribe_draft(self, audio):
         """A cheap look at the sentence still being spoken: greedy decoding of its last DRAFT_WINDOW s."""
@@ -703,6 +703,21 @@ def looks_german(text: str) -> bool:
     hits = sum(w in GERMAN_STOPWORDS for w in words)
     return hits >= 2 or (hits == 1 and hits >= 0.3 * len(words))
 
+def _foreign_word(word: str) -> bool:
+    return any(c.isalpha() and "LATIN" not in unicodedata.name(c, "") for c in word)
+
+def strip_foreign_words(text: str, lang) -> str:
+    """A garbled Whisper decode on German or English audio can scatter Cyrillic, Hangul or CJK words into
+    an otherwise Latin line ('... выдорм mnie, ...'). For a Latin-script language those words are never
+    what was said, so they go. A line that is mostly another script is left for junk_reason (non_latin)."""
+    if lang not in LATIN_LANGUAGES:
+        return text
+    words = text.split()
+    foreign = [w for w in words if _foreign_word(w)]
+    if not foreign or 2 * len(foreign) >= len(words):
+        return text
+    return " ".join(w for w in words if not _foreign_word(w))
+
 _LOOP_LONG = re.compile(r"(\b.{8,}?)(?:[\s,.!?;]+\1\b)+", re.I)
 # a short loop starts with a letter and its repeats are spaced ('Version 1.1.1' is not a loop)
 _LOOP_SHORT = re.compile(r"(?<!\w)([^\W\d_](?:[\w' -]{0,5}\w)?)(?:[,.!?;]*\s+\1(?!\w)){2,}", re.I)
@@ -757,7 +772,11 @@ _FILLER = re.compile(r"(,\s*)?\b(" + "|".join(map(re.escape, FILLER_PHRASES)) + 
 _PARTICLE = re.compile(r"(?<=[^\W\d_] )(?<!gerade )(?<!so )(halt|eben)(?= (?!erst\b|noch\b)[^\W\d_])")
 _ALSO_REPEAT = re.compile(r"\b(also,)(?:\s*also,)+", re.I)
 # hesitation sounds carry no meaning or word order, so they go anywhere (Opus-MT writes them as "Um, ... uh")
-_HESITATION = re.compile(r"(?<![^\W\d_])(?:ähm+|äh+|öhm+|ehm+|hm+)(?![^\W\d_]),?", re.I)
+# "Mm-hmm" / "mhm" are one sound: removing only its "hmm" left "Mm-", which Opus-MT turned into "Mm-."
+_HES = r"(?:m+-?h+m+|ähm+|äh+|öhm+|ehm+|hm+)"
+_HESITATION = re.compile(rf"(?<![^\W\d_]){_HES}(?![^\W\d_]),?", re.I)
+# a hesitation that is a sentence of its own ("Mm-hmm. Okay.") takes its punctuation with it
+_HESITATION_ALONE = re.compile(rf"(?:^|(?<=[.!?]))\s*{_HES}(?![^\W\d_])[.!?,]*", re.I)
 
 def tidy_fillers(text: str) -> str:
     """The German sent to the translator without filler words; the subtitle keeps them. Conservative:
@@ -770,6 +789,7 @@ def tidy_fillers(text: str) -> str:
             return mt.group(0)                     # 'Sozusagen ist das ...' would lose its verb-second order
         return " "
     out = _FILLER.sub(phrase, text)
+    out = _HESITATION_ALONE.sub("", out)
     out = _HESITATION.sub(" ", out)
     out = _PARTICLE.sub("", out)
     out = _ALSO_REPEAT.sub(r"\1", out)

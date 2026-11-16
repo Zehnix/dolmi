@@ -33,6 +33,9 @@ def test_runs_of_three_ellipses_go_and_normal_text_stays(text, out):
     ("Da hast du, äh, ähm, lesende Rechte.", "Da hast du, lesende Rechte."),
     ("Das ist gut ähm.", "Das ist gut."),
     ("Hmm, schwierig.", "Schwierig."),
+    ("Mm-hmm. Okay.", "Okay."),                 # was "Mm-. Okay." -> Opus-MT "Mm-. Okay."
+    ("Gut. Mhm. Dann machen wir das.", "Gut. Dann machen wir das."),
+    ("Das ist, mm-hm, schwierig.", "Das ist, schwierig."),
 ])
 def test_fillers_are_tidied_for_the_translator(text, out):
     assert m.tidy_fillers(text) == out
@@ -48,6 +51,8 @@ def test_fillers_are_tidied_for_the_translator(text, out):
     "Quasi.", "Sozusagen, quasi.",          # never empty the line
     "Das Quasimodo-Projekt läuft.",         # whole words only
     "Der Ähmer-Bericht kommt.", "Ähm.",     # hesitations: whole words only, never empty the line
+    "Mm-hmm.", "Mhm!",                       # a lone hesitation stays whole (never "Mm-")
+    "Wir haben Hummeln im Garten.",
 ])
 def test_fillers_are_conservative(text):
     assert m.tidy_fillers(text) == text
@@ -72,3 +77,16 @@ def test_translator_gets_tidied_text_and_the_setting_turns_it_off():
 def test_the_setting_defaults_on():
     import config
     assert config.DEFAULTS["tidy_fillers"] is True
+
+
+@pytest.mark.parametrize("text, lang, out", [
+    ("Ja, und das выдорм ist mnie gut so.", "de", "Ja, und das ist mnie gut so."),
+    ("Wir haben das 간stub heute fertig gemacht.", "de", "Wir haben das heute fertig gemacht."),
+    ("We shipped it дня today, all good.", "en", "We shipped it today, all good."),
+    ("Das ist fertig.", "de", "Das ist fertig."),
+    ("Продолжение следует дальше.", "de", "Продолжение следует дальше."),   # mostly Cyrillic: junk_reason's job
+    ("Привет, это тест и Dolmi.", "ru", "Привет, это тест и Dolmi."),       # not a Latin-script language
+    ("Ja, und das выдорм ist gut.", None, "Ja, und das выдорм ist gut."),   # language unknown: keep
+])
+def test_foreign_script_words_in_a_latin_line_go(text, lang, out):
+    assert m.strip_foreign_words(text, lang) == out
