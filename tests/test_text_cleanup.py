@@ -90,3 +90,23 @@ def test_the_setting_defaults_on():
 ])
 def test_foreign_script_words_in_a_latin_line_go(text, lang, out):
     assert m.strip_foreign_words(text, lang) == out
+
+
+@pytest.mark.parametrize("text, out", [
+    ("Um, so I think, uh, we ship it next week.", "So I think, we ship it next week."),
+    ("And then, um, we can catch and Um", "And then, we can catch and"),
+    ("Yeah, uhm, the token tracking works.", "Yeah, the token tracking works."),
+    ("Uh-huh, that is right.", "Uh-huh, that is right."),
+    ("The umbrella is in the hub.", "The umbrella is in the hub."),
+    ("Uh...", "Uh..."),
+])
+def test_english_hesitations_go_on_english_lines(text, out):
+    assert m.tidy_english_fillers(text) == out
+
+
+def test_english_line_is_tidied_but_a_german_um_is_a_word():
+    on = Recorder(True)
+    m._translate(on, "Um, so we ship it.", "en", ("", "", None))
+    m._translate(on, "Wir treffen uns um zehn Uhr.", "de", ("", "", None))
+    m._translate(Recorder(False), "Um, so we ship it.", "en", ("", "", None))
+    assert on.seen == ["So we ship it.", "Wir treffen uns um zehn Uhr."]

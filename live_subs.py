@@ -1436,9 +1436,30 @@ def strip_repeat(previous: str, text: str) -> str:
     return text
 
 
-def _for_mt(eng, de):
-    """FILL-1: what the translator gets for `de` (fillers tidied unless the setting is off)."""
-    return tidy_fillers(de) if getattr(eng, "tidy_fillers", True) else de
+# English hesitations; only on English lines, as German "um" is a word ("um zehn Uhr")
+_EN_HESITATION = re.compile(r"(?<![\w'-])(?:u+h+m*|u+m+|e+r+m+)(?![\w'-])\s*,?", re.I)
+
+def tidy_english_fillers(text: str) -> str:
+    """'Um, so I think, uh, we ship it' -> 'So I think, we ship it'. English speech passes through to the
+    subtitle as heard, so its um/uh would be shown (19 lines in one meeting). 'Uh-huh' stays; a line that
+    would end up without words is returned unchanged."""
+    out = re.sub(r"\s+([,.!?;:])", r"\1", re.sub(r"\s{2,}", " ", _EN_HESITATION.sub(" ", text))).strip(" ,")
+    out = re.sub(r"([.!?])\s*,", r"\1", out)
+    if not re.search(r"[^\W\d_]", out):
+        return text
+    if text[:1].isupper() and out[:1].islower():
+        out = out[0].upper() + out[1:]
+    return out
+
+
+def _for_mt(eng, de, lang=None):
+    """FILL-1: what the translator gets for `de` (fillers tidied unless the setting is off). An English line
+    (passed through, not translated) also loses its um/uh."""
+    if not getattr(eng, "tidy_fillers", True):
+        return de
+    if lang == "en" and not looks_german(de):
+        return tidy_english_fillers(de)
+    return tidy_fillers(de)
 
 
 def hold_window(de: str, hold: float) -> float:
@@ -1451,7 +1472,7 @@ def hold_window(de: str, hold: float) -> float:
 
 def _translate(eng, de, lang, last):
     """The subtitle for a final: with the previous line as context when MT_CONTEXT is on."""
-    de = _for_mt(eng, de)
+    de = _for_mt(eng, de, lang)
     fn = getattr(eng, "translate_context", None)
     if MT_CONTEXT and fn and last[0] and last[2] == lang:
         return fn(de, lang, last[0], last[1])
@@ -1554,7 +1575,7 @@ def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker, tag=No
         ui_q.put(("draft", "", "", tag(line.get("utt"))))
 
     def show_held():                             # the held words stay on the live line meanwhile
-        ui_q.put(("draft", held["de"], eng.translate(_for_mt(eng, held["de"]), held["lang"]),
+        ui_q.put(("draft", held["de"], eng.translate(_for_mt(eng, held["de"], held["lang"]), held["lang"]),
                   {"start": held["start"], "end": held["end"], **tag(held.get("utt")), "emitted": clock()}))
 
     def flush(line):                             # a held line on its own, outside the per-job guard
