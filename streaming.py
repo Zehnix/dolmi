@@ -324,8 +324,30 @@ class TraceWriter:
 
 # ---- LAT-1: per-line latency log (on by default, local only, no text)
 LATENCY_STAGES = (("speech_end", "german_shown"), ("speech_end", "english_shown"),
-                  ("english_shown", "voice_start"), ("voice_start", "voice_end"), ("speech_end", "voice_end"))
+                  ("english_shown", "voice_start"), ("voice_start", "voice_end"), ("speech_end", "voice_end"),
+                  # where the English time goes, in pipeline order (rows since 2026-11-16; older rows lack them)
+                  ("speech_end", "vad_close"), ("vad_close", "asr_start"), ("asr_start", "asr_done"),
+                  ("asr_done", "mt_start"), ("mt_start", "mt_done"), ("mt_done", "english_shown"))
+LATENCY_TRACE_TIMES = ("vad_close", "asr_start", "asr_done", "mt_start", "mt_done")
 LATENCY_VOICE_WAIT = 30.0   # s after a line is shown that its row waits for the voice to finish
+
+
+def _hold_fields(trace):
+    """The hold step of one final, from its trace: held_ms (how long this line waited for a next one, 0 when it
+    went out at once), joined_held_ms (how long the earlier parts joined into it had waited), parts (finals
+    joined into this line) and release (why a held line went out: silence, cap, next, stop)."""
+    if not isinstance(trace.get("asr_done"), (int, float)):
+        return {}                            # an older producer: no stamps, no hold fields
+    held = 0
+    if isinstance(trace.get("held_start"), (int, float)):
+        end = trace.get("held_end", trace.get("mt_start"))
+        held = round(max(0.0, end - trace["held_start"]) * 1000) if isinstance(end, (int, float)) else 0
+    out = {"held_ms": held, "parts": int(trace.get("parts") or 1)}
+    if isinstance(trace.get("joined_held"), (int, float)):
+        out["joined_held_ms"] = round(trace["joined_held"] * 1000)
+    if trace.get("release"):
+        out["release"] = str(trace["release"])
+    return out
 
 
 def _iso(t):
@@ -348,7 +370,9 @@ class LatencyLog:
     """Collects the times of each final line (keyed by session and utterance) and appends one JSON row
     per line to `folder`/latency-YYYY-MM-DD.jsonl (UTC date; default dolmi_platform.log_dir(), which is
     %LOCALAPPDATA%\\Dolmi on Windows, also under pythonw). With the voice on, a row waits until the voice
-    has read that line (or LATENCY_VOICE_WAIT s, or flush()). Word counts only, never text."""
+    has read that line (or LATENCY_VOICE_WAIT s, or flush()). Word counts only, never text. Rows also carry the
+    pipeline stamps of the final's trace (vad_close, asr_start, asr_done, mt_start, mt_done) and its hold fields
+    (_hold_fields); rows written before those existed simply lack them."""
 
     def __init__(self, folder=None, clock=time.time):
         self.folder, self._clock = folder, clock
@@ -372,12 +396,15 @@ class LatencyLog:
         trace = meta.get("trace") or {}
         key = (meta.get("session"), meta.get("utt"))
         speech_end = trace.get("speech_end", meta.get("end"))
+        times = {k: trace[k] for k in LATENCY_TRACE_TIMES if isinstance(trace.get(k), (int, float))}
         with self._lock:
             german = self._first_de.pop(key, when)
             self._rows[key] = {
-                "times": {"speech_end": speech_end, "german_shown": min(german, when), "english_shown": when},
+                "times": {"speech_end": speech_end, "german_shown": min(german, when), "english_shown": when,
+                          **times},
                 "ids": {"utt": meta.get("utt"), "line": meta.get("id")},
-                "counts": {"de_words": len((de or "").split()), "en_words": len((en or "").split())},
+                "counts": {"de_words": len((de or "").split()), "en_words": len((en or "").split()),
+                           **_hold_fields(trace)},
                 "voice": voice, "shown": when, "voice_done": False}
         self._write_ready()
 

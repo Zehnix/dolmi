@@ -626,6 +626,18 @@ def test_a_final_without_full_stop_joins_the_next_one():
     assert held and held[0][2] == "EN(Wir haben das Projekt)"   # the held words stay on the live line
 
 
+def test_a_joined_line_records_its_parts_and_a_held_one_its_wait():
+    audio = np.concatenate([silence(0.5), speech(1), silence(1), speech(1), silence(1)])
+    eng = Scripted("Wir haben das Projekt", "verschoben, weil der Kunde abgesagt hat.")
+    [f] = finals_of(run_worker(eng, audio, wait=2, finals=1, clock=lambda: 1000.0)[0])
+    assert f[3]["trace"]["parts"] == 2 and "joined_held" in f[3]["trace"]
+    assert "held_start" not in f[3]["trace"]                     # the whole sentence itself went out at once
+    audio = np.concatenate([speech(1), silence(m.HOLD_MAX + 1.5)])
+    [f] = finals_of(run_worker(Scripted("Wir haben das Projekt"), audio, wait=3, finals=1, clock=lambda: 1000.0)[0])
+    tr = f[3]["trace"]
+    assert tr["asr_done"] <= tr["held_start"] <= tr["held_end"] <= tr["mt_start"] and tr["release"]
+
+
 def test_a_held_final_is_shown_alone_after_the_hold_time():
     audio = np.concatenate([speech(1), silence(m.HOLD_MAX + 1.5)])
     items, tr = run_worker(Scripted("Wir haben das Projekt"), audio, wait=3, finals=1, clock=lambda: 1000.0)

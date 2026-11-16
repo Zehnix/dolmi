@@ -1103,7 +1103,9 @@ anything from another session (streaming.CaptionGuard). Finals are FIFO and neve
                                     put on ui_q, "lang": spoken language code, "speaker": None,
                                     "speaker_conf": None, "session", "utt", "rev",
                                     "trace": {speech_start, speech_end, vad_close, queued, asr_start,
-                                    asr_done, mt_start, mt_done, emitted} (STR-4; the pump adds shown)}
+                                    asr_done, mt_start, mt_done, emitted} (STR-4; the pump adds shown);
+                                    a line that was held also has held_start, held_end and release
+                                    (silence | cap | next | stop), a joined one parts and joined_held (s)}
   ("draft", heard, subtitle, meta)  the sentence still being spoken; meta = {"start", "end", "emitted",
                                     "session", "utt", "rev", "committed", "tentative" (STR-1/2: heard =
                                     committed + tentative; without stable drafts all of it is tentative),
@@ -1586,23 +1588,31 @@ def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker, tag=No
             drop("error", line["start"], line["end"], line["de"])
 
     def due():
+        """Why the held line goes out now (None = keep waiting for the next final)."""
         wait, first = held["window"], seg.first
         if held["fragment"] and first is not None and (first - held["upto"]) / SR <= wait:
-            return False                         # SEG-17: the next sentence began in time, the fragment joins it
-        return clock() - held["end"] >= wait or (seg.samples - held["upto"]) / SR >= wait
+            return None                          # SEG-17: the next sentence began in time, the fragment joins it
+        if clock() - held["end"] >= wait or (seg.samples - held["upto"]) / SR >= wait:
+            return "cap"
+        return None
+
+    def release(line, why):                      # latency log: how long the line waited, and why it went out
+        line["trace"].update(held_end=clock(), release=why)
+        return line
 
     try:
         while True:
-            if held and (due() or stop.is_set()) and jobs.empty():
+            why = ("stop" if stop.is_set() else due()) if held and jobs.empty() else None
+            if why:
                 line, held = held, None
-                flush(line)
+                flush(release(line, why))
             try:
                 job = jobs.get(timeout=0.1 if held else None)
             except queue.Empty:
                 continue
             if job is None:                          # worker() has stopped and queued everything it had
                 if held:
-                    flush(held)
+                    flush(release(held, "stop"))
                 return
             if stop.is_set():
                 ui_q = _Discard                      # nobody shows captions any more
@@ -1672,9 +1682,13 @@ def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker, tag=No
                         if same and joins and start - held["end"] <= held["window"]:
                             line.update(de=f"{held['de']} {de}", start=held["start"],
                                         speaker=spk or held["speaker"], speaker_conf=conf or held["speaker_conf"])
-                            trace["speech_start"] = held["trace"].get("speech_start", held["start"])
+                            prior = held["trace"]
+                            trace["speech_start"] = prior.get("speech_start", held["start"])
+                            trace["parts"] = prior.get("parts", 1) + 1
+                            trace["joined_held"] = prior.get("joined_held", 0.0) + \
+                                clock() - prior.get("held_start", clock())
                         else:
-                            emit(held)
+                            emit(release(held, "next"))
                         held = None
                     previous = (u.uid, de)
                     if not stop.is_set():                # a new session may already use eng.context
@@ -1682,6 +1696,7 @@ def _asr_loop(eng, jobs, busy, seg, ui_q, tr, stop, clock, drop, speaker, tag=No
                     window = hold_window(line["de"], hold)
                     if window and u.reason != "stop" and not stop.is_set():
                         held = {**line, "window": window, "fragment": len(line["de"].split()) <= FRAGMENT_WORDS}
+                        trace["held_start"] = clock()
                         show_held()
                     else:
                         emit(line)
