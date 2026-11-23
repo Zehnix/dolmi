@@ -13,6 +13,9 @@ import urllib.request
 REPO = "Zehnix/dolmi"                                   # README: github.com/Zehnix/dolmi/releases
 LATEST_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases"
+# Windows updates come from the Microsoft Store (it installs and keeps Dolmi current), so the
+# "Download x.y.z" button there opens Dolmi's Store page instead of the GitHub release.
+STORE_PAGE = "https://apps.microsoft.com/detail/9NZJZ7Z3CGKQ"
 TIMEOUT_S = 5
 
 
@@ -26,8 +29,15 @@ _PAGE_RE = re.compile(re.escape(RELEASES_PAGE) + r"(/[A-Za-z0-9._/-]*)?")
 
 
 def is_release_page(url):
-    """Only this repository's release pages may be opened from the page (no '..' out of them)."""
+    """Only this repository's release pages or Dolmi's Store page may be opened from the page (no '..')."""
+    if url == STORE_PAGE:
+        return True
     return isinstance(url, str) and bool(_PAGE_RE.fullmatch(url)) and ".." not in url
+
+
+def download_page(release_url, platform):
+    """Where "Download x.y.z" goes: the Microsoft Store on Windows, the GitHub release elsewhere."""
+    return STORE_PAGE if platform == "win32" else release_url
 
 
 def fetch_latest(current, timeout=TIMEOUT_S, opener=urllib.request.urlopen):

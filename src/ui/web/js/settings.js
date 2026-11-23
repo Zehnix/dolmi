@@ -189,7 +189,7 @@ document.addEventListener('DOMContentLoaded',()=>{ if(bridge()) settingsBoot(); 
     <div class="set" data-kw="update new version download release check now"><div><div class="lab">Latest version</div><div class="ps" id="updStatus">Not checked yet</div></div><div style="display:flex;gap:8px"><button class="btn ghost" id="setCheckUpdate">Check now</button><button class="btn ghost on" id="setDownloadUpdate" style="display:none">Download</button></div></div>`; wireNewSwitches(m); }
 wireSwitch('#swUpdates','check_updates');
 function applyUpdate(u,asked){ const st=$('#updStatus'), dl=$('#setDownloadUpdate'); if(!st||!u) return;
-  if(u.available){ st.textContent=`Dolmi ${u.version} is out (you have ${u.current})`; dl.style.display=''; dl.textContent=`Download ${u.version}`; dl.dataset.url=u.url; }
+  if(u.available){ st.textContent=`Dolmi ${u.version} is out (you have ${u.current})`; dl.style.display=''; dl.textContent=u.store?'Get it from the Microsoft Store':`Download ${u.version}`; dl.dataset.url=u.url; }
   else { dl.style.display='none'; st.textContent=u.version?`You have the latest version (${u.current})`:(asked?'Could not reach GitHub. Try again later':'Not checked yet'); } }
 if($('#setCheckUpdate')) $('#setCheckUpdate').onclick=async()=>{ const b=bridge(); if(!b) return; $('#updStatus').textContent='Checking…'; applyUpdate(await b.check_update(true),true); };
 if($('#setDownloadUpdate')) $('#setDownloadUpdate').onclick=()=>{ const b=bridge(); if(b) b.open_release($('#setDownloadUpdate').dataset.url||''); };

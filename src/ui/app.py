@@ -2644,6 +2644,8 @@ class Api:
         if not force and not self._settings.get("check_updates", True):
             return {"available": False, "version": "", "url": updates.RELEASES_PAGE, "current": VERSION, "off": True}
         result = updates.check(VERSION)
+        result["url"] = updates.download_page(result["url"], sys.platform)
+        result["store"] = result["url"] == updates.STORE_PAGE
         self._update = result
         if result["available"]:
             self._emit("onUpdate", result)

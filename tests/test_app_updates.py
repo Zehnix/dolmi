@@ -136,3 +136,23 @@ def test_open_release_opens_only_release_pages(api, monkeypatch):
 def test_privacy_policy_mentions_the_update_check():
     text = (ROOT / "PRIVACY.md").read_text(encoding="utf-8")
     assert "## Update check" in text and "Check for updates" in text
+
+
+def test_windows_downloads_go_to_the_microsoft_store(api, latest, monkeypatch):
+    monkeypatch.setattr(app_mod.sys, "platform", "win32")
+    r = api.check_update()
+    assert r["url"] == updates.STORE_PAGE and r["store"] is True
+
+
+def test_mac_downloads_stay_on_github(api, latest, monkeypatch):
+    monkeypatch.setattr(app_mod.sys, "platform", "darwin")
+    r = api.check_update()
+    assert r["url"] == RELEASE["html_url"] and r["store"] is False
+
+
+def test_the_store_page_may_be_opened(api, monkeypatch):
+    opened = []
+    import webbrowser
+    monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url) or True)
+    assert api.open_release(updates.STORE_PAGE) is True and opened == [updates.STORE_PAGE]
+    assert api.open_release(updates.STORE_PAGE + "/../x") is False
